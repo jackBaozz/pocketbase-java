@@ -22,10 +22,32 @@ public class CollectionSchema {
     public String deleteRule;
     public String created;
     public String updated;
+    public PasswordAuthConfig passwordAuth = new PasswordAuthConfig();
+    public OtpConfig otp = new OtpConfig();
+    public MfaConfig mfa = new MfaConfig();
 
     @JsonAlias("schema")
     public List<FieldSchema> fields = new ArrayList<>();
 
     public CollectionSchema() {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PasswordAuthConfig {
+        public boolean enabled = true;
+        public List<String> identityFields = new ArrayList<>(List.of("email"));
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OtpConfig {
+        public boolean enabled;
+        public long duration = 300;
+        public int length = 6;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class MfaConfig {
+        public boolean enabled;
+        public long duration = 1800;
     }
 }

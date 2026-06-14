@@ -107,6 +107,36 @@ public final class CollectionService {
         return response;
     }
 
+    public JsonNode requestOtp(String email) {
+        return client.send(
+                "POST",
+                client.apiPath("collections", collection, "request-otp"),
+                Map.of(),
+                Map.of("email", requireText(email, "email")),
+                JsonNode.class
+        );
+    }
+
+    public AuthResponse authWithOtp(String otpId, String password) {
+        return authWithOtp(otpId, password, RecordQuery.defaults());
+    }
+
+    public AuthResponse authWithOtp(String otpId, String password, RecordQuery query) {
+        RecordQuery actualQuery = query == null ? RecordQuery.defaults() : query;
+        AuthResponse response = client.send(
+                "POST",
+                client.apiPath("collections", collection, "auth-with-otp"),
+                actualQuery.toQuery(),
+                Map.of(
+                        "otpId", requireText(otpId, "otpId"),
+                        "password", requireText(password, "password")
+                ),
+                AuthResponse.class
+        );
+        client.authStore().save(response);
+        return response;
+    }
+
     public AuthResponse authRefresh() {
         return authRefresh(RecordQuery.defaults());
     }

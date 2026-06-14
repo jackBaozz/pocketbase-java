@@ -18,6 +18,7 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+pb_data/
 
 # ==================== Frontend ====================
 UI/node_modules/

@@ -35,47 +35,74 @@ public final class HttpApi implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        String method = exchange.getRequestMethod();
+        String path = normalizePath(exchange.getRequestURI().getPath());
+        int status = 0;
+        long started = System.nanoTime();
         try {
             addCommonHeaders(exchange);
-            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+            if ("OPTIONS".equals(method)) {
+                status = 204;
                 sendNoContent(exchange);
                 return;
             }
 
-            String path = normalizePath(exchange.getRequestURI().getPath());
             if (path.equals("/") || path.equals("/_/") || path.startsWith("/_/")) {
                 serveAdmin(exchange, path);
+                status = 200;
                 return;
             }
-            if (path.startsWith("/api/backups/") && "GET".equals(exchange.getRequestMethod())) {
+            if (path.startsWith("/api/backups/") && "GET".equals(method)) {
                 serveBackup(exchange, path);
+                status = 200;
                 return;
             }
             if (path.startsWith("/api/files/") && !path.equals("/api/files/token")) {
                 serveFile(exchange, path);
+                status = 200;
                 return;
             }
-            if (path.equals("/api/realtime") && "GET".equals(exchange.getRequestMethod())) {
+            if (path.equals("/api/realtime") && "GET".equals(method)) {
                 realtimeHub.connect(exchange);
                 return;
             }
             if (path.startsWith("/api/")) {
                 Object response = routeApi(exchange, path);
                 if (response == NoContent.INSTANCE) {
+                    status = 204;
                     sendNoContent(exchange);
                 } else {
+                    status = 200;
                     sendJson(exchange, 200, response);
                 }
                 return;
             }
             throw new ApiException(404, "Not found.");
         } catch (ApiException e) {
+            status = e.status();
             sendJson(exchange, e.status(), errorBody(e.status(), e.getMessage(), e.data()));
         } catch (IllegalArgumentException e) {
+            status = 400;
             sendJson(exchange, 400, errorBody(400, e.getMessage(), Map.of()));
         } catch (Exception e) {
+            status = 500;
             sendJson(exchange, 500, errorBody(500, "Internal server error.", Map.of("error", e.getMessage())));
         } finally {
+            if (shouldLogActivity(path, method, status)) {
+                try {
+                    store.recordActivityLog(
+                            method,
+                            activityUrl(exchange),
+                            status,
+                            Math.max(0L, (System.nanoTime() - started) / 1_000_000L),
+                            principal(exchange).orElse(null),
+                            requestHeaders(exchange),
+                            remoteAddress(exchange)
+                    );
+                } catch (RuntimeException ignored) {
+                    // Activity logging must never change the API response.
+                }
+            }
             exchange.close();
         }
     }
@@ -93,6 +120,63 @@ public final class HttpApi implements HttpHandler {
         }
         if (segments.size() == 2 && "batch".equals(segments.get(1)) && "POST".equals(method)) {
             return handleBatch(exchange, principal(exchange).orElse(null));
+        }
+        if (segments.size() == 2 && "sql".equals(segments.get(1)) && "POST".equals(method)) {
+            RequestPrincipal principal = principal(exchange).orElse(null);
+            requireSuperuser(principal);
+            return store.runSql(readJson(exchange));
+        }
+        if (segments.size() >= 2 && "settings".equals(segments.get(1))) {
+            RequestPrincipal principal = principal(exchange).orElse(null);
+            requireSuperuser(principal);
+            if (segments.size() == 2) {
+                return switch (method) {
+                    case "GET" -> store.getSettings(query);
+                    case "PATCH" -> store.updateSettings(readRecordInput(exchange).body(), query);
+                    default -> throw new ApiException(405, "Method not allowed.");
+                };
+            }
+            if (segments.size() == 4 && "test".equals(segments.get(2)) && "s3".equals(segments.get(3))
+                    && "POST".equals(method)) {
+                store.testS3(readRecordInput(exchange).body());
+                return NoContent.INSTANCE;
+            }
+            if (segments.size() == 4 && "test".equals(segments.get(2)) && "email".equals(segments.get(3))
+                    && "POST".equals(method)) {
+                store.testEmail(readRecordInput(exchange).body());
+                return NoContent.INSTANCE;
+            }
+            if (segments.size() == 4 && "apple".equals(segments.get(2)) && "generate-client-secret".equals(segments.get(3))
+                    && "POST".equals(method)) {
+                return store.generateAppleClientSecret(readRecordInput(exchange).body());
+            }
+            throw new ApiException(404, "Not found.");
+        }
+        if (segments.size() >= 2 && "logs".equals(segments.get(1))) {
+            RequestPrincipal principal = principal(exchange).orElse(null);
+            requireSuperuser(principal);
+            if (segments.size() == 2 && "GET".equals(method)) {
+                return store.listLogs(query);
+            }
+            if (segments.size() == 3 && "stats".equals(segments.get(2)) && "GET".equals(method)) {
+                return store.logStats(query);
+            }
+            if (segments.size() == 3 && "GET".equals(method)) {
+                return store.getLog(segments.get(2), query);
+            }
+            throw new ApiException(404, "Not found.");
+        }
+        if (segments.size() >= 2 && "crons".equals(segments.get(1))) {
+            RequestPrincipal principal = principal(exchange).orElse(null);
+            requireSuperuser(principal);
+            if (segments.size() == 2 && "GET".equals(method)) {
+                return store.listCrons();
+            }
+            if (segments.size() == 3 && "POST".equals(method)) {
+                store.runCron(segments.get(2));
+                return NoContent.INSTANCE;
+            }
+            throw new ApiException(404, "Not found.");
         }
         if (segments.size() == 3 && "files".equals(segments.get(1)) && "token".equals(segments.get(2))
                 && "POST".equals(method)) {
@@ -147,6 +231,22 @@ public final class HttpApi implements HttpHandler {
             };
         }
 
+        if (segments.size() == 3 && "import".equals(segments.get(2)) && "PUT".equals(method)) {
+            requireSuperuser(principal);
+            store.importCollections(readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "meta".equals(segments.get(2)) && "scaffolds".equals(segments.get(3))
+                && "GET".equals(method)) {
+            requireSuperuser(principal);
+            return store.collectionScaffolds();
+        }
+        if (segments.size() == 4 && "meta".equals(segments.get(2)) && "oauth2-providers".equals(segments.get(3))
+                && "GET".equals(method)) {
+            requireSuperuser(principal);
+            return store.oauth2ProviderMetadata();
+        }
+
         String collection = segments.get(2);
         if (segments.size() == 3) {
             return switch (method) {
@@ -168,14 +268,53 @@ public final class HttpApi implements HttpHandler {
         }
 
         String action = segments.get(3);
+        if (segments.size() == 4 && "truncate".equals(action) && "DELETE".equals(method)) {
+            requireSuperuser(principal);
+            store.truncateCollection(collection);
+            return NoContent.INSTANCE;
+        }
         if (segments.size() == 4 && "auth-with-password".equals(action) && "POST".equals(method)) {
             return store.authWithPassword(collection, readJson(exchange), query);
+        }
+        if (segments.size() == 4 && "request-otp".equals(action) && "POST".equals(method)) {
+            return store.requestOtp(collection, readJson(exchange));
+        }
+        if (segments.size() == 4 && "auth-with-otp".equals(action) && "POST".equals(method)) {
+            return store.authWithOtp(collection, readJson(exchange), query);
         }
         if (segments.size() == 4 && "auth-refresh".equals(action) && "POST".equals(method)) {
             return store.authRefresh(collection, principal, query);
         }
         if (segments.size() == 4 && "auth-methods".equals(action) && "GET".equals(method)) {
             return store.authMethods(collection);
+        }
+        if (segments.size() == 4 && "request-password-reset".equals(action) && "POST".equals(method)) {
+            store.requestPasswordReset(collection, readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "confirm-password-reset".equals(action) && "POST".equals(method)) {
+            store.confirmPasswordReset(collection, readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "request-verification".equals(action) && "POST".equals(method)) {
+            store.requestVerification(collection, readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "confirm-verification".equals(action) && "POST".equals(method)) {
+            store.confirmVerification(collection, readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "request-email-change".equals(action) && "POST".equals(method)) {
+            store.requestEmailChange(collection, readJson(exchange), principal);
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 4 && "confirm-email-change".equals(action) && "POST".equals(method)) {
+            store.confirmEmailChange(collection, readJson(exchange));
+            return NoContent.INSTANCE;
+        }
+        if (segments.size() == 5 && "impersonate".equals(action) && "POST".equals(method)) {
+            requireSuperuser(principal);
+            return store.impersonate(collection, segments.get(4), readJson(exchange), query);
         }
         if (!"records".equals(action)) {
             throw new ApiException(404, "Not found.");
@@ -693,8 +832,45 @@ public final class HttpApi implements HttpHandler {
     private void addCommonHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, HEAD, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
+    }
+
+    private boolean shouldLogActivity(String path, String method, int status) {
+        if (status <= 0 || "OPTIONS".equals(method) || path == null || !path.startsWith("/api/")) {
+            return false;
+        }
+        boolean logsRoute = path.equals("/api/logs") || path.startsWith("/api/logs/");
+        return !path.equals("/api/health")
+                && !(path.equals("/api/realtime") && "GET".equals(method))
+                && (!logsRoute || status >= 400);
+    }
+
+    private String activityUrl(HttpExchange exchange) {
+        URI uri = exchange.getRequestURI();
+        String rawPath = uri.getRawPath() == null || uri.getRawPath().isBlank() ? "/" : uri.getRawPath();
+        String rawQuery = uri.getRawQuery();
+        return rawQuery == null || rawQuery.isBlank() ? rawPath : rawPath + "?" + rawQuery;
+    }
+
+    private Map<String, String> requestHeaders(HttpExchange exchange) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        exchange.getRequestHeaders().forEach((key, values) -> {
+            if (key == null || values == null || values.isEmpty()) {
+                return;
+            }
+            String value = values.get(0);
+            headers.put(key, value);
+            headers.put(key.toLowerCase(Locale.ROOT), value);
+        });
+        return headers;
+    }
+
+    private String remoteAddress(HttpExchange exchange) {
+        if (exchange.getRemoteAddress() == null || exchange.getRemoteAddress().getAddress() == null) {
+            return "";
+        }
+        return exchange.getRemoteAddress().getAddress().getHostAddress();
     }
 
     private Map<String, Object> errorBody(int status, String message, Object data) {

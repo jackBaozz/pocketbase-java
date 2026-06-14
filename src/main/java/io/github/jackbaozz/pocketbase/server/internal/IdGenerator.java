@@ -21,6 +21,15 @@ final class IdGenerator {
         return random(10);
     }
 
+    static String digits(int length) {
+        int size = Math.max(1, length);
+        char[] value = new char[size];
+        for (int i = 0; i < value.length; i++) {
+            value[i] = (char) ('0' + RANDOM.nextInt(10));
+        }
+        return new String(value);
+    }
+
     private static String random(int length) {
         char[] value = new char[length];
         for (int i = 0; i < value.length; i++) {

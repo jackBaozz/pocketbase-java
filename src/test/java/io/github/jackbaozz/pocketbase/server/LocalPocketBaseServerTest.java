@@ -15,24 +15,33 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPairGenerator;
+import java.security.spec.ECGenParameterSpec;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -121,6 +130,126 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void collectionMetaApisReturnScaffoldsAndOAuth2Providers() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("GET", "/api/collections/meta/scaffolds", null, null).statusCode());
+        assertEquals(401, rawRequest("GET", "/api/collections/meta/oauth2-providers", null, null).statusCode());
+
+        JsonNode scaffolds = request("GET", "/api/collections/meta/scaffolds", token, null);
+        assertEquals("base", scaffolds.get("base").get("type").asText());
+        assertEquals("auth", scaffolds.get("auth").get("type").asText());
+        assertEquals("view", scaffolds.get("view").get("type").asText());
+        assertTrue(fieldNames(scaffolds.get("auth")).containsAll(List.of("email", "password", "verified")));
+        assertTrue(scaffolds.get("view").has("viewQuery"));
+
+        JsonNode providers = request("GET", "/api/collections/meta/oauth2-providers", token, null);
+        List<String> names = providerNames(providers);
+        assertTrue(names.containsAll(List.of("apple", "github", "google", "microsoft", "oidc")));
+        assertTrue(providers.get(0).has("displayName"));
+        assertTrue(providers.get(0).has("logo"));
+    }
+
+    @Test
+    void collectionImportAndTruncateApisMatchOfficialRoutes() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("PUT", "/api/collections/import", null, Map.of(
+                "collections", List.of()
+        )).statusCode());
+
+        JsonNode keep = request("POST", "/api/collections", token, Map.of(
+                "name", "import_keep",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text", "required", true),
+                        Map.of("name", "attachment", "type", "file")
+                )
+        ));
+        JsonNode obsolete = request("POST", "/api/collections", token, Map.of(
+                "name", "import_obsolete",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+
+        JsonNode keptRecord = multipartRequest("POST", "/api/collections/import_keep/records", token, Map.of(
+                "title", "kept"
+        ), Map.of(
+                "attachment", new MultipartFile("kept.txt", "text/plain", "kept file".getBytes(StandardCharsets.UTF_8))
+        ));
+        String keptFilename = keptRecord.get("attachment").asText();
+        request("POST", "/api/collections/import_obsolete/records", token, Map.of("title", "obsolete"));
+
+        HttpResponse<String> emptyImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of()
+        ));
+        assertEquals(400, emptyImport.statusCode());
+        JsonNode stillThere = request("GET", "/api/collections/" + obsolete.get("id").asText(), token, null);
+        assertEquals("import_obsolete", stillThere.get("name").asText());
+
+        HttpResponse<String> imported = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "deleteMissing", true,
+                "collections", List.of(
+                        Map.of(
+                                "id", keep.get("id").asText(),
+                                "name", "import_keep_renamed",
+                                "type", "base",
+                                "listRule", "",
+                                "viewRule", "",
+                                "fields", List.of(
+                                        Map.of("name", "title", "type", "text", "required", true),
+                                        Map.of("name", "status", "type", "text"),
+                                        Map.of("name", "attachment", "type", "file")
+                                )
+                        ),
+                        Map.of(
+                                "name", "import_auth_users",
+                                "type", "auth"
+                        )
+                )
+        ));
+        assertEquals(204, imported.statusCode());
+
+        HttpResponse<String> oldName = rawRequest("GET", "/api/collections/import_keep", token, null);
+        assertEquals(404, oldName.statusCode());
+        JsonNode renamed = request("GET", "/api/collections/import_keep_renamed", token, null);
+        assertEquals(keep.get("id").asText(), renamed.get("id").asText());
+        assertEquals(3, renamed.get("fields").size());
+
+        JsonNode records = request("GET", "/api/collections/import_keep_renamed/records", null, null);
+        assertEquals(1, records.get("totalItems").asInt());
+        assertEquals("kept", records.get("items").get(0).get("title").asText());
+        HttpResponse<String> keptFile = rawRequest(
+                "GET",
+                "/api/files/import_keep_renamed/" + keptRecord.get("id").asText() + "/" + keptFilename,
+                null,
+                null
+        );
+        assertEquals(200, keptFile.statusCode());
+
+        assertEquals(404, rawRequest("GET", "/api/collections/import_obsolete", token, null).statusCode());
+        assertFalse(Files.exists(tempDir.resolve("records").resolve(obsolete.get("id").asText() + ".json")));
+
+        JsonNode authCollection = request("GET", "/api/collections/import_auth_users", token, null);
+        assertEquals("auth", authCollection.get("type").asText());
+        assertTrue(fieldNames(authCollection).containsAll(List.of("email", "password", "verified")));
+        JsonNode superusers = request("GET", "/api/collections/_superusers", token, null);
+        assertEquals("_superusers", superusers.get("name").asText());
+
+        HttpResponse<String> truncated = rawRequest("DELETE", "/api/collections/import_keep_renamed/truncate", token, null);
+        assertEquals(204, truncated.statusCode());
+        JsonNode empty = request("GET", "/api/collections/import_keep_renamed/records", null, null);
+        assertEquals(0, empty.get("totalItems").asInt());
+        assertFalse(Files.exists(tempDir.resolve("storage").resolve(keep.get("id").asText())));
+    }
+
+    @Test
     void recordsPersistAcrossServerRestart() throws Exception {
         start();
         bootstrapSuperuser();
@@ -185,6 +314,287 @@ class LocalPocketBaseServerTest {
 
         HttpResponse<String> deleted = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
         assertEquals(204, deleted.statusCode());
+    }
+
+    @Test
+    void settingsAndLogsApisRequireSuperuserPersistAndOmitSecrets() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("GET", "/api/settings", null, null).statusCode());
+        assertEquals(401, rawRequest("GET", "/api/logs", null, null).statusCode());
+
+        JsonNode settings = request("GET", "/api/settings", token, null);
+        assertEquals("pocketbase-java", settings.get("meta").get("appName").asText());
+        assertTrue(settings.has("superuserIPs"));
+        assertTrue(settings.get("meta").has("accentColor"));
+        assertTrue(settings.get("logs").has("logIP"));
+        assertTrue(settings.get("rateLimits").has("excludedIPs"));
+        assertTrue(settings.get("rateLimits").get("rules").size() >= 4);
+        assertTrue(settings.get("trustedProxy").has("useLeftmostIP"));
+
+        JsonNode updated = request("PATCH", "/api/settings", token, Map.of(
+                "meta", Map.of(
+                        "appName", "Demo Console",
+                        "appUrl", "https://example.test"
+                ),
+                "logs", Map.of(
+                        "maxDays", 14,
+                        "logIp", true,
+                        "logAuthId", true
+                ),
+                "smtp", Map.of(
+                        "enabled", true,
+                        "host", "smtp.example.test",
+                        "password", "smtp-secret"
+                ),
+                "s3", Map.of(
+                        "accessKey", "access-secret",
+                        "secret", "storage-secret"
+                )
+        ));
+        assertEquals("Demo Console", updated.get("meta").get("appName").asText());
+        assertEquals("https://example.test", updated.get("meta").get("appURL").asText());
+        assertTrue(updated.get("logs").get("logIP").asBoolean());
+        assertFalse(updated.get("smtp").has("password"));
+        assertEquals("access-secret", updated.get("s3").get("accessKey").asText());
+        assertFalse(updated.get("s3").has("secret"));
+
+        request("PATCH", "/api/settings", token, Map.of(
+                "smtp", Map.of("password", "******"),
+                "s3", Map.of("secret", "******")
+        ));
+        String settingsFile = Files.readString(tempDir.resolve("pb_settings.json"), StandardCharsets.UTF_8);
+        assertTrue(settingsFile.contains("smtp-secret"));
+        assertTrue(settingsFile.contains("storage-secret"));
+
+        JsonNode filteredLogs = request(
+                "GET",
+                "/api/logs?perPage=50&sort=-created&filter=" + URLEncoder.encode("data.status = 200", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertTrue(filteredLogs.get("totalItems").asInt() >= 1);
+        JsonNode log = filteredLogs.get("items").get(0);
+        assertTrue(log.hasNonNull("id"));
+        assertEquals(200, log.get("data").get("status").asInt());
+        assertTrue(log.get("data").hasNonNull("method"));
+        assertTrue(log.get("data").hasNonNull("url"));
+        assertTrue(log.get("data").hasNonNull("authId"));
+        assertTrue(log.get("data").get("execTime").asDouble() >= 0.0D);
+
+        JsonNode singleLog = request("GET", "/api/logs/" + log.get("id").asText(), token, null);
+        assertEquals(log.get("id").asText(), singleLog.get("id").asText());
+
+        JsonNode stats = request("GET", "/api/logs/stats", token, null);
+        assertTrue(stats.isArray());
+        assertTrue(stats.size() >= 1);
+        assertTrue(stats.get(0).get("total").asInt() >= 1);
+        assertTrue(stats.get(0).get("date").asText().endsWith(":00:00.000Z"));
+        assertTrue(stats.get(0).get("date").asText().contains(" "));
+
+        JsonNode rowidLogs = request("GET", "/api/logs?perPage=1&sort=-@rowid", token, null);
+        assertTrue(rowidLogs.get("totalItems").asInt() >= 1);
+
+        assertEquals(401, rawRequest("POST", "/api/settings/test/email", null, Map.of(
+                "email", "dev@example.com",
+                "template", "verification"
+        )).statusCode());
+
+        HttpResponse<String> invalidS3 = rawRequest("POST", "/api/settings/test/s3", token, Map.of(
+                "filesystem", "invalid"
+        ));
+        assertEquals(400, invalidS3.statusCode());
+        assertTrue(invalidS3.body().contains("filesystem"));
+
+        HttpResponse<String> queuedEmail = rawRequest("POST", "/api/settings/test/email", token, Map.of(
+                "email", "dev@example.com",
+                "template", "verification",
+                "smtp", Map.of("enabled", false)
+        ));
+        assertEquals(204, queuedEmail.statusCode());
+        JsonNode emailRequests = mapper.readTree(tempDir.resolve("auth_requests.json").toFile());
+        JsonNode queued = emailRequests.get(emailRequests.size() - 1);
+        assertEquals("testEmail", queued.get("type").asText());
+        assertEquals("verification", queued.get("template").asText());
+        assertEquals("dev@example.com", queued.get("email").asText());
+
+        HttpResponse<String> invalidEmail = rawRequest("POST", "/api/settings/test/email", token, Map.of(
+                "email", "dev@example.com",
+                "template", "unknown"
+        ));
+        assertEquals(400, invalidEmail.statusCode());
+        assertTrue(invalidEmail.body().contains("template"));
+
+        JsonNode apple = request("POST", "/api/settings/apple/generate-client-secret", token, Map.of(
+                "clientId", "com.example.service",
+                "teamId", "TEAMID1234",
+                "keyId", "KEYID12345",
+                "privateKey", ecPrivateKeyPem(),
+                "duration", 3600
+        ));
+        assertAppleClientSecret(apple.get("secret").asText());
+
+        server.close();
+        start();
+        JsonNode persisted = request("GET", "/api/settings", token, null);
+        assertEquals("Demo Console", persisted.get("meta").get("appName").asText());
+        assertFalse(persisted.get("smtp").has("password"));
+        assertFalse(persisted.get("s3").has("secret"));
+    }
+
+    @Test
+    void settingsTestEmailCanSendThroughConfiguredSmtp() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        try (FakeSmtpServer smtp = FakeSmtpServer.start()) {
+            request("PATCH", "/api/settings", token, Map.of(
+                    "meta", Map.of(
+                            "senderName", "PocketBase Java",
+                            "senderAddress", "noreply@example.com"
+                    ),
+                    "smtp", Map.of(
+                            "enabled", true,
+                            "host", "127.0.0.1",
+                            "port", smtp.port(),
+                            "tls", false
+                    )
+            ));
+
+            HttpResponse<String> response = rawRequest("POST", "/api/settings/test/email", token, Map.of(
+                    "email", "dev@example.com",
+                    "template", "password-reset"
+            ));
+
+            assertEquals(204, response.statusCode());
+            assertTrue(smtp.message().contains("Reset password request"));
+            assertTrue(smtp.message().contains("dev@example.com"));
+        }
+    }
+
+    @Test
+    void cronsApisListBuiltInsAndRunAutoBackup() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("GET", "/api/crons", null, null).statusCode());
+        assertEquals(401, rawRequest("POST", "/api/crons/__pbLogsCleanup__", null, null).statusCode());
+
+        JsonNode crons = request("GET", "/api/crons", token, null);
+        assertTrue(cronExists(crons, "__pbLogsCleanup__", "0 */6 * * *"));
+        assertTrue(cronExists(crons, "__pbDBOptimize__", "0 0 * * *"));
+        assertTrue(cronExists(crons, "__pbMFACleanup__", "0 * * * *"));
+        assertTrue(cronExists(crons, "__pbOTPCleanup__", "0 * * * *"));
+        assertFalse(cronExists(crons, "__pbAutoBackup__", "* * * * *"));
+
+        assertEquals(404, rawRequest("POST", "/api/crons/missing", token, null).statusCode());
+
+        request("PATCH", "/api/settings", token, Map.of(
+                "backups", Map.of(
+                        "cron", "* * * * *",
+                        "cronMaxKeep", 1
+                )
+        ));
+        JsonNode withAutoBackup = request("GET", "/api/crons", token, null);
+        assertTrue(cronExists(withAutoBackup, "__pbAutoBackup__", "* * * * *"));
+
+        HttpResponse<String> run = rawRequest("POST", "/api/crons/__pbAutoBackup__", token, null);
+        assertEquals(204, run.statusCode());
+        assertTrue(waitForAutoBackupCount(1));
+    }
+
+    @Test
+    void sqlApiRunsSuperuserQueriesAndMutatesJsonCollections() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("POST", "/api/sql", null, Map.of("query", "select 1")).statusCode());
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "sql_users",
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/sql_users/records", token, Map.of(
+                "email", "sql-user@example.com",
+                "password", "secret123",
+                "passwordConfirm", "secret123",
+                "verified", true
+        ));
+        JsonNode userAuth = request("POST", "/api/collections/sql_users/auth-with-password", null, Map.of(
+                "identity", "sql-user@example.com",
+                "password", "secret123"
+        ));
+        assertEquals(403, rawRequest("POST", "/api/sql", userAuth.get("token").asText(), Map.of("query", "select 1")).statusCode());
+
+        JsonNode one = request("POST", "/api/sql", token, Map.of("query", "select 1"));
+        assertEquals(0, one.get("affectedRows").asInt());
+        assertEquals("1", one.get("columns").get(0).get("name").asText());
+        assertEquals("1", one.get("rows").get(0).get(0).asText());
+
+        JsonNode second = request("POST", "/api/sql", token, Map.of("query", "select 1; select 2"));
+        assertEquals("2", second.get("columns").get(0).get("name").asText());
+        assertEquals("2", second.get("rows").get(0).get(0).asText());
+
+        assertEquals(400, rawRequest("POST", "/api/sql", token, Map.of("query", "")).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/sql", token, Map.of("query", "a".repeat(5001))).statusCode());
+
+        JsonNode create = request("POST", "/api/sql", token, Map.of(
+                "query", "create table sql_posts(id text primary key, title text not null, published bool, views int)"
+        ));
+        assertEquals(0, create.get("affectedRows").asInt());
+        JsonNode collection = request("GET", "/api/collections/sql_posts", token, null);
+        assertEquals("sql_posts", collection.get("name").asText());
+
+        JsonNode inserted = request("POST", "/api/sql", token, Map.of(
+                "query", "insert into sql_posts (id,title,published,views) values ('post_one','Hello SQL',true,7)"
+        ));
+        assertEquals(1, inserted.get("affectedRows").asInt());
+
+        JsonNode selected = request("POST", "/api/sql", token, Map.of(
+                "query", "select id,title,views from sql_posts where published = true order by created desc limit 1"
+        ));
+        assertEquals("post_one", selected.get("rows").get(0).get(0).asText());
+        assertEquals("Hello SQL", selected.get("rows").get(0).get(1).asText());
+        assertEquals("7", selected.get("rows").get(0).get(2).asText());
+
+        JsonNode count = request("POST", "/api/sql", token, Map.of(
+                "query", "select count(*) as total from sql_posts where title = 'Hello SQL'"
+        ));
+        assertEquals("total", count.get("columns").get(0).get("name").asText());
+        assertEquals("1", count.get("rows").get(0).get(0).asText());
+
+        JsonNode updated = request("POST", "/api/sql", token, Map.of(
+                "query", "update sql_posts set title = 'Updated SQL', views = 8 where id = 'post_one'"
+        ));
+        assertEquals(1, updated.get("affectedRows").asInt());
+        JsonNode afterUpdate = request("POST", "/api/sql", token, Map.of(
+                "query", "select title,views from sql_posts where id = 'post_one'"
+        ));
+        assertEquals("Updated SQL", afterUpdate.get("rows").get(0).get(0).asText());
+        assertEquals("8", afterUpdate.get("rows").get(0).get(1).asText());
+
+        JsonNode deleted = request("POST", "/api/sql", token, Map.of(
+                "query", "delete from sql_posts where id = 'post_one'"
+        ));
+        assertEquals(1, deleted.get("affectedRows").asInt());
+        JsonNode empty = request("POST", "/api/sql", token, Map.of(
+                "query", "select count(*) as total from sql_posts"
+        ));
+        assertEquals("0", empty.get("rows").get(0).get(0).asText());
+
+        HttpResponse<String> rolledBack = rawRequest("POST", "/api/sql", token, Map.of(
+                "query", "create table sql_tx(id text primary key, title text);"
+                        + "insert into sql_tx (id,title) values ('one','ok');"
+                        + "invalid"
+        ));
+        assertEquals(400, rolledBack.statusCode());
+        assertTrue(rolledBack.body().contains("Raw error"));
+        assertEquals(404, rawRequest("GET", "/api/collections/sql_tx", token, null).statusCode());
     }
 
     @Test
@@ -509,6 +919,15 @@ class LocalPocketBaseServerTest {
         ));
         assertTrue(auth.hasNonNull("token"));
         assertFalse(auth.get("record").has("password"));
+        assertEquals(400, rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
+                "identity", auth.get("record").get("id").asText(),
+                "password", "secret456"
+        )).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
+                "identityField", "username",
+                "identity", "demo@example.com",
+                "password", "secret456"
+        )).statusCode());
 
         PocketBaseException duplicate = assertThrows(PocketBaseException.class, () -> {
             PocketBaseClient authed = PocketBaseClient.builder(server.baseUrl()).bearerToken(token).build();
@@ -519,6 +938,92 @@ class LocalPocketBaseServerTest {
         });
         assertEquals(400, duplicate.statusCode());
         assertTrue(duplicate.responseBody().contains("Value must be unique"));
+
+        JsonNode methods = request("GET", "/api/collections/users/auth-methods", null, null);
+        assertTrue(methods.get("password").get("enabled").asBoolean());
+        assertEquals("email", methods.get("password").get("identityFields").get(0).asText());
+        assertFalse(methods.get("oauth2").get("enabled").asBoolean());
+        assertTrue(methods.get("oauth2").get("providers").isArray());
+        assertFalse(methods.get("mfa").get("enabled").asBoolean());
+        assertFalse(methods.get("otp").get("enabled").asBoolean());
+        assertTrue(methods.get("emailPassword").asBoolean());
+    }
+
+    @Test
+    void otpEndpointsIssueCodeAndAuthenticateAuthRecord() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "otp_users",
+                "type", "auth",
+                "otp", Map.of(
+                        "enabled", true,
+                        "duration", 300,
+                        "length", 6
+                )
+        ));
+        JsonNode user = request("POST", "/api/collections/otp_users/records", token, Map.of(
+                "email", "otp@example.com",
+                "password", "secret456",
+                "verified", false
+        ));
+
+        JsonNode methods = request("GET", "/api/collections/otp_users/auth-methods", null, null);
+        assertTrue(methods.get("password").get("enabled").asBoolean());
+        assertTrue(methods.get("otp").get("enabled").asBoolean());
+        assertEquals(300, methods.get("otp").get("duration").asInt());
+
+        JsonNode missingUserOtp = request("POST", "/api/collections/otp_users/request-otp", null, Map.of(
+                "email", "missing@example.com"
+        ));
+        assertTrue(missingUserOtp.hasNonNull("otpId"));
+
+        JsonNode otpRequest = request("POST", "/api/collections/otp_users/request-otp", null, Map.of(
+                "email", "otp@example.com"
+        ));
+        String otpId = otpRequest.get("otpId").asText();
+        String otpPassword = otpRequestPassword("otp@example.com", otpId);
+
+        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", "000000"
+        )).statusCode());
+
+        JsonNode auth = request("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", otpPassword
+        ));
+        assertTrue(auth.hasNonNull("token"));
+        assertEquals(user.get("id").asText(), auth.get("record").get("id").asText());
+
+        JsonNode verified = request("GET", "/api/collections/otp_users/records/" + user.get("id").asText(), token, null);
+        assertTrue(verified.get("verified").asBoolean());
+        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-password", null, Map.of(
+                "identity", "otp@example.com",
+                "password", "secret456"
+        )).statusCode());
+
+        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", otpPassword
+        )).statusCode());
+
+        JsonNode lockedOtp = request("POST", "/api/collections/otp_users/request-otp", null, Map.of(
+                "email", "otp@example.com"
+        ));
+        String lockedOtpId = lockedOtp.get("otpId").asText();
+        for (int i = 0; i < 5; i++) {
+            assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+                    "otpId", lockedOtpId,
+                    "password", "00000" + i
+            )).statusCode());
+        }
+        assertEquals(429, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+                "otpId", lockedOtpId,
+                "password", "123456"
+        )).statusCode());
     }
 
     @Test
@@ -555,6 +1060,141 @@ class LocalPocketBaseServerTest {
                 null
         );
         assertEquals(401, mismatch.statusCode());
+    }
+
+    @Test
+    void authLifecycleEndpointsVerifyResetChangeEmailAndImpersonate() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "auth_lifecycle_users",
+                "type", "auth",
+                "fields", List.of(Map.of("name", "displayName", "type", "text"))
+        ));
+        JsonNode user = request("POST", "/api/collections/auth_lifecycle_users/records", superuserToken, Map.of(
+                "email", "lifecycle@example.com",
+                "password", "secret456",
+                "displayName", "Lifecycle",
+                "verified", false
+        ));
+        String userId = user.get("id").asText();
+
+        JsonNode auth = request("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+                "identity", "lifecycle@example.com",
+                "password", "secret456"
+        ));
+        String userToken = auth.get("token").asText();
+
+        HttpResponse<String> verificationRequest = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/request-verification",
+                null,
+                Map.of("email", "lifecycle@example.com")
+        );
+        assertEquals(204, verificationRequest.statusCode());
+        String verificationToken = authRequestToken("verification", "lifecycle@example.com");
+        HttpResponse<String> requestTokenAsBearer = rawRequest(
+                "GET",
+                "/api/collections/auth_lifecycle_users/records/" + userId,
+                verificationToken,
+                null
+        );
+        assertTrue(requestTokenAsBearer.statusCode() >= 400);
+
+        HttpResponse<String> verified = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/confirm-verification",
+                null,
+                Map.of("token", verificationToken)
+        );
+        assertEquals(204, verified.statusCode());
+        JsonNode verifiedRecord = request(
+                "GET",
+                "/api/collections/auth_lifecycle_users/records/" + userId,
+                superuserToken,
+                null
+        );
+        assertTrue(verifiedRecord.get("verified").asBoolean());
+
+        request("POST", "/api/collections/auth_lifecycle_users/request-password-reset", null, Map.of(
+                "email", "lifecycle@example.com"
+        ));
+        String resetToken = authRequestToken("passwordReset", "lifecycle@example.com");
+        HttpResponse<String> mismatch = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/confirm-password-reset",
+                null,
+                Map.of("token", resetToken, "password", "newsecret456", "passwordConfirm", "different")
+        );
+        assertEquals(400, mismatch.statusCode());
+
+        HttpResponse<String> reset = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/confirm-password-reset",
+                null,
+                Map.of("token", resetToken, "password", "newsecret456", "passwordConfirm", "newsecret456")
+        );
+        assertEquals(204, reset.statusCode());
+        assertEquals(401, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-refresh", userToken, null).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+                "identity", "lifecycle@example.com",
+                "password", "secret456"
+        )).statusCode());
+
+        JsonNode newAuth = request("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+                "identity", "lifecycle@example.com",
+                "password", "newsecret456"
+        ));
+        String newUserToken = newAuth.get("token").asText();
+
+        HttpResponse<String> emailChangeRequest = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/request-email-change",
+                newUserToken,
+                Map.of("newEmail", "changed@example.com")
+        );
+        assertEquals(204, emailChangeRequest.statusCode());
+        String emailChangeToken = authRequestToken("emailChange", "lifecycle@example.com");
+        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/confirm-email-change", null, Map.of(
+                "token", emailChangeToken,
+                "password", "wrong-password"
+        )).statusCode());
+        assertEquals(204, rawRequest("POST", "/api/collections/auth_lifecycle_users/confirm-email-change", null, Map.of(
+                "token", emailChangeToken,
+                "password", "newsecret456"
+        )).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+                "identity", "lifecycle@example.com",
+                "password", "newsecret456"
+        )).statusCode());
+        JsonNode changedAuth = request("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+                "identity", "changed@example.com",
+                "password", "newsecret456"
+        ));
+
+        HttpResponse<String> forbiddenImpersonate = rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/impersonate/" + userId,
+                changedAuth.get("token").asText(),
+                Map.of("duration", 120)
+        );
+        assertEquals(403, forbiddenImpersonate.statusCode());
+        JsonNode impersonated = request(
+                "POST",
+                "/api/collections/auth_lifecycle_users/impersonate/" + userId,
+                superuserToken,
+                Map.of("duration", 120)
+        );
+        assertEquals(userId, impersonated.get("record").get("id").asText());
+        assertTrue(impersonated.hasNonNull("token"));
+        assertEquals(401, rawRequest(
+                "POST",
+                "/api/collections/auth_lifecycle_users/auth-refresh",
+                impersonated.get("token").asText(),
+                null
+        ).statusCode());
     }
 
     @Test
@@ -1250,6 +1890,61 @@ class LocalPocketBaseServerTest {
         return auth.get("token").asText();
     }
 
+    private String authRequestToken(String type, String email) throws IOException {
+        JsonNode requests = mapper.readTree(tempDir.resolve("auth_requests.json").toFile());
+        for (int i = requests.size() - 1; i >= 0; i--) {
+            JsonNode request = requests.get(i);
+            if (type.equals(request.path("type").asText())
+                    && email.equalsIgnoreCase(request.path("email").asText())
+                    && request.hasNonNull("token")) {
+                return request.get("token").asText();
+            }
+        }
+        throw new AssertionError("No auth request token for " + type + " / " + email);
+    }
+
+    private String otpRequestPassword(String email, String otpId) throws IOException {
+        JsonNode requests = mapper.readTree(tempDir.resolve("auth_requests.json").toFile());
+        for (int i = requests.size() - 1; i >= 0; i--) {
+            JsonNode request = requests.get(i);
+            if ("otp".equals(request.path("type").asText())
+                    && email.equalsIgnoreCase(request.path("email").asText())
+                    && otpId.equals(request.path("otpId").asText())
+                    && request.hasNonNull("password")) {
+                return request.get("password").asText();
+            }
+        }
+        throw new AssertionError("No OTP request for " + email + " / " + otpId);
+    }
+
+    private boolean cronExists(JsonNode crons, String id, String expression) {
+        for (JsonNode cron : crons) {
+            if (id.equals(cron.path("id").asText()) && expression.equals(cron.path("expression").asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean waitForAutoBackupCount(int expected) throws Exception {
+        Path backups = tempDir.resolve("backups");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            if (Files.exists(backups)) {
+                try (var paths = Files.list(backups)) {
+                    long count = paths
+                            .filter(path -> path.getFileName().toString().startsWith("@auto_pb_backup_"))
+                            .count();
+                    if (count >= expected) {
+                        return true;
+                    }
+                }
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
     private JsonNode request(String method, String path, String token, Object body) throws Exception {
         HttpResponse<String> response = rawRequest(method, path, token, body);
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -1367,10 +2062,115 @@ class LocalPocketBaseServerTest {
         return List.of(image.getWidth(), image.getHeight());
     }
 
+    private List<String> fieldNames(JsonNode collection) {
+        List<String> names = new java.util.ArrayList<>();
+        collection.get("fields").forEach(field -> names.add(field.get("name").asText()));
+        return names;
+    }
+
+    private List<String> providerNames(JsonNode providers) {
+        List<String> names = new java.util.ArrayList<>();
+        providers.forEach(provider -> names.add(provider.get("name").asText()));
+        return names;
+    }
+
+    private String ecPrivateKeyPem() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+        generator.initialize(new ECGenParameterSpec("secp256r1"));
+        byte[] encoded = generator.generateKeyPair().getPrivate().getEncoded();
+        return "-----BEGIN PRIVATE KEY-----\n"
+                + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8)).encodeToString(encoded)
+                + "\n-----END PRIVATE KEY-----";
+    }
+
+    private void assertAppleClientSecret(String secret) throws IOException {
+        String[] parts = secret.split("\\.");
+        assertEquals(3, parts.length);
+        JsonNode header = mapper.readTree(Base64.getUrlDecoder().decode(parts[0]));
+        JsonNode payload = mapper.readTree(Base64.getUrlDecoder().decode(parts[1]));
+        assertEquals("ES256", header.get("alg").asText());
+        assertEquals("KEYID12345", header.get("kid").asText());
+        assertEquals("TEAMID1234", payload.get("iss").asText());
+        assertEquals("com.example.service", payload.get("sub").asText());
+        assertEquals("https://appleid.apple.com", payload.get("aud").asText());
+        assertTrue(parts[2].length() > 80);
+    }
+
     private record MultipartFile(String name, String contentType, byte[] bytes) {
     }
 
     private record SseEvent(String event, String data) {
+    }
+
+    private static final class FakeSmtpServer implements AutoCloseable {
+        private final ServerSocket serverSocket;
+        private final ExecutorService executor = Executors.newSingleThreadExecutor();
+        private final CountDownLatch messageReceived = new CountDownLatch(1);
+        private final AtomicReference<String> message = new AtomicReference<>("");
+
+        private FakeSmtpServer(ServerSocket serverSocket) {
+            this.serverSocket = serverSocket;
+            executor.submit(this::serveOne);
+        }
+
+        static FakeSmtpServer start() throws IOException {
+            return new FakeSmtpServer(new ServerSocket(0));
+        }
+
+        int port() {
+            return serverSocket.getLocalPort();
+        }
+
+        String message() throws InterruptedException {
+            assertTrue(messageReceived.await(5, TimeUnit.SECONDS));
+            return message.get();
+        }
+
+        private void serveOne() {
+            try (Socket socket = serverSocket.accept();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
+                write(writer, "220 fake-smtp");
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String upper = line.toUpperCase();
+                    if (upper.startsWith("EHLO") || upper.startsWith("HELO")) {
+                        write(writer, "250-fake-smtp");
+                        write(writer, "250 OK");
+                    } else if (upper.startsWith("MAIL FROM") || upper.startsWith("RCPT TO")) {
+                        write(writer, "250 OK");
+                    } else if (upper.startsWith("DATA")) {
+                        write(writer, "354 End data");
+                        StringBuilder body = new StringBuilder();
+                        while ((line = reader.readLine()) != null && !".".equals(line)) {
+                            body.append(line).append('\n');
+                        }
+                        message.set(body.toString());
+                        messageReceived.countDown();
+                        write(writer, "250 OK");
+                    } else if (upper.startsWith("QUIT")) {
+                        write(writer, "221 Bye");
+                        return;
+                    } else {
+                        write(writer, "250 OK");
+                    }
+                }
+            } catch (IOException ignored) {
+                messageReceived.countDown();
+            }
+        }
+
+        private static void write(BufferedWriter writer, String line) throws IOException {
+            writer.write(line);
+            writer.write("\r\n");
+            writer.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            serverSocket.close();
+            executor.shutdownNow();
+        }
     }
 
     private static final class SseReader implements AutoCloseable {

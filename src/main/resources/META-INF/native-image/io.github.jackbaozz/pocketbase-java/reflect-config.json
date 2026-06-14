@@ -24,6 +24,24 @@
     "allPublicMethods": true
   },
   {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$PasswordAuthConfig",
+    "allDeclaredConstructors": true,
+    "allPublicFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OtpConfig",
+    "allDeclaredConstructors": true,
+    "allPublicFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$MfaConfig",
+    "allDeclaredConstructors": true,
+    "allPublicFields": true,
+    "allPublicMethods": true
+  },
+  {
     "name": "io.github.jackbaozz.pocketbase.server.model.FieldSchema",
     "allDeclaredConstructors": true,
     "allPublicFields": true,

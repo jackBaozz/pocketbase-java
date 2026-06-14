@@ -49,8 +49,38 @@ public final class CollectionsService {
         );
     }
 
+    public JsonNode scaffolds() {
+        return client.send(
+                "GET",
+                client.apiPath("collections", "meta", "scaffolds"),
+                Map.of(),
+                null,
+                JsonNode.class
+        );
+    }
+
+    public JsonNode oauth2Providers() {
+        return client.send(
+                "GET",
+                client.apiPath("collections", "meta", "oauth2-providers"),
+                Map.of(),
+                null,
+                JsonNode.class
+        );
+    }
+
     public JsonNode create(Object body) {
         return client.send("POST", client.apiPath("collections"), Map.of(), requireBody(body), JsonNode.class);
+    }
+
+    public void importCollections(Object body) {
+        client.send(
+                "PUT",
+                client.apiPath("collections", "import"),
+                Map.of(),
+                requireBody(body),
+                Void.class
+        );
     }
 
     public JsonNode update(String idOrName, Object body) {
@@ -67,6 +97,16 @@ public final class CollectionsService {
         client.send(
                 "DELETE",
                 client.apiPath("collections", requireText(idOrName, "idOrName")),
+                Map.of(),
+                null,
+                Void.class
+        );
+    }
+
+    public void truncate(String idOrName) {
+        client.send(
+                "DELETE",
+                client.apiPath("collections", requireText(idOrName, "idOrName"), "truncate"),
                 Map.of(),
                 null,
                 Void.class

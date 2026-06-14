@@ -51,6 +51,22 @@ public final class PocketBaseClient {
         return new FilesService(this);
     }
 
+    public SettingsService settings() {
+        return new SettingsService(this);
+    }
+
+    public LogsService logs() {
+        return new LogsService(this);
+    }
+
+    public CronsService crons() {
+        return new CronsService(this);
+    }
+
+    public SqlService sql() {
+        return new SqlService(this);
+    }
+
     public AuthStore authStore() {
         return authStore;
     }

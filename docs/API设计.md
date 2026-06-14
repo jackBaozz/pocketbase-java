@@ -198,8 +198,15 @@ JsonNode collection = client.collections().getOne("posts");
 JsonNode slim = client.collections().getOne("posts", ListOptions.builder()
         .fields("id,name")
         .build());
+JsonNode scaffolds = client.collections().scaffolds();
+JsonNode oauth2Providers = client.collections().oauth2Providers();
 JsonNode created = client.collections().create(collectionBody);
 JsonNode updated = client.collections().update("posts", patchBody);
+client.collections().importCollections(Map.of(
+        "deleteMissing", true,
+        "collections", List.of(collectionBody)
+));
+client.collections().truncate("posts");
 client.collections().delete("posts");
 ```
 
@@ -242,12 +249,29 @@ try {
 | `collection(name).update(id, body[, query])` | `PATCH /api/collections/{collection}/records/{id}` |
 | `collection(name).delete(id)` | `DELETE /api/collections/{collection}/records/{id}` |
 | `collection(name).authWithPassword(identity, password)` | `POST /api/collections/{collection}/auth-with-password` |
+| `collection(name).requestOtp(email)` | `POST /api/collections/{collection}/request-otp` |
+| `collection(name).authWithOtp(otpId, password)` | `POST /api/collections/{collection}/auth-with-otp` |
 | `collection(name).authRefresh()` | `POST /api/collections/{collection}/auth-refresh` |
 | `collection(name).listAuthMethods()` | `GET /api/collections/{collection}/auth-methods` |
 | `files().getToken()` | `POST /api/files/token` |
+| `settings().get([fields])` | `GET /api/settings` |
+| `settings().update(body)` | `PATCH /api/settings` |
+| `settings().testS3(filesystemOrBody)` | `POST /api/settings/test/s3` |
+| `settings().testEmail(email, template[, collection])` | `POST /api/settings/test/email` |
+| `settings().generateAppleClientSecret(body)` | `POST /api/settings/apple/generate-client-secret` |
+| `logs().list(options)` | `GET /api/logs?...` |
+| `logs().getOne(id)` | `GET /api/logs/{id}` |
+| `logs().stats(query)` | `GET /api/logs/stats?...` |
+| `crons().list()` | `GET /api/crons` |
+| `crons().run(id)` | `POST /api/crons/{id}` |
+| `sql().run(query)` | `POST /api/sql` |
 | `collections().list()` | `GET /api/collections` |
 | `collections().list(options)` | `GET /api/collections?...` |
 | `collections().getOne(id, options)` | `GET /api/collections/{idOrName}?...` |
+| `collections().scaffolds()` | `GET /api/collections/meta/scaffolds` |
+| `collections().oauth2Providers()` | `GET /api/collections/meta/oauth2-providers` |
+| `collections().importCollections(body)` | `PUT /api/collections/import` |
+| `collections().truncate(idOrName)` | `DELETE /api/collections/{idOrName}/truncate` |
 
 官方文档：
 
@@ -325,6 +349,32 @@ POST /api/collections/_superusers/auth-with-password
 
 响应包含 `token` 和隐藏密码后的 `record`。
 
+#### 8.3.1 Auth 生命周期接口
+
+```text
+POST /api/collections/{collection}/request-password-reset
+POST /api/collections/{collection}/confirm-password-reset
+POST /api/collections/{collection}/request-verification
+POST /api/collections/{collection}/confirm-verification
+POST /api/collections/{collection}/request-email-change
+POST /api/collections/{collection}/confirm-email-change
+POST /api/collections/{collection}/impersonate/{id}
+```
+
+当前实现覆盖官方 auth collection 的常用 token 流程：
+
+- `request-otp`: 请求体 `{"email":"user@example.com"}`。collection 开启 `otp.enabled=true` 时返回 `{"otpId":"..."}`；未配置 SMTP 时验证码会写入 `pb_data/auth_requests.json` outbox。
+- `auth-with-otp`: 请求体 `{"otpId":"...","password":"123456"}`。校验通过后返回标准 auth 响应，并在 `sentTo` 匹配当前 email 时把 record 标记为 `verified=true`；OTP 仅能使用一次。
+- `request-password-reset`: 请求体 `{"email":"user@example.com"}`，存在对应 auth record 时生成 `passwordReset` token，响应 `204`。
+- `confirm-password-reset`: 请求体 `{"token":"...","password":"newsecret456","passwordConfirm":"newsecret456"}`，校验 token 后更新密码、标记 `verified=true`，并轮换 record tokenKey，使旧登录 token 失效。
+- `request-verification`: 请求体 `{"email":"user@example.com"}`，存在未验证 auth record 时生成 `verification` token，响应 `204`。
+- `confirm-verification`: 请求体 `{"token":"..."}`，校验 token 后设置 `verified=true`。
+- `request-email-change`: 需要同一 auth collection 的 record Bearer token，请求体 `{"newEmail":"next@example.com"}`，生成 `emailChange` token。
+- `confirm-email-change`: 请求体 `{"token":"...","password":"currentPassword"}`，校验当前密码后更新 email、设置 `verified=true`，并轮换 tokenKey。
+- `impersonate/{id}`: 需要 superuser token，请求体可选 `{"duration":3600}`，返回目标 auth record 的短期 token；impersonate token 可访问接口，但不能调用 `auth-refresh`。
+
+由于当前 runtime 不引入 Jakarta Mail 等额外反射型邮件依赖，OTP 和 auth request 类接口会把待发送内容写入 `pb_data/auth_requests.json`。`/api/settings/test/email` 已提供纯 JDK SMTP 测试发送路径；当 SMTP 配置启用时，`request-otp` 会直接发送邮件。
+
 ### 8.4 集合管理
 
 集合管理需要 superuser Bearer token。
@@ -335,6 +385,10 @@ POST   /api/collections
 GET    /api/collections/{idOrName}
 PATCH  /api/collections/{idOrName}
 DELETE /api/collections/{idOrName}
+PUT    /api/collections/import
+DELETE /api/collections/{idOrName}/truncate
+GET    /api/collections/meta/scaffolds
+GET    /api/collections/meta/oauth2-providers
 ```
 
 创建集合：
@@ -351,6 +405,20 @@ DELETE /api/collections/{idOrName}
 ```
 
 支持字段类型：`text`、`email`、`password`、`bool`、`number`、`select`、`json`、`relation`、`file`。当前 `file` 支持 multipart 上传和 `/api/files` 访问；`relation` 支持通过 `collectionId`、`collectionIds` 或 `options.collectionId` 指向目标集合，并可在记录查询中使用 `expand` 展开。
+
+`PUT /api/collections/import` 当前实现：
+
+- 请求体 `{"collections":[...],"deleteMissing":true}`，`collections` 必须是非空数组。
+- 每个集合配置支持官方 `fields` 和旧别名 `schema`。
+- 同 id 集合会更新并保留记录数据；同 id 改名后旧名称会失效。
+- `deleteMissing=true` 会删除导入列表外的非系统集合，同时清理对应 records JSON 和 storage 目录。
+- 系统集合不会被 `deleteMissing` 删除，auth 集合会自动补齐 `email`、`password`、`verified` 字段。
+
+`DELETE /api/collections/{idOrName}/truncate` 会清空该集合的 records JSON 并删除对应 storage 目录；系统集合当前不允许 truncate。
+
+`GET /api/collections/meta/scaffolds` 返回 `base`、`auth`、`view` 三类集合模板，供 Admin UI 创建集合前填充默认结构。
+
+`GET /api/collections/meta/oauth2-providers` 返回官方常见 OAuth2 provider metadata（`name`、`displayName`、`logo`）。当前仅提供 provider 列表元数据，不代表 OAuth2 登录和回调流程已经实现。
 
 集合列表和单条查询支持常用查询参数：
 
@@ -570,7 +638,122 @@ curl -X POST http://127.0.0.1:8090/api/backups \
 - 暂不支持备份加密。
 - 当前进程会保留已有 `pb_secret`，避免还原后 HMAC token secret 与内存状态不一致。
 
-### 8.9 Realtime SSE
+### 8.9 Settings 和 Logs
+
+```text
+GET   /api/settings
+PATCH /api/settings
+POST  /api/settings/test/s3
+POST  /api/settings/test/email
+POST  /api/settings/apple/generate-client-secret
+GET   /api/logs
+GET   /api/logs/{id}
+GET   /api/logs/stats
+```
+
+所有 settings/logs API 都要求 superuser token。
+
+Settings 当前实现：
+
+- 设置保存到 `pb_data/pb_settings.json`。
+- `PATCH /api/settings` 对传入 JSON 做深合并；`meta.appUrl` 和 `logs.logIp` 会兼容写入为官方字段 `meta.appURL`、`logs.logIP`。
+- 默认 settings 结构包含官方常用段：`superuserIPs`、`meta.accentColor`、`logs.logIP`、`trustedProxy.useLeftmostIP`、`rateLimits.excludedIPs` 和默认 rate limit rules。
+- 响应会按官方模型省略 `password`、`secret`、`privateKey` 等敏感字段；`accessKey` 会正常返回。
+- PATCH 传入旧版 UI 使用的 `******` 会保留已有真实值，避免保存旧脱敏 JSON 时覆盖 secret。
+- `POST /api/settings/test/s3` 请求体 `{"filesystem":"storage"}` 或 `{"filesystem":"backups"}`，按保存的 S3 配置使用 JDK `HttpClient` 和 AWS Signature V4 执行测试上传、列表探测和删除；请求体可带 `s3` 覆盖用于未保存前测试。
+- `POST /api/settings/test/email` 请求体 `{"email":"dev@example.com","template":"verification","collection":"users"}`，template 支持 `verification`、`password-reset`、`email-change`、`otp`、`login-alert`。启用 SMTP 时使用内置纯 JDK SMTP 客户端发送；未启用时写入 `pb_data/auth_requests.json` 作为本地 outbox。
+- `POST /api/settings/apple/generate-client-secret` 按 Apple Sign in 要求生成 ES256 JWT，字段为 `clientId`、`teamId`、`keyId`、`privateKey`、`duration`，duration 最大 `15777000` 秒。
+- S3 远端文件系统和远端备份的实际读写集成仍未替换本地 storage/backups；当前 S3 API 只覆盖官方 settings 测试动作。
+
+示例：
+
+```bash
+curl -X PATCH http://127.0.0.1:8090/api/settings \
+  -H "Authorization: Bearer <superuser-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"meta":{"appName":"Demo","appUrl":"https://example.test"},"logs":{"maxDays":14}}'
+```
+
+Logs 当前实现：
+
+- 请求活动日志保存到 `pb_data/logs.json`。
+- 记录 `/api/*` 请求的 method、url、status、execTime、userAgent、remoteIP、auth/authId 等字段；`execTime` 与官方一致使用毫秒。
+- `/api/health`、成功的 `/api/logs*` 和 `GET /api/realtime` 长连接不会写活动日志；`/api/logs*` 的错误响应仍会记录。
+- `GET /api/logs` 支持 `page`、`perPage`、`filter`、`sort`、`fields`。
+- `GET /api/logs` 兼容官方 Admin UI 使用的 `sort=-@rowid`。
+- `GET /api/logs/stats` 按小时返回 `{date,total}` 统计，`date` 格式为 `yyyy-MM-dd HH:00:00.000Z`。
+- `logs.maxDays <= 0` 时不会保留活动日志，`logs.minLevel` 会过滤低于配置级别的日志。
+
+示例：
+
+```text
+GET /api/logs?filter=data.status%20%3E%3D%20400&sort=-created
+GET /api/logs/stats
+```
+
+### 8.10 Crons
+
+```text
+GET  /api/crons
+POST /api/crons/{id}
+```
+
+所有 crons API 都要求 superuser token。
+
+当前实现：
+
+- `GET /api/crons` 返回官方 cron job JSON 形状：`{"id":"...","expression":"..."}`。
+- 内置暴露 `__pbLogsCleanup__`、`__pbDBOptimize__`、`__pbMFACleanup__`、`__pbOTPCleanup__`，表达式与官方默认值保持一致。
+- `__pbLogsCleanup__` 会执行当前 JSON store 的日志保留清理；`__pbDBOptimize__`、`__pbMFACleanup__`、`__pbOTPCleanup__` 在当前 JSON runtime 中是兼容占位 job。
+- 当 `settings.backups.cron` 非空时，会额外注册 `__pbAutoBackup__`，表达式等于配置值；手动运行会生成 `@auto_pb_backup_yyyyMMddHHmmss.zip` 并按 `settings.backups.cronMaxKeep` 清理旧自动备份。
+- `POST /api/crons/{id}` 与官方一样返回 `204`，job 在后台线程运行。
+
+Java:
+
+```java
+JsonNode jobs = client.crons().list();
+client.crons().run("__pbLogsCleanup__");
+```
+
+### 8.11 SQL
+
+```text
+POST /api/sql
+```
+
+`POST /api/sql` 要求 superuser token。请求体为：
+
+```json
+{"query":"select 1"}
+```
+
+响应字段与官方 SQL API 对齐：
+
+```json
+{
+  "execTime": 0,
+  "affectedRows": 0,
+  "columns": [{"name":"1","type":"","nullable":true}],
+  "rows": [["1"]]
+}
+```
+
+当前实现：
+
+- `query` 不能为空，最大长度 `5000`；校验失败返回 `400` 和 `data.query`。
+- `SELECT` 最多返回 `1000` 行；支持常量选择、`*`、字段列表、`count(*) as alias`、`WHERE`、`ORDER BY`、`LIMIT`、`OFFSET` 和多条只读语句返回最后一条结果。
+- 写语句支持 `CREATE TABLE`、`DROP TABLE`、`INSERT INTO ... VALUES`、`UPDATE ... SET ... WHERE`、`DELETE FROM ... WHERE`，映射到当前 JSON collection/records 持久化。
+- 写模式会按官方语义包在一个事务快照里；多语句中任一条失败，会回滚 schema、records 和 storage 状态。
+- 由于本项目当前不是 SQLite runtime，SQL 是 native-friendly 轻量子集，不支持 arbitrary SQLite 函数、JOIN、子查询、ALTER、REPLACE、DETACH 等完整数据库能力；这些语句会返回 `400 Failed to execute query. Raw error`。
+- 实现不引入 JDBC、ORM、ANTLR 等反射/资源配置重的依赖，保持 GraalVM native 构建面可控。
+
+Java:
+
+```java
+JsonNode result = client.sql().run("select count(*) as total from posts");
+```
+
+### 8.12 Realtime SSE
 
 ```text
 GET  /api/realtime
@@ -638,7 +821,7 @@ POST /api/realtime?clientId=<clientId>&subscriptions[0]=posts/*&options={"query"
 - 暂不支持 collection schema 事件。
 - 暂不支持 SDK 侧自动重连封装。
 
-### 8.10 Collection Access Rules
+### 8.11 Collection Access Rules
 
 集合字段：
 
@@ -689,8 +872,9 @@ title ~ "pocket"
 - `@collection.*` 当前按目标集合字段值聚合匹配，暂不支持官方 alias 的同一关联记录相关性约束。
 - 暂不支持官方完整 modifier/function 集合。
 - 暂不支持官方完整关系展开深层规则和 modifier 组合。
+- OAuth2 当前仅覆盖 collection meta provider metadata，正式 OAuth2 登录和回调仍未实现。
 
-### 8.11 Admin UI
+### 8.12 Admin UI
 
 ```text
 GET /_/
@@ -705,3 +889,4 @@ UI 源码位于 `UI/`，使用 React + Vite + TypeScript；执行 `cd UI && npm 
 - record 列表、filter/sort/perPage 查询、JSON 编辑、删除。
 - file 字段上传和带 file token 的文件打开。
 - backup 创建、上传、下载、恢复和删除。
+- settings JSON 编辑和 logs 表格查看。
