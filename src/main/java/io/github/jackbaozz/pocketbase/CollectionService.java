@@ -48,20 +48,30 @@ public final class CollectionService {
     }
 
     public JsonNode create(Object body) {
+        return create(body, RecordQuery.defaults());
+    }
+
+    public JsonNode create(Object body, RecordQuery query) {
+        RecordQuery actualQuery = query == null ? RecordQuery.defaults() : query;
         return client.send(
                 "POST",
                 client.apiPath("collections", collection, "records"),
-                Map.of(),
+                actualQuery.toQuery(),
                 requireBody(body),
                 JsonNode.class
         );
     }
 
     public JsonNode update(String id, Object body) {
+        return update(id, body, RecordQuery.defaults());
+    }
+
+    public JsonNode update(String id, Object body, RecordQuery query) {
+        RecordQuery actualQuery = query == null ? RecordQuery.defaults() : query;
         return client.send(
                 "PATCH",
                 client.apiPath("collections", collection, "records", requireText(id, "id")),
-                Map.of(),
+                actualQuery.toQuery(),
                 requireBody(body),
                 JsonNode.class
         );
@@ -91,6 +101,23 @@ public final class CollectionService {
                         "identity", requireText(identity, "identity"),
                         "password", requireText(password, "password")
                 ),
+                AuthResponse.class
+        );
+        client.authStore().save(response);
+        return response;
+    }
+
+    public AuthResponse authRefresh() {
+        return authRefresh(RecordQuery.defaults());
+    }
+
+    public AuthResponse authRefresh(RecordQuery query) {
+        RecordQuery actualQuery = query == null ? RecordQuery.defaults() : query;
+        AuthResponse response = client.send(
+                "POST",
+                client.apiPath("collections", collection, "auth-refresh"),
+                actualQuery.toQuery(),
+                null,
                 AuthResponse.class
         );
         client.authStore().save(response);

@@ -2,7 +2,12 @@
 
 ## 1. 设计目标
 
-`pocketbase-java` 暴露的是面向 PocketBase 资源的 Java API，而不是直接暴露裸 HTTP。调用方只需要关心集合、记录、认证和错误处理。
+`pocketbase-java` 暴露两层能力：
+
+- Java SDK：面向 PocketBase 资源的 Java API，而不是直接暴露裸 HTTP。
+- Embedded Server：用 Java 提供 PocketBase 风格 HTTP API 和 Admin UI，便于后续打 GraalVM native 二进制。
+
+调用方只需要关心集合、记录、认证和错误处理。
 
 设计原则：
 
@@ -84,7 +89,10 @@ Java:
 JsonNode created = client.collection("posts").create(Map.of(
         "title", "Hello",
         "published", true
-));
+), RecordQuery.builder()
+        .expand("author")
+        .fields("id,title,expand.author.name")
+        .build());
 ```
 
 ### 3.4 更新
@@ -100,7 +108,9 @@ Java:
 ```java
 JsonNode updated = client.collection("posts").update("abc123", Map.of(
         "title", "Updated"
-));
+), RecordQuery.builder()
+        .fields("id,title")
+        .build());
 ```
 
 ### 3.5 删除
@@ -141,7 +151,23 @@ AuthResponse auth = client.collection("users")
 - `AuthStore` 保存 token 和 record。
 - 后续请求自动带 `Authorization: Bearer <token>`。
 
-### 4.2 查看认证方法
+### 4.2 刷新认证
+
+PocketBase endpoint:
+
+```text
+POST /api/collections/{collection}/auth-refresh
+```
+
+Java:
+
+```java
+AuthResponse auth = client.collection("users").authRefresh();
+```
+
+当前实现要求请求已带同一个 auth collection 签发的 Bearer token。刷新成功后会返回新的 token 和最新公开 record，并更新 `AuthStore`。
+
+### 4.3 查看认证方法
 
 PocketBase endpoint:
 
@@ -163,7 +189,15 @@ JsonNode methods = client.collection("users").listAuthMethods();
 
 ```java
 JsonNode collections = client.collections().list();
+JsonNode filtered = client.collections().list(ListOptions.builder()
+        .filter("type = 'base'")
+        .sort("-name")
+        .fields("id,name,type")
+        .build());
 JsonNode collection = client.collections().getOne("posts");
+JsonNode slim = client.collections().getOne("posts", ListOptions.builder()
+        .fields("id,name")
+        .build());
 JsonNode created = client.collections().create(collectionBody);
 JsonNode updated = client.collections().update("posts", patchBody);
 client.collections().delete("posts");
@@ -204,15 +238,470 @@ try {
 | --- | --- |
 | `collection(name).list()` | `GET /api/collections/{collection}/records` |
 | `collection(name).getOne(id)` | `GET /api/collections/{collection}/records/{id}` |
-| `collection(name).create(body)` | `POST /api/collections/{collection}/records` |
-| `collection(name).update(id, body)` | `PATCH /api/collections/{collection}/records/{id}` |
+| `collection(name).create(body[, query])` | `POST /api/collections/{collection}/records` |
+| `collection(name).update(id, body[, query])` | `PATCH /api/collections/{collection}/records/{id}` |
 | `collection(name).delete(id)` | `DELETE /api/collections/{collection}/records/{id}` |
 | `collection(name).authWithPassword(identity, password)` | `POST /api/collections/{collection}/auth-with-password` |
+| `collection(name).authRefresh()` | `POST /api/collections/{collection}/auth-refresh` |
 | `collection(name).listAuthMethods()` | `GET /api/collections/{collection}/auth-methods` |
+| `files().getToken()` | `POST /api/files/token` |
 | `collections().list()` | `GET /api/collections` |
+| `collections().list(options)` | `GET /api/collections?...` |
+| `collections().getOne(id, options)` | `GET /api/collections/{idOrName}?...` |
 
 官方文档：
 
 - https://pocketbase.io/docs/
 - https://pocketbase.io/docs/api-records/
 - https://pocketbase.io/docs/api-collections/
+
+---
+
+## 8. Embedded Server API
+
+入口类：
+
+```java
+io.github.jackbaozz.pocketbase.server.PocketBaseServer
+```
+
+命令：
+
+```bash
+java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+```
+
+### 8.1 健康检查
+
+```text
+GET /api/health
+```
+
+响应：
+
+```json
+{
+  "code": 200,
+  "message": "API is healthy.",
+  "data": {
+    "canBackup": true,
+    "dataDir": "pb_data",
+    "superuserReady": true
+  }
+}
+```
+
+### 8.2 首个 superuser
+
+```text
+POST /api/bootstrap/superuser
+```
+
+请求：
+
+```json
+{
+  "email": "root@example.com",
+  "password": "secret123"
+}
+```
+
+该接口仅在没有任何 superuser 时可用。
+
+### 8.3 superuser 登录
+
+```text
+POST /api/collections/_superusers/auth-with-password
+```
+
+请求：
+
+```json
+{
+  "identity": "root@example.com",
+  "password": "secret123"
+}
+```
+
+响应包含 `token` 和隐藏密码后的 `record`。
+
+### 8.4 集合管理
+
+集合管理需要 superuser Bearer token。
+
+```text
+GET    /api/collections
+POST   /api/collections
+GET    /api/collections/{idOrName}
+PATCH  /api/collections/{idOrName}
+DELETE /api/collections/{idOrName}
+```
+
+创建集合：
+
+```json
+{
+  "name": "posts",
+  "type": "base",
+  "fields": [
+    {"name": "title", "type": "text", "required": true},
+    {"name": "published", "type": "bool"}
+  ]
+}
+```
+
+支持字段类型：`text`、`email`、`password`、`bool`、`number`、`select`、`json`、`relation`、`file`。当前 `file` 支持 multipart 上传和 `/api/files` 访问；`relation` 支持通过 `collectionId`、`collectionIds` 或 `options.collectionId` 指向目标集合，并可在记录查询中使用 `expand` 展开。
+
+集合列表和单条查询支持常用查询参数：
+
+- `page`
+- `perPage`
+- `filter`
+- `sort`
+- `fields`
+
+### 8.5 记录 CRUD
+
+```text
+GET    /api/collections/{collection}/records
+POST   /api/collections/{collection}/records
+GET    /api/collections/{collection}/records/{id}
+PATCH  /api/collections/{collection}/records/{id}
+DELETE /api/collections/{collection}/records/{id}
+```
+
+列表/单条参数：
+
+- `page`
+- `perPage`
+- `sort`
+- `filter`
+- `expand`
+- `fields`
+
+当前 `filter` 和 collection access rules 共用同一个轻量表达式求值器，支持常用比较、包含、数组 any 和布尔组合。
+
+创建、更新、upsert 和 auth 响应也支持响应查询参数：
+
+- record create/update/upsert: `expand`、`fields` 会应用到返回的 record。
+- auth-with-password/auth-refresh: `expand` 会应用到返回的 `record`，`fields` 支持 `token`、`meta` 和 `record.*` 路径裁剪，例如 `fields=token,record.id,record.expand.team.name`。
+
+`expand` 支持逗号分隔的 relation 路径，例如：
+
+```text
+GET /api/collections/posts/records?expand=author,comments.author
+GET /api/collections/posts/records/{id}?expand=author
+```
+
+展开结果写入记录的 `expand` 字段。目标记录会继续执行目标集合的 `viewRule`，非 superuser 不会看到 hidden/password 字段。当前展开深度限制为 6 层，暂不支持官方所有 modifier 和复杂深层规则组合。
+
+`fields` 支持根字段和展开字段裁剪，例如：
+
+```text
+GET /api/collections/posts/records?fields=id,title
+GET /api/collections/posts/records/{id}?expand=author&fields=id,expand.author.name
+```
+
+### 8.6 Batch API
+
+```text
+POST /api/batch
+```
+
+当前实现支持 JSON 和 multipart batch 的 record create/update/upsert/delete。所有子请求共用外层请求的 Bearer token，并复用对应集合的 access rules。
+
+请求示例：
+
+```json
+{
+  "requests": [
+    {
+      "method": "POST",
+      "url": "/api/collections/posts/records",
+      "body": {"id": "post_1", "title": "Created"}
+    },
+    {
+      "method": "PUT",
+      "url": "/api/collections/posts/records/post_2",
+      "body": {"title": "Upserted"}
+    },
+    {
+      "method": "PATCH",
+      "url": "/api/collections/posts/records/post_1",
+      "body": {"title": "Updated"}
+    },
+    {
+      "method": "DELETE",
+      "url": "/api/collections/posts/records/post_2"
+    }
+  ]
+}
+```
+
+响应示例：
+
+```json
+{
+  "responses": [
+    {"status": 200, "body": {"id": "post_1", "title": "Created"}},
+    {"status": 200, "body": {"id": "post_2", "title": "Upserted"}},
+    {"status": 200, "body": {"id": "post_1", "title": "Updated"}},
+    {"status": 204, "body": null}
+  ]
+}
+```
+
+当前行为：
+
+- 支持 `POST /api/collections/{collection}/records`。
+- 支持 `PATCH /api/collections/{collection}/records/{id}`。
+- 支持 `PUT /api/collections/{collection}/records` 和 `PUT /api/collections/{collection}/records/{id}` upsert。
+- 支持 `DELETE /api/collections/{collection}/records/{id}`。
+- multipart batch 使用 `@jsonPayload` 字段传 JSON payload，文件字段名支持 `requests.N.fileField` 和 `requests[N].fileField` 两种格式。
+- 任一子请求失败时，已经执行的 record 变更和 storage 文件写入会回滚，响应为 `400`，`data.index` 指向失败子请求。
+
+multipart 示例：
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/batch \
+  -H "Authorization: Bearer <token>" \
+  -F '@jsonPayload={"requests":[{"method":"POST","url":"/api/collections/assets/records","body":{"id":"asset_1","title":"Batch file"}}]}' \
+  -F 'requests.0.attachment=@./hello.txt;type=text/plain'
+```
+
+当前限制：
+
+- 暂不支持集合管理、备份等非 record batch 子请求。
+
+### 8.7 文件上传和访问
+
+创建或更新带 `file` 字段的记录时，可以使用 `multipart/form-data`：
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/collections/assets/records \
+  -H "Authorization: Bearer <token>" \
+  -F 'title=Demo' \
+  -F 'attachment=@./demo.txt'
+```
+
+响应记录中的 file 字段保存服务端文件名，例如：
+
+```json
+{
+  "id": "abc123",
+  "title": "Demo",
+  "attachment": "demo_a1b2c3d4e5.txt"
+}
+```
+
+访问文件：
+
+```text
+GET /api/files/{collection}/{recordId}/{filename}
+POST /api/files/token
+```
+
+当前实现：
+
+- 文件保存到 `pb_data/storage/{collectionId}/{recordId}/{filename}`。
+- 文件名会做基本 sanitize，并追加随机后缀。
+- `maxSelect` 或 `maxFiles` 大于 1 时，file 字段保存字符串数组；否则保存单个字符串。
+- `PATCH` 支持用 `field+` 追加上传，用 `field-` 删除指定文件名。
+- file 字段支持 `maxSize` 和 `mimeTypes`，同时兼容 `options.maxSize` 和 `options.mimeTypes`。`maxSize` 按字节校验，`mimeTypes` 支持精确 MIME 和 `image/*` 这类通配。
+- file 字段设置 `"protected": true` 或 `options.protected=true` 后，文件访问需要 Bearer auth 或 `?token=<fileToken>` 满足记录 `viewRule`。
+- file 字段配置 `thumbs` 或 `options.thumbs` 后，`GET /api/files/...?...thumb=<size>` 会按配置生成并缓存 PNG 缩略图；未配置的 size 或非当前支持格式会返回原文件。
+- 支持 `download=1` 返回 `Content-Disposition: attachment`。
+- `POST /api/files/token` 要求已有 auth token，返回 2 分钟有效的短期 file token。file token 只用于 `/api/files/...?...token=`，不会被普通 API 当作 Bearer token 接受。
+
+Java:
+
+```java
+String token = client.files().getToken();
+```
+
+当前限制：
+
+- 当前缩略图生成只支持 8-bit truecolor PNG；JPEG/GIF/WebP 等格式会回退原文件。
+
+### 8.8 Backups
+
+```text
+GET    /api/backups
+POST   /api/backups
+POST   /api/backups/upload
+GET    /api/backups/{key}
+DELETE /api/backups/{key}
+POST   /api/backups/{key}/restore
+```
+
+所有 backup API 都要求 superuser token。
+
+创建备份：
+
+```bash
+curl -X POST http://127.0.0.1:8090/api/backups \
+  -H "Authorization: Bearer <superuser-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"manual.zip"}'
+```
+
+响应示例：
+
+```json
+{
+  "key": "manual.zip",
+  "name": "manual.zip",
+  "size": 1234,
+  "modified": "2026-06-14T03:30:00Z"
+}
+```
+
+当前实现：
+
+- 备份文件保存在 `pb_data/backups/{key}`。
+- zip 内容包含 schema、records 和 storage，不包含 `backups/` 目录和当前进程的 `pb_secret`。
+- 还原会清空当前数据目录中除 `backups/` 外的内容，解压指定备份，然后重新加载 schema/records。
+- 上传备份使用 `multipart/form-data`，任意文件字段名均可，服务端取第一个文件。
+- 解压时会校验 zip entry，拒绝绝对路径、反斜杠路径和目录穿越。
+
+当前限制：
+
+- 暂不支持 S3 等远端备份存储。
+- 暂不支持备份加密。
+- 当前进程会保留已有 `pb_secret`，避免还原后 HMAC token secret 与内存状态不一致。
+
+### 8.9 Realtime SSE
+
+```text
+GET  /api/realtime
+POST /api/realtime
+```
+
+`GET /api/realtime` 打开 SSE 长连接。服务端建立连接后会先发送 `PB_CONNECT` 事件：
+
+```text
+event: PB_CONNECT
+data: {"clientId":"<clientId>"}
+```
+
+客户端拿到 `clientId` 后，用 `POST /api/realtime` 设置订阅：
+
+```json
+{
+  "clientId": "<clientId>",
+  "subscriptions": [
+    "posts/*",
+    "posts/abc123",
+    "posts/*?filter=published%20%3D%20true"
+  ]
+}
+```
+
+也支持官方 query/form 风格提交，`subscriptions[]`、`subscriptions[0]` 和 multipart/form-data 字段都会被识别：
+
+```text
+POST /api/realtime?clientId=<clientId>&subscriptions[0]=posts/*&options={"query":{"filter":"published = true","expand":"author","fields":"id,title,expand.author.name"}}
+```
+
+订阅 topic 支持：
+
+- `{collection}/*`: 订阅集合下所有可见记录。
+- `{collection}/{recordId}`: 订阅单条记录。
+- `?filter=...`: 对本次订阅额外应用轻量表达式过滤。
+- `options.query.filter`: 官方格式的订阅过滤，会进入 `@request.query.*` 上下文并参与 access rule / filter 判断。
+- `options.query.expand`: 复用记录查询的 relation `expand` 逻辑，事件 payload 的 `record.expand` 会包含可见的关联记录。
+- `options.query.fields`: 复用记录查询的字段裁剪逻辑，事件 payload 的 `record` 只返回指定字段。
+
+记录 create/update/delete 后，服务端向匹配的订阅发送事件，事件名为订阅 topic，payload 结构如下：
+
+```json
+{
+  "action": "create",
+  "record": {
+    "id": "abc123",
+    "title": "Hello"
+  }
+}
+```
+
+权限行为：
+
+- superuser 订阅绕过 collection access rules。
+- 普通 auth/public 订阅会复用 access rules 过滤记录：`{collection}/*` 使用 `listRule`，`{collection}/{recordId}` 使用 `viewRule`。
+- 同一个 realtime `clientId` 的后续订阅请求必须使用和首次订阅一致的授权身份，否则返回 `403`。
+- `options.query` 会作为 `@request.query.*` 参与规则判断；`options.headers` 会解析并保留在订阅对象中，但当前规则引擎还不提供 `@request.headers.*`。
+- 非 superuser 收到的记录会隐藏 `hidden` 字段。
+
+当前限制：
+
+- 暂不支持官方 Realtime 的 auth refresh 事件。
+- 暂不支持 collection schema 事件。
+- 暂不支持 SDK 侧自动重连封装。
+
+### 8.10 Collection Access Rules
+
+集合字段：
+
+- `listRule`
+- `viewRule`
+- `createRule`
+- `updateRule`
+- `deleteRule`
+
+语义：
+
+- `null`: 仅 superuser 可访问。
+- `""`: 公开访问。
+- 非空表达式：作为记录过滤和访问判断。
+
+响应行为：
+
+- `listRule` 为 `null`: 非 superuser 返回 `403`。
+- `listRule` 表达式不匹配：列表中不返回该记录。
+- `createRule` 表达式不匹配：返回 `400`。
+- `viewRule` / `updateRule` / `deleteRule` 表达式不匹配：返回 `404`，避免暴露记录存在性。
+- superuser token 绕过 collection access rules。
+
+支持表达式：
+
+```text
+public = true || owner = @request.auth.id
+status != "archived" && score >= 10
+tags ?= "java"
+title ~ "pocket"
+@collection.news.categoryId ?= id
+```
+
+支持上下文：
+
+- 记录字段名，例如 `owner`、`public`、`status`。
+- `@request.auth.id`
+- `@request.auth.collectionId`
+- `@request.auth.collectionName`
+- `@request.auth.email`
+- `@request.body.<field>`
+- `@request.query.<param>`
+- `@request.method`
+- `@collection.<collection>.<field>` 聚合字段匹配，例如 `@collection.news.categoryId ?= id`
+
+当前限制：
+
+- `@collection.*` 当前按目标集合字段值聚合匹配，暂不支持官方 alias 的同一关联记录相关性约束。
+- 暂不支持官方完整 modifier/function 集合。
+- 暂不支持官方完整关系展开深层规则和 modifier 组合。
+
+### 8.11 Admin UI
+
+```text
+GET /_/
+```
+
+UI 源码位于 `UI/`，使用 React + Vite + TypeScript；执行 `cd UI && npm run build` 后，产物会写入 `src/main/resources/pocketbase-admin/`。构建 native image 时，`resource-config.json` 会把该目录资源打进二进制。
+
+当前 UI 覆盖：
+
+- superuser 初始化和登录。
+- collection 创建、schema/rules 编辑、删除。
+- record 列表、filter/sort/perPage 查询、JSON 编辑、删除。
+- file 字段上传和带 file token 的文件打开。
+- backup 创建、上传、下载、恢复和删除。

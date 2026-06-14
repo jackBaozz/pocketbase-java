@@ -1,0 +1,51 @@
+{
+  "collections" : [ {
+    "id" : "pbc_superusers",
+    "name" : "_superusers",
+    "type" : "auth",
+    "system" : true,
+    "created" : "2026-06-14T08:53:31.793460Z",
+    "updated" : "2026-06-14T08:53:31.793460Z",
+    "fields" : [ {
+      "id" : "field_email",
+      "name" : "email",
+      "type" : "email",
+      "required" : true,
+      "unique" : true,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    }, {
+      "id" : "field_password",
+      "name" : "password",
+      "type" : "password",
+      "required" : true,
+      "unique" : false,
+      "hidden" : true,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    }, {
+      "id" : "field_name",
+      "name" : "name",
+      "type" : "text",
+      "required" : false,
+      "unique" : false,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    }, {
+      "id" : "field_verified",
+      "name" : "verified",
+      "type" : "bool",
+      "required" : false,
+      "unique" : false,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    } ]
+  } ]
+}

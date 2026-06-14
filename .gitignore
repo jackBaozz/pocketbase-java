@@ -18,3 +18,9 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# ==================== Frontend ====================
+UI/node_modules/
+UI/.vite/
+UI/dist/
+UI/*.tsbuildinfo

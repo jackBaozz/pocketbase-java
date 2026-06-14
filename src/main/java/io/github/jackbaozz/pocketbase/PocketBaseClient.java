@@ -47,6 +47,10 @@ public final class PocketBaseClient {
         return new CollectionsService(this);
     }
 
+    public FilesService files() {
+        return new FilesService(this);
+    }
+
     public AuthStore authStore() {
         return authStore;
     }

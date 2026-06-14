@@ -19,11 +19,31 @@ public final class CollectionsService {
         return client.send("GET", client.apiPath("collections"), Map.of(), null, JsonNode.class);
     }
 
+    public JsonNode list(ListOptions options) {
+        return client.send(
+                "GET",
+                client.apiPath("collections"),
+                options == null ? Map.of() : options.toQuery(),
+                null,
+                JsonNode.class
+        );
+    }
+
     public JsonNode getOne(String idOrName) {
         return client.send(
                 "GET",
                 client.apiPath("collections", requireText(idOrName, "idOrName")),
                 Map.of(),
+                null,
+                JsonNode.class
+        );
+    }
+
+    public JsonNode getOne(String idOrName, ListOptions options) {
+        return client.send(
+                "GET",
+                client.apiPath("collections", requireText(idOrName, "idOrName")),
+                options == null ? Map.of() : options.toQuery(),
                 null,
                 JsonNode.class
         );
