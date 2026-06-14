@@ -56,6 +56,52 @@ type AuthMethodsResponse = {
   };
 };
 
+type SettingsSection = "application" | "storage" | "mail" | "backups";
+
+type ApplicationSettings = {
+  appName: string;
+  appUrl: string;
+  hideControls: boolean;
+  rateLimits: {
+    enabled: boolean;
+    requests: number;
+    intervalSeconds: number;
+  };
+};
+
+type StorageSettings = {
+  type: "local" | "s3";
+  localPath: string;
+  s3: {
+    enabled: boolean;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKey: string;
+    secretKey: string;
+    forcePathStyle: boolean;
+  };
+};
+
+type MailSettings = {
+  enabled: boolean;
+  fromAddress: string;
+  fromName: string;
+  smtp: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    tls: boolean;
+  };
+};
+
+type SettingsPayload = {
+  application: ApplicationSettings;
+  storage: StorageSettings;
+  mail: MailSettings;
+};
+
 type FieldSchema = {
   id?: string;
   name: string;
@@ -188,6 +234,43 @@ const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 const RULE_KEYS: RuleKey[] = ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"];
 const FIELD_TYPE_OPTIONS = ["text", "email", "password", "bool", "number", "select", "json", "relation", "file"];
+const DEFAULT_SETTINGS: SettingsPayload = {
+  application: {
+    appName: "pocketbase-java",
+    appUrl: "",
+    hideControls: false,
+    rateLimits: {
+      enabled: false,
+      requests: 60,
+      intervalSeconds: 60
+    }
+  },
+  storage: {
+    type: "local",
+    localPath: "pb_data/storage",
+    s3: {
+      enabled: false,
+      endpoint: "",
+      region: "",
+      bucket: "",
+      accessKey: "",
+      secretKey: "",
+      forcePathStyle: false
+    }
+  },
+  mail: {
+    enabled: false,
+    fromAddress: "",
+    fromName: "",
+    smtp: {
+      host: "",
+      port: 587,
+      username: "",
+      password: "",
+      tls: true
+    }
+  }
+};
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
@@ -206,6 +289,7 @@ function App() {
   });
   const [view, setView] = useState<ViewName>("dashboard");
   const [schemaSection, setSchemaSection] = useState<SchemaSection>("fields");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("application");
   const [collectionSearch, setCollectionSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -220,6 +304,9 @@ function App() {
   const [backupCount, setBackupCount] = useState<number | null>(null);
   const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
   const [authMethodsLoading, setAuthMethodsLoading] = useState(false);
+  const [settingsData, setSettingsData] = useState<SettingsPayload>(DEFAULT_SETTINGS);
+  const [settingsSupported, setSettingsSupported] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const backupUploadRef = useRef<HTMLInputElement>(null);
 
   const setupRequired = health ? !health.superuserReady : false;
@@ -364,6 +451,21 @@ function App() {
     }
   }, [token]);
 
+  const refreshSettings = useCallback(async () => {
+    if (!token) return;
+    setSettingsLoading(true);
+    try {
+      const data = await apiRequest<Partial<SettingsPayload>>("/api/settings", token);
+      setSettingsData(normalizeSettingsPayload(data));
+      setSettingsSupported(true);
+    } catch {
+      setSettingsData(DEFAULT_SETTINGS);
+      setSettingsSupported(false);
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, [token]);
+
   const refreshAll = useCallback(async () => {
     try {
       const status = await refreshHealth();
@@ -393,9 +495,12 @@ function App() {
 
   useEffect(() => {
     if (authenticated && view === "backups") {
-      refreshBackups().catch((error) => notify(errorMessage(error), "error"));
+      refreshSettings().catch((error) => notify(errorMessage(error), "error"));
+      if (settingsSection === "backups") {
+        refreshBackups().catch((error) => notify(errorMessage(error), "error"));
+      }
     }
-  }, [authenticated, notify, refreshBackups, view]);
+  }, [authenticated, notify, refreshBackups, refreshSettings, settingsSection, view]);
 
   useEffect(() => {
     if (!authenticated || view !== "schema" || !selected || selected.type !== "auth") {
@@ -485,6 +590,10 @@ function App() {
     setBackupCount(null);
     setAuthMethods(null);
     setAuthMethodsLoading(false);
+    setSettingsData(DEFAULT_SETTINGS);
+    setSettingsSupported(false);
+    setSettingsLoading(false);
+    setSettingsSection("application");
   }
 
   function openCollection(name: string, nextView: ViewName = "records") {
@@ -647,6 +756,26 @@ function App() {
     }
   }
 
+  async function saveSettingsSection(section: Exclude<SettingsSection, "backups">) {
+    if (!settingsSupported) {
+      notify("Settings API is not available in the current runtime.", "error");
+      return;
+    }
+    try {
+      const body =
+        section === "application"
+          ? settingsData.application
+          : section === "storage"
+            ? settingsData.storage
+            : settingsData.mail;
+      await api(`/api/settings/${section}`, { method: "PATCH", body });
+      notify(`${settingsSectionLabel(section)} saved`);
+      await refreshSettings();
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
   const columns = useMemo(() => recordColumns(selected), [selected]);
   const pageHeading = useMemo(() => {
     if (view === "dashboard") {
@@ -657,12 +786,11 @@ function App() {
       };
     }
     if (view === "backups") {
+      const meta = settingsSectionMeta(settingsSection, health?.canBackup ?? false, settingsSupported);
       return {
         eyebrow: "Settings",
-        title: "Backups",
-        subtitle: health?.canBackup
-          ? "Snapshot, restore and upload data archives"
-          : "Backup operations are unavailable in the current runtime"
+        title: meta.title,
+        subtitle: meta.subtitle
       };
     }
     return {
@@ -672,7 +800,7 @@ function App() {
         ? `${selected.fields?.length ?? 0} fields · ${collectionCounts[selected.name] ?? 0} records`
         : "Select a collection to inspect data and schema"
     };
-  }, [collectionCounts, collections.length, health?.canBackup, selected, view]);
+  }, [collectionCounts, collections.length, health?.canBackup, selected, settingsSection, settingsSupported, view]);
 
   return (
     <div className="app-shell">
@@ -748,11 +876,14 @@ function App() {
           </button>
           <button
             className={view === "backups" ? "active subtle" : "subtle"}
-            onClick={() => setView("backups")}
+            onClick={() => {
+              setSettingsSection("application");
+              setView("backups");
+            }}
             disabled={!authenticated}
           >
             <FileArchive size={16} />
-            Backups
+            Settings
           </button>
         </div>
       </aside>
@@ -765,7 +896,7 @@ function App() {
             <p className="page-copy">{pageHeading.subtitle}</p>
           </div>
           <div className="top-actions">
-            {authenticated && (
+            {authenticated && view !== "backups" && (
               <button className="primary" onClick={() => setCollectionEditor({ mode: "create" })}>
                 <Plus size={16} />
                 New collection
@@ -801,11 +932,25 @@ function App() {
             selected={selected}
             onOpenCollection={(name) => openCollection(name, "records")}
             onOpenSchema={(name) => openCollection(name, "schema")}
-            onOpenBackups={() => setView("backups")}
+            onOpenBackups={() => {
+              setSettingsSection("backups");
+              setView("backups");
+            }}
             onCreateCollection={() => setCollectionEditor({ mode: "create" })}
           />
         ) : view === "backups" ? (
-          <SettingsView canBackup={Boolean(health?.canBackup)}>
+          <SettingsView
+            canBackup={Boolean(health?.canBackup)}
+            section={settingsSection}
+            supported={settingsSupported}
+            loading={settingsLoading}
+            settings={settingsData}
+            onSection={setSettingsSection}
+            onApplicationChange={(application) => setSettingsData((current) => ({ ...current, application }))}
+            onStorageChange={(storage) => setSettingsData((current) => ({ ...current, storage }))}
+            onMailChange={(mail) => setSettingsData((current) => ({ ...current, mail }))}
+            onSave={saveSettingsSection}
+          >
             <BackupView
               backups={backups}
               backupName={backupName}
@@ -1003,7 +1148,7 @@ function DashboardView(props: DashboardViewProps) {
             </button>
             <button className="subtle" onClick={props.onOpenBackups}>
               <Archive size={16} />
-              Backups
+              Settings
             </button>
           </div>
         </div>
@@ -1113,12 +1258,26 @@ function DashboardView(props: DashboardViewProps) {
   );
 }
 
-function SettingsView({ canBackup, children }: { canBackup: boolean; children: ReactNode }) {
-  const items = [
-    { key: "application", label: "Application", active: false, disabled: true },
-    { key: "storage", label: "Storage", active: false, disabled: true },
-    { key: "mail", label: "Mail", active: false, disabled: true },
-    { key: "backups", label: "Backups", active: true, disabled: false }
+type SettingsViewProps = {
+  canBackup: boolean;
+  section: SettingsSection;
+  supported: boolean;
+  loading: boolean;
+  settings: SettingsPayload;
+  onSection: (section: SettingsSection) => void;
+  onApplicationChange: (application: ApplicationSettings) => void;
+  onStorageChange: (storage: StorageSettings) => void;
+  onMailChange: (mail: MailSettings) => void;
+  onSave: (section: Exclude<SettingsSection, "backups">) => void;
+  children: ReactNode;
+};
+
+function SettingsView(props: SettingsViewProps) {
+  const items: Array<{ key: SettingsSection; label: string }> = [
+    { key: "application", label: "Application" },
+    { key: "storage", label: "Storage" },
+    { key: "mail", label: "Mail" },
+    { key: "backups", label: "Backups" }
   ];
 
   return (
@@ -1135,21 +1294,343 @@ function SettingsView({ canBackup, children }: { canBackup: boolean; children: R
             <button
               key={item.key}
               type="button"
-              className={item.active ? "settings-nav-button active" : "settings-nav-button"}
-              disabled={item.disabled}
+              className={props.section === item.key ? "settings-nav-button active" : "settings-nav-button"}
+              onClick={() => props.onSection(item.key)}
+              disabled={item.key === "backups" ? !props.canBackup : false}
             >
               {item.label}
             </button>
           ))}
         </div>
         <div className="settings-note">
-          <p>{canBackup ? "Backups are wired into the embedded runtime." : "Backup endpoints are currently unavailable."}</p>
-          <p>Application, storage and mail settings are not exposed by the current Java runtime yet.</p>
+          <p>{props.canBackup ? "Backups are wired into the embedded runtime." : "Backup endpoints are currently unavailable."}</p>
+          <p>
+            {props.supported
+              ? "Application, storage and mail are backed by runtime settings endpoints."
+              : "Application, storage and mail are waiting for the runtime settings endpoints from the backend thread."}
+          </p>
         </div>
       </aside>
 
-      <div className="settings-content">{children}</div>
+      <div className="settings-content">
+        {props.section === "application" ? (
+          <ApplicationSettingsPane
+            loading={props.loading}
+            supported={props.supported}
+            value={props.settings.application}
+            onChange={props.onApplicationChange}
+            onSave={() => props.onSave("application")}
+          />
+        ) : props.section === "storage" ? (
+          <StorageSettingsPane
+            loading={props.loading}
+            supported={props.supported}
+            value={props.settings.storage}
+            onChange={props.onStorageChange}
+            onSave={() => props.onSave("storage")}
+          />
+        ) : props.section === "mail" ? (
+          <MailSettingsPane
+            loading={props.loading}
+            supported={props.supported}
+            value={props.settings.mail}
+            onChange={props.onMailChange}
+            onSave={() => props.onSave("mail")}
+          />
+        ) : (
+          props.children
+        )}
+      </div>
     </div>
+  );
+}
+
+type SettingsPaneProps = {
+  loading: boolean;
+  supported: boolean;
+  onSave: () => void;
+};
+
+function SettingsPaneNotice({ supported }: { supported: boolean }) {
+  return supported ? (
+    <p className="settings-inline-note">Changes are persisted through the runtime settings API.</p>
+  ) : (
+    <p className="settings-inline-note">
+      Runtime settings API is not available in this build yet. The form is ready for the backend thread to wire up.
+    </p>
+  );
+}
+
+function ApplicationSettingsPane(
+  props: SettingsPaneProps & {
+    value: ApplicationSettings;
+    onChange: (value: ApplicationSettings) => void;
+  }
+) {
+  const value = props.value;
+  return (
+    <section className="surface">
+      <div className="surface-toolbar compact-toolbar">
+        <div>
+          <p className="eyebrow">Application</p>
+          <h2>Instance configuration</h2>
+        </div>
+      </div>
+      <div className="settings-panel">
+        <div className="settings-form-grid">
+          <label>
+            App name
+            <input
+              value={value.appName}
+              onChange={(event) => props.onChange({ ...value, appName: event.target.value })}
+            />
+          </label>
+          <label>
+            App URL
+            <input
+              value={value.appUrl}
+              onChange={(event) => props.onChange({ ...value, appUrl: event.target.value })}
+              placeholder="https://example.com"
+            />
+          </label>
+        </div>
+        <div className="toggle-grid">
+          <ToggleField
+            label="Hide controls"
+            checked={value.hideControls}
+            onChange={(checked) => props.onChange({ ...value, hideControls: checked })}
+          />
+          <ToggleField
+            label="Rate limits enabled"
+            checked={value.rateLimits.enabled}
+            onChange={(checked) =>
+              props.onChange({ ...value, rateLimits: { ...value.rateLimits, enabled: checked } })
+            }
+          />
+        </div>
+        <div className="settings-form-grid">
+          <label>
+            Requests
+            <input
+              type="number"
+              value={value.rateLimits.requests}
+              onChange={(event) =>
+                props.onChange({
+                  ...value,
+                  rateLimits: { ...value.rateLimits, requests: Number(event.target.value || 0) }
+                })
+              }
+            />
+          </label>
+          <label>
+            Interval seconds
+            <input
+              type="number"
+              value={value.rateLimits.intervalSeconds}
+              onChange={(event) =>
+                props.onChange({
+                  ...value,
+                  rateLimits: { ...value.rateLimits, intervalSeconds: Number(event.target.value || 0) }
+                })
+              }
+            />
+          </label>
+        </div>
+        <SettingsPaneNotice supported={props.supported} />
+        <div className="modal-actions">
+          <button className="primary" type="button" onClick={props.onSave} disabled={!props.supported || props.loading}>
+            <Save size={16} />
+            Save application
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StorageSettingsPane(
+  props: SettingsPaneProps & {
+    value: StorageSettings;
+    onChange: (value: StorageSettings) => void;
+  }
+) {
+  const value = props.value;
+  return (
+    <section className="surface">
+      <div className="surface-toolbar compact-toolbar">
+        <div>
+          <p className="eyebrow">Storage</p>
+          <h2>File storage backend</h2>
+        </div>
+      </div>
+      <div className="settings-panel">
+        <div className="settings-form-grid">
+          <label>
+            Driver
+            <select
+              value={value.type}
+              onChange={(event) => props.onChange({ ...value, type: event.target.value as StorageSettings["type"] })}
+            >
+              <option value="local">local</option>
+              <option value="s3">s3</option>
+            </select>
+          </label>
+          <label>
+            Local path
+            <input
+              value={value.localPath}
+              onChange={(event) => props.onChange({ ...value, localPath: event.target.value })}
+            />
+          </label>
+        </div>
+        <div className="toggle-grid">
+          <ToggleField
+            label="S3 enabled"
+            checked={value.s3.enabled}
+            onChange={(checked) => props.onChange({ ...value, s3: { ...value.s3, enabled: checked } })}
+          />
+          <ToggleField
+            label="Force path style"
+            checked={value.s3.forcePathStyle}
+            onChange={(checked) => props.onChange({ ...value, s3: { ...value.s3, forcePathStyle: checked } })}
+          />
+        </div>
+        <div className="settings-form-grid">
+          <label>
+            Endpoint
+            <input
+              value={value.s3.endpoint}
+              onChange={(event) => props.onChange({ ...value, s3: { ...value.s3, endpoint: event.target.value } })}
+            />
+          </label>
+          <label>
+            Region
+            <input
+              value={value.s3.region}
+              onChange={(event) => props.onChange({ ...value, s3: { ...value.s3, region: event.target.value } })}
+            />
+          </label>
+          <label>
+            Bucket
+            <input
+              value={value.s3.bucket}
+              onChange={(event) => props.onChange({ ...value, s3: { ...value.s3, bucket: event.target.value } })}
+            />
+          </label>
+          <label>
+            Access key
+            <input
+              value={value.s3.accessKey}
+              onChange={(event) => props.onChange({ ...value, s3: { ...value.s3, accessKey: event.target.value } })}
+            />
+          </label>
+          <label>
+            Secret key
+            <input
+              type="password"
+              value={value.s3.secretKey}
+              onChange={(event) => props.onChange({ ...value, s3: { ...value.s3, secretKey: event.target.value } })}
+            />
+          </label>
+        </div>
+        <SettingsPaneNotice supported={props.supported} />
+        <div className="modal-actions">
+          <button className="primary" type="button" onClick={props.onSave} disabled={!props.supported || props.loading}>
+            <Save size={16} />
+            Save storage
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MailSettingsPane(
+  props: SettingsPaneProps & {
+    value: MailSettings;
+    onChange: (value: MailSettings) => void;
+  }
+) {
+  const value = props.value;
+  return (
+    <section className="surface">
+      <div className="surface-toolbar compact-toolbar">
+        <div>
+          <p className="eyebrow">Mail</p>
+          <h2>SMTP configuration</h2>
+        </div>
+      </div>
+      <div className="settings-panel">
+        <div className="toggle-grid">
+          <ToggleField
+            label="Mail enabled"
+            checked={value.enabled}
+            onChange={(checked) => props.onChange({ ...value, enabled: checked })}
+          />
+          <ToggleField
+            label="TLS"
+            checked={value.smtp.tls}
+            onChange={(checked) => props.onChange({ ...value, smtp: { ...value.smtp, tls: checked } })}
+          />
+        </div>
+        <div className="settings-form-grid">
+          <label>
+            From address
+            <input
+              type="email"
+              value={value.fromAddress}
+              onChange={(event) => props.onChange({ ...value, fromAddress: event.target.value })}
+            />
+          </label>
+          <label>
+            From name
+            <input
+              value={value.fromName}
+              onChange={(event) => props.onChange({ ...value, fromName: event.target.value })}
+            />
+          </label>
+          <label>
+            SMTP host
+            <input
+              value={value.smtp.host}
+              onChange={(event) => props.onChange({ ...value, smtp: { ...value.smtp, host: event.target.value } })}
+            />
+          </label>
+          <label>
+            Port
+            <input
+              type="number"
+              value={value.smtp.port}
+              onChange={(event) =>
+                props.onChange({ ...value, smtp: { ...value.smtp, port: Number(event.target.value || 0) } })
+              }
+            />
+          </label>
+          <label>
+            Username
+            <input
+              value={value.smtp.username}
+              onChange={(event) => props.onChange({ ...value, smtp: { ...value.smtp, username: event.target.value } })}
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={value.smtp.password}
+              onChange={(event) => props.onChange({ ...value, smtp: { ...value.smtp, password: event.target.value } })}
+            />
+          </label>
+        </div>
+        <SettingsPaneNotice supported={props.supported} />
+        <div className="modal-actions">
+          <button className="primary" type="button" onClick={props.onSave} disabled={!props.supported || props.loading}>
+            <Save size={16} />
+            Save mail
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -3271,6 +3752,117 @@ function collectionApiCards(collection: CollectionSchema) {
   }
 
   return cards;
+}
+
+function normalizeSettingsPayload(value: Partial<SettingsPayload> | null | undefined): SettingsPayload {
+  const safe = isPlainObject(value) ? (value as Record<string, unknown>) : {};
+  const application = isPlainObject(safe["application"]) ? (safe["application"] as Record<string, unknown>) : {};
+  const storage = isPlainObject(safe["storage"]) ? (safe["storage"] as Record<string, unknown>) : {};
+  const storageS3 = isPlainObject(storage["s3"]) ? (storage["s3"] as Record<string, unknown>) : {};
+  const mail = isPlainObject(safe["mail"]) ? (safe["mail"] as Record<string, unknown>) : {};
+  const smtp = isPlainObject(mail["smtp"]) ? (mail["smtp"] as Record<string, unknown>) : {};
+
+  return {
+    application: {
+      appName: textOrDefault(application["appName"], DEFAULT_SETTINGS.application.appName),
+      appUrl: textOrDefault(application["appUrl"], DEFAULT_SETTINGS.application.appUrl),
+      hideControls: boolOrDefault(application["hideControls"], DEFAULT_SETTINGS.application.hideControls),
+      rateLimits: {
+        enabled: boolOrDefault(
+          isPlainObject(application["rateLimits"])
+            ? (application["rateLimits"] as Record<string, unknown>)["enabled"]
+            : undefined,
+          DEFAULT_SETTINGS.application.rateLimits.enabled
+        ),
+        requests: numberOrDefault(
+          isPlainObject(application["rateLimits"])
+            ? (application["rateLimits"] as Record<string, unknown>)["requests"]
+            : undefined,
+          DEFAULT_SETTINGS.application.rateLimits.requests
+        ),
+        intervalSeconds: numberOrDefault(
+          isPlainObject(application["rateLimits"])
+            ? (application["rateLimits"] as Record<string, unknown>)["intervalSeconds"]
+            : undefined,
+          DEFAULT_SETTINGS.application.rateLimits.intervalSeconds
+        )
+      }
+    },
+    storage: {
+      type: textOrDefault(storage["type"], DEFAULT_SETTINGS.storage.type) === "s3" ? "s3" : "local",
+      localPath: textOrDefault(storage["localPath"], DEFAULT_SETTINGS.storage.localPath),
+      s3: {
+        enabled: boolOrDefault(storageS3["enabled"], DEFAULT_SETTINGS.storage.s3.enabled),
+        endpoint: textOrDefault(storageS3["endpoint"], DEFAULT_SETTINGS.storage.s3.endpoint),
+        region: textOrDefault(storageS3["region"], DEFAULT_SETTINGS.storage.s3.region),
+        bucket: textOrDefault(storageS3["bucket"], DEFAULT_SETTINGS.storage.s3.bucket),
+        accessKey: textOrDefault(storageS3["accessKey"], DEFAULT_SETTINGS.storage.s3.accessKey),
+        secretKey: textOrDefault(storageS3["secretKey"], DEFAULT_SETTINGS.storage.s3.secretKey),
+        forcePathStyle: boolOrDefault(storageS3["forcePathStyle"], DEFAULT_SETTINGS.storage.s3.forcePathStyle)
+      }
+    },
+    mail: {
+      enabled: boolOrDefault(mail["enabled"], DEFAULT_SETTINGS.mail.enabled),
+      fromAddress: textOrDefault(mail["fromAddress"], DEFAULT_SETTINGS.mail.fromAddress),
+      fromName: textOrDefault(mail["fromName"], DEFAULT_SETTINGS.mail.fromName),
+      smtp: {
+        host: textOrDefault(smtp["host"], DEFAULT_SETTINGS.mail.smtp.host),
+        port: numberOrDefault(smtp["port"], DEFAULT_SETTINGS.mail.smtp.port),
+        username: textOrDefault(smtp["username"], DEFAULT_SETTINGS.mail.smtp.username),
+        password: textOrDefault(smtp["password"], DEFAULT_SETTINGS.mail.smtp.password),
+        tls: boolOrDefault(smtp["tls"], DEFAULT_SETTINGS.mail.smtp.tls)
+      }
+    }
+  };
+}
+
+function settingsSectionMeta(section: SettingsSection, canBackup: boolean, supported: boolean) {
+  switch (section) {
+    case "application":
+      return {
+        title: "Application",
+        subtitle: supported
+          ? "Instance name, app URL and general runtime toggles"
+          : "Frontend workbench is ready; waiting for runtime application settings endpoint"
+      };
+    case "storage":
+      return {
+        title: "Storage",
+        subtitle: supported
+          ? "Local and S3-backed file storage configuration"
+          : "Frontend workbench is ready; waiting for runtime storage settings endpoint"
+      };
+    case "mail":
+      return {
+        title: "Mail",
+        subtitle: supported
+          ? "SMTP sender identity and transport settings"
+          : "Frontend workbench is ready; waiting for runtime mail settings endpoint"
+      };
+    case "backups":
+      return {
+        title: "Backups",
+        subtitle: canBackup
+          ? "Snapshot, restore and upload data archives"
+          : "Backup operations are unavailable in the current runtime"
+      };
+  }
+}
+
+function settingsSectionLabel(section: Exclude<SettingsSection, "backups">) {
+  return section.charAt(0).toUpperCase() + section.slice(1);
+}
+
+function textOrDefault(value: unknown, fallback: string) {
+  return typeof value === "string" ? value : fallback;
+}
+
+function numberOrDefault(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function boolOrDefault(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function authCards(
