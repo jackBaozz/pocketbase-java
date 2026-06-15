@@ -1,222 +1,217 @@
 # pocketbase-java
 
-PocketBase Java 实现。项目保留轻量级 PocketBase Java SDK，同时新增一个低依赖的 embedded server：使用 JDK `HttpServer` 提供 PocketBase 风格 API，内置 Admin UI，JSON 文件持久化，面向 GraalVM Native Image 约束设计。
+PocketBase Java implementation. This project contains a lightweight **PocketBase Java SDK** and a low-dependency **Embedded Server**: using JDK `HttpServer` to serve PocketBase-like APIs, featuring a built-in Admin UI, JSON file persistence, and designed for GraalVM Native Image constraints.
 
-> 当前服务端覆盖集合管理、collections import/truncate、collection meta scaffolds/OAuth2 provider metadata、记录 CRUD、JSON/multipart Batch API、relation `expand`、file 字段 multipart 上传与 `/api/files` 访问、MIME/大小校验、protected file token、基础图片缩略图、备份还原、Settings API、活动 Logs API、Crons API、受限 SQL API、Realtime SSE 记录订阅与官方 `subscriptions[]`/`options.query` 提交格式、collection access rules 常用子集、`@collection.*` 聚合字段匹配、auth collection 密码登录/OTP 登录/刷新/验证/密码重置/邮箱变更/impersonate、superuser bootstrap、Admin UI 和 native-image 元数据。它不是官方 Go PocketBase 的逐行移植；Realtime auth refresh/collection 事件、完整规则函数/复杂跨集合查询、SQLite 查询优化、OAuth2 登录回调等高级能力还需要继续补齐。
-
----
-
-## 核心特性
-
-- **低依赖**: HTTP 使用 `java.net.http.HttpClient`，运行时仅引入 Jackson 处理 JSON。
-- **标准 API 映射**: 覆盖 `/api/collections/{collection}/records`、`auth-with-password` 和集合管理接口。
-- **Embedded Server**: `io.github.jackbaozz.pocketbase.server.PocketBaseServer` 可直接启动本地 PocketBase 风格服务。
-- **内置 Admin UI**: `/_/` 提供 superuser 初始化、登录、集合/记录管理、file 字段上传、备份、Settings JSON 编辑和 Logs 查看；源码位于 `UI/`，构建产物嵌入 Java resources。
-- **本地持久化**: `pb_data/pb_schema.json` 保存集合结构，`pb_data/records/*.json` 保存记录数据，`pb_data/pb_settings.json` 和 `pb_data/logs.json` 保存设置与活动日志。
-- **文件字段**: 支持 `multipart/form-data` 上传，文件落到 `pb_data/storage/{collectionId}/{recordId}`，通过 `/api/files/{collection}/{record}/{filename}` 访问，并支持 MIME/大小校验、protected file token 和 `thumb` 图片缩略图。
-- **备份还原**: 支持 `pb_data/backups` 下的 zip 备份创建、上传、下载、删除和还原。
-- **Settings/Logs**: 支持 `GET/PATCH /api/settings`、`POST /api/settings/test/s3`、`POST /api/settings/test/email`、`POST /api/settings/apple/generate-client-secret`、`GET /api/logs`、`GET /api/logs/{id}` 和 `GET /api/logs/stats`；settings 响应按官方模型省略 `password`/`secret` 等敏感字段，logs stats 按小时返回官方日期桶。
-- **Crons API**: 支持 `GET /api/crons` 和 `POST /api/crons/{id}`，暴露官方内置 cron job 形状，并支持 `__pbAutoBackup__` 手动触发本地自动备份。
-- **SQL API**: 支持官方 `POST /api/sql` 返回结构，superuser-only；当前 JSON runtime 内置轻量 SQL 子集，覆盖 `SELECT`、`INSERT`、`UPDATE`、`DELETE`、`CREATE TABLE`、`DROP TABLE`，不引入 JDBC/ORM/ANTLR 等 native 负担依赖。
-- **Batch API**: 支持 `/api/batch` JSON 和 multipart record create/update/upsert/delete，子请求失败时回滚整批记录和 storage 文件变更。
-- **Realtime**: 支持 `/api/realtime` SSE 连接、记录级订阅、官方 `subscriptions[]`/`options.query` 参数格式、`filter`/`expand`/`fields` 订阅选项和 create/update/delete 推送，并复用 collection access rules 过滤可见记录。
-- **安全基础**: superuser/auth 账号使用 PBKDF2 哈希密码，登录和 auth refresh token 使用 HMAC-SHA256 签名。
-- **Auth 生命周期**: 支持 `request-otp`/`auth-with-otp`、request/confirm verification、request/confirm password reset、request/confirm email change 和 superuser impersonate；OTP 和 auth request 类邮件写入 `pb_data/auth_requests.json` outbox，settings test-email 可在启用 SMTP 时用内置 JDK SMTP 客户端发送。
-- **访问规则**: 支持 `listRule` / `viewRule` / `createRule` / `updateRule` / `deleteRule` 的 `null`、公开规则、常用表达式过滤和 `@collection.*` 聚合字段匹配。
-- **Relation 展开**: 支持记录查询里的 `expand`，按 relation 字段解析目标记录并复用目标集合 `viewRule`。
-- **认证状态管理**: `AuthStore` 自动保存登录 token，后续请求自动带 `Authorization: Bearer ...`。
-- **异常可诊断**: 非 2xx 响应抛出 `PocketBaseException`，保留状态码、URL、原始响应体和 PocketBase 错误结构。
-- **GraalVM 友好**: 不使用动态代理，核心模型使用 record/普通类，反射面由 Jackson 限定。
+<p align="center">
+    <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
+        <img src="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml/badge.svg" alt="CI Status" />
+    </a>
+    <a href="https://github.com/jackBaozz/pocketbase-java/releases" target="_blank" rel="noopener">
+        <img src="https://img.shields.io/github/v/release/jackBaozz/pocketbase-java?label=release" alt="Latest release" />
+    </a>
+</p>
 
 ---
 
-## 环境要求
+> [!WARNING]
+> Please keep in mind that `pocketbase-java` is still under active development, is not a line-by-line port of the official Golang PocketBase, and full backward compatibility is not guaranteed before reaching v1.0.0.
 
-| 类别 | 要求 |
+---
+
+## Key Features
+
+- **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The runtime only imports Jackson for JSON handling, keeping dependencies and footprints extremely small.
+- **Standard API Mapping**: Strictly aligns with `/api/collections/{collection}/records`, `auth-with-password`, and other official PocketBase REST API specifications.
+- **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on Spring/Tomcat.
+- **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, file uploads, backups, configuration editing, and activity logs. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
+- **Local Persistence**: Stores everything in structured JSON files: `pb_data/pb_schema.json` for collection schemas, `pb_data/records/*.json` for records, and `pb_data/pb_settings.json` and `pb_data/logs.json` for settings and activity logs.
+- **File Management & Thumbnails**: Supports `multipart/form-data` uploads. Files are stored under `pb_data/storage/{collectionId}/{recordId}` and are accessible via `/api/files/{collection}/{record}/{filename}`. Supports MIME/size checks, Protected File Token, and automatic image thumbnail generation.
+- **Backup & Restore**: Supports creating, uploading, downloading, deleting, and restoring zip backups under `pb_data/backups`.
+- **Security Basics**: Superuser and auth record passwords are hashed using PBKDF2. Auth token generation and verification are signed using HMAC-SHA256.
+- **Realtime (SSE)**: Supports `/api/realtime` Server-Sent Events (SSE) connections, record-level subscriptions, official `subscriptions[]`/`options.query` format, `filter`/`expand`/`fields` parameters, and enforces collection access rules for visible records.
+- **Batch API**: Supports batch record create/update/upsert/delete. Automatically rolls back all records and storage files if any sub-request fails.
+- **SQL API**: A superuser-only `POST /api/sql` endpoint. Contains a lightweight SQL parser subset and supports transactions, avoiding heavy dependencies like JDBC/ORM.
+- **GraalVM Friendly**: Avoids dynamic proxies. Core models use Java Record or plain classes. Reflection configuration is tightly limited by Jackson, facilitating GraalVM Native Image builds.
+
+---
+
+## Requirements
+
+| Category | Requirement |
 | --- | --- |
 | JDK | 17+ |
 | Maven | 3.9+ |
-| Node.js / npm | 20.19+ / 10+，仅修改或重建 Admin UI 时需要 |
-| GraalVM | 构建 native 二进制时需要 GraalVM JDK 17+ / 21+ |
-| PocketBase | SDK 可连接官方 PocketBase；embedded server 独立运行 |
+| Node.js / npm | 20.19+ / 10+ (only required if modifying/rebuilding the Admin UI) |
+| GraalVM | GraalVM JDK 17+ / 21+ (only required if building native binaries) |
 
-如果本机 Maven Central 访问不稳定，可以使用项目内置镜像配置：
-
+If access to the Maven Central repository is unstable in your network, you can use the built-in configuration mirroring file:
 ```bash
 mvn -gs settings.xml -s settings.xml test
 ```
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 启动 embedded server
+### 1. Run as Standalone App
 
+Compile the project and start the server:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
 java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
-打开：
+Once started, open:
+- **Admin UI**: http://127.0.0.1:8090/_/
+- **Health API**: http://127.0.0.1:8090/api/health
 
-- Admin UI: http://127.0.0.1:8090/_/
-- Health API: http://127.0.0.1:8090/api/health
-
-也可以通过环境变量创建首个 superuser：
-
+You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
 java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve
 ```
 
-### 构建 native 二进制
+### 2. Embed Programmatically in Java
 
-```bash
-mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
-./target/pocketbase-java serve --http 127.0.0.1:8090 --dir pb_data
+You can add `pocketbase-java` as a jar dependency to your Java application and start it programmatically:
+
+```java
+import io.github.jackbaozz.pocketbase.server.LocalPocketBase;
+import io.github.jackbaozz.pocketbase.server.ServerConfig;
+import java.nio.file.Path;
+
+public class App {
+    public static void main(String[] args) throws Exception {
+        // Use default configuration (127.0.0.1:8090, data dir pb_data)
+        ServerConfig config = ServerConfig.defaults();
+        
+        // Or customize the options
+        // ServerConfig config = new ServerConfig("127.0.0.1", 8090, Path.of("my_pb_data"), "admin@example.com", "password123");
+
+        try (LocalPocketBase server = LocalPocketBase.start(config)) {
+            System.out.println("pocketbase-java started on: " + server.baseUrl());
+            System.out.println("Admin Dashboard: " + server.baseUrl() + "/_/");
+            
+            // Block the current thread to keep the server running
+            Thread.currentThread().join();
+        }
+    }
+}
 ```
 
-### 安装到本地 Maven 仓库
+### 3. Use Java SDK Client
 
-```bash
-mvn -gs settings.xml -s settings.xml clean install
-```
-
-### 创建客户端
+`pocketbase-java` includes a built-in Java SDK client to interact with either this Java server or the official Go PocketBase server:
 
 ```java
 import io.github.jackbaozz.pocketbase.PocketBaseClient;
 import io.github.jackbaozz.pocketbase.RecordList;
+import io.github.jackbaozz.pocketbase.ListOptions;
+import java.util.Map;
 
+// 1. Initialize the client
 PocketBaseClient client = PocketBaseClient.builder("http://127.0.0.1:8090").build();
 
-RecordList posts = client.collection("posts").list();
-posts.items().forEach(item -> System.out.println(item.get("title").asText()));
-```
+// 2. Authenticate as record/user (bearer token auto-managed afterwards)
+client.collection("users").authWithPassword("demo@example.com", "password123");
 
-### 账号密码认证
-
-```java
-client.collection("users").authWithPassword("demo@example.com", "password");
-
-// authWithPassword 成功后，后续请求会自动带 Bearer token。
-client.collection("posts").create(Map.of(
-        "title", "Hello PocketBase",
-        "published", true
-));
-```
-
-### 记录查询
-
-```java
-RecordList page = client.collection("posts").list(ListOptions.builder()
+// 3. Query records with options (supports filter, sort, expand, etc.)
+RecordList posts = client.collection("posts").list(ListOptions.builder()
         .page(1)
         .perPage(20)
         .sort("-created")
         .filter("published = true")
         .expand("author")
         .build());
+
+posts.items().forEach(item -> System.out.println(item.get("title").asText()));
+
+// 4. Create a record
+client.collection("posts").create(Map.of(
+        "title", "Hello PocketBase from Java!",
+        "published", true
+));
 ```
 
----
+### 4. Build Native Binary (GraalVM)
 
-## 项目结构
-
-```text
-pocketbase-java/
-├── docs/
-│   ├── API设计.md
-│   └── 技术架构与开发规范.md
-├── UI/
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── src/
-├── src/
-│   ├── main/java/io/github/jackbaozz/pocketbase/
-│   │   ├── AuthResponse.java
-│   │   ├── PocketBaseClient.java
-│   │   └── ...
-│   ├── main/java/io/github/jackbaozz/pocketbase/server/
-│   │   ├── PocketBaseServer.java
-│   │   ├── LocalPocketBase.java
-│   │   ├── ServerConfig.java
-│   │   ├── internal/
-│   │   └── model/
-│   ├── main/resources/pocketbase-admin/   # UI build output
-│   ├── main/resources/META-INF/native-image/
-│   └── test/java/io/github/jackbaozz/pocketbase/
-│       ├── PocketBaseClientTest.java
-│       └── server/LocalPocketBaseServerTest.java
-├── .github/workflows/ci.yml
-├── pom.xml
-├── settings.xml
-├── CONTRIBUTING.md
-├── CHANGELOG.md
-└── LICENSE
-```
-
----
-
-## 常用命令
+You can compile the project to a single VM-free native executable using GraalVM:
 
 ```bash
-# 运行测试
+mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
+./target/pocketbase-java serve --http 127.0.0.1:8090 --dir pb_data
+```
+
+---
+
+## Development Commands
+
+```bash
+# Run unit tests
 mvn -gs settings.xml -s settings.xml test
 
-# 构建 Admin UI 到 src/main/resources/pocketbase-admin/
+# Build Admin UI and copy outputs to src/main/resources/pocketbase-admin/
 (cd UI && npm install && npm run build)
 
-# 打包 jar、all jar、sources jar、javadoc jar
-mvn -gs settings.xml -s settings.xml clean package
-
-# 构建 GraalVM native 二进制
-mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
-
-# 安装到本地 Maven 仓库
+# Install to the local Maven repository
 mvn -gs settings.xml -s settings.xml clean install
 ```
 
 ---
 
-## Embedded Server API 覆盖
+## Project Structure
 
-| 能力 | 路径 |
-| --- | --- |
-| 健康检查 | `GET /api/health` |
-| 首个 superuser | `POST /api/bootstrap/superuser` |
-| superuser 登录 | `POST /api/collections/_superusers/auth-with-password` |
-| 集合管理 | `GET/POST /api/collections`, `GET/PATCH/DELETE /api/collections/{idOrName}`, `PUT /api/collections/import`, `DELETE /api/collections/{idOrName}/truncate`, `GET /api/collections/meta/scaffolds`, `GET /api/collections/meta/oauth2-providers`，列表/单条支持 `filter`、`sort`、`fields` |
-| 记录 CRUD | `GET/POST /api/collections/{collection}/records`, `GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
-| Batch API | `POST /api/batch` |
-| 文件访问 | `GET /api/files/{collection}/{recordId}/{filename}` |
-| 文件 token | `POST /api/files/token` |
-| 备份还原 | `GET/POST /api/backups`, `POST /api/backups/upload`, `GET/DELETE /api/backups/{key}`, `POST /api/backups/{key}/restore` |
-| Settings | `GET/PATCH /api/settings`, `POST /api/settings/test/s3`, `POST /api/settings/test/email`, `POST /api/settings/apple/generate-client-secret` |
-| Logs | `GET /api/logs`, `GET /api/logs/{id}`, `GET /api/logs/stats` |
-| Crons | `GET /api/crons`, `POST /api/crons/{id}` |
-| SQL | `POST /api/sql` |
-| Realtime | `GET /api/realtime`, `POST /api/realtime` |
-| auth 方法 | `GET /api/collections/{collection}/auth-methods` |
-| auth 登录/刷新 | `POST /api/collections/{collection}/auth-with-password`, `POST /api/collections/{collection}/auth-with-otp`, `POST /api/collections/{collection}/auth-refresh` |
-| auth 生命周期 | `POST /api/collections/{collection}/request-otp`, `POST /api/collections/{collection}/request-password-reset`, `POST /api/collections/{collection}/confirm-password-reset`, `POST /api/collections/{collection}/request-verification`, `POST /api/collections/{collection}/confirm-verification`, `POST /api/collections/{collection}/request-email-change`, `POST /api/collections/{collection}/confirm-email-change`, `POST /api/collections/{collection}/impersonate/{id}` |
-
-规则语义：
-
-- `null`: 仅 superuser 可访问。
-- `""`: 公开访问。
-- 非空表达式：作为记录过滤和访问判断，支持 `&&`、`||`、括号、`=`、`!=`、`>`、`>=`、`<`、`<=`、`~`、`!~`、数组 any 操作符 `?=` 等，以及 `@request.auth.*`、`@request.body.*`、`@request.query.*`、`@request.method`。
+```text
+pocketbase-java/
+├── docs/                               # Documentation
+│   ├── API设计.md
+│   └── 技术架构与开发规范.md
+├── UI/                                 # Admin UI React + Vite codebase
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+├── src/
+│   ├── main/java/io/github/jackbaozz/pocketbase/           # Java SDK sources
+│   │   ├── AuthResponse.java
+│   │   ├── PocketBaseClient.java
+│   │   └── ...
+│   ├── main/java/io/github/jackbaozz/pocketbase/server/    # Embedded Server sources
+│   │   ├── PocketBaseServer.java
+│   │   ├── LocalPocketBase.java
+│   │   ├── ServerConfig.java
+│   │   ├── internal/
+│   │   └── model/
+│   ├── main/resources/pocketbase-admin/                    # Frontend UI build outputs
+│   └── test/java/io/github/jackbaozz/pocketbase/
+│       ├── PocketBaseClientTest.java
+│       └── server/LocalPocketBaseServerTest.java
+├── pom.xml
+└── settings.xml
+```
 
 ---
 
-## 文档
+## Embedded Server API Support
 
-- [技术架构与开发规范](docs/技术架构与开发规范.md)
-- [API 设计](docs/API设计.md)
-- [PocketBase 官方文档](https://pocketbase.io/docs/)
+| Domain | Supported API Endpoint & HTTP Methods |
+| --- | --- |
+| **System** | `GET /api/health` |
+| **Superusers** | `POST /api/bootstrap/superuser`<br>`POST /api/collections/_superusers/auth-with-password` |
+| **Collections** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers` |
+| **Records CRUD** | `GET/POST /api/collections/{collection}/records`<br>`GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
+| **Files** | `GET /api/files/{collection}/{recordId}/{filename}`<br>`POST /api/files/token` |
+| **Batch** | `POST /api/batch` |
+| **Realtime SSE** | `GET/POST /api/realtime` |
+| **Backups** | `GET/POST /api/backups`<br>`POST /api/backups/upload`<br>`GET/DELETE /api/backups/{key}`<br>`POST /api/backups/{key}/restore` |
+| **Settings** | `GET/PATCH /api/settings`<br>`POST /api/settings/test/s3`<br>`POST /api/settings/test/email`<br>`POST /api/settings/apple/generate-client-secret` |
+| **Logs** | `GET /api/logs`<br>`GET /api/logs/{id}`<br>`GET /api/logs/stats` |
+| **Crons** | `GET /api/crons`<br>`POST /api/crons/{id}` |
+| **SQL API** | `POST /api/sql` *(Superuser Only)* |
+| **Auth APIs** | `GET /api/collections/{collection}/auth-methods`<br>`POST /api/collections/{collection}/auth-with-password`<br>`POST /api/collections/{collection}/auth-with-otp`<br>`POST /api/collections/{collection}/auth-refresh`<br>`POST /api/collections/{collection}/request-otp`<br>`POST /api/collections/{collection}/request-password-reset`<br>`POST /api/collections/{collection}/confirm-password-reset`<br>`POST /api/collections/{collection}/request-verification`<br>`POST /api/collections/{collection}/confirm-verification`<br>`POST /api/collections/{collection}/request-email-change`<br>`POST /api/collections/{collection}/confirm-email-change`<br>`POST /api/collections/{collection}/impersonate/{id}` |
 
 ---
 
 ## License
 
-MIT License
+This project is licensed under the [MIT](LICENSE) License.
