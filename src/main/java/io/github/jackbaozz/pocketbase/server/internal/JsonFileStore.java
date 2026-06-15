@@ -85,6 +85,7 @@ public final class JsonFileStore {
     private final Path settingsFile;
     private final Path logsFile;
     private final Path authRequestsFile;
+    private final Path externalAuthsFile;
     private final Path otpsFile;
     private final Path recordsDir;
     private final Path storageDir;
@@ -97,6 +98,7 @@ public final class JsonFileStore {
     private final Map<String, Object> settings = new LinkedHashMap<>();
     private final List<Map<String, Object>> logs = new ArrayList<>();
     private final List<Map<String, Object>> authRequests = new ArrayList<>();
+    private final List<Map<String, Object>> externalAuths = new ArrayList<>();
     private final List<Map<String, Object>> otps = new ArrayList<>();
     private RealtimeHub realtimeHub;
 
@@ -106,6 +108,7 @@ public final class JsonFileStore {
         this.settingsFile = dataDir.resolve("pb_settings.json");
         this.logsFile = dataDir.resolve("logs.json");
         this.authRequestsFile = dataDir.resolve("auth_requests.json");
+        this.externalAuthsFile = dataDir.resolve("external_auths.json");
         this.otpsFile = dataDir.resolve("otps.json");
         this.recordsDir = dataDir.resolve("records");
         this.storageDir = dataDir.resolve("storage");
@@ -1821,8 +1824,36 @@ public final class JsonFileStore {
         password.put("enabled", collection.passwordAuth.enabled);
         password.put("identityFields", new ArrayList<>(collection.passwordAuth.identityFields));
         Map<String, Object> oauth2 = new LinkedHashMap<>();
-        oauth2.put("enabled", false);
-        oauth2.put("providers", List.of());
+        List<Map<String, Object>> oauthProviders = collection.oauth2.enabled
+                ? collection.oauth2.providers.stream()
+                .map(provider -> oauth2ProviderMetadata(provider.name))
+                .filter(Objects::nonNull)
+                .map(metadata -> {
+                    CollectionSchema.OAuth2ProviderConfig config = collection.oauth2.providers.stream()
+                            .filter(provider -> metadata.name().equalsIgnoreCase(provider.name))
+                            .findFirst()
+                            .orElse(null);
+                    if (config == null) {
+                        return null;
+                    }
+                    OAuth2Support.AuthMethodProviderInfo info = OAuth2Support.authMethodInfo(config, metadata.displayName(), metadata.logo());
+                    return orderedMap(
+                            "name", info.name(),
+                            "displayName", info.displayName(),
+                            "logo", info.logo(),
+                            "state", info.state(),
+                            "authURL", info.authURL(),
+                            "authUrl", info.authUrl(),
+                            "codeVerifier", info.codeVerifier(),
+                            "codeChallenge", info.codeChallenge(),
+                            "codeChallengeMethod", info.codeChallengeMethod()
+                    );
+                })
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(ArrayList::new))
+                : List.of();
+        oauth2.put("enabled", collection.oauth2.enabled && !oauthProviders.isEmpty());
+        oauth2.put("providers", oauthProviders);
         Map<String, Object> mfa = new LinkedHashMap<>();
         mfa.put("enabled", collection.mfa.enabled);
         mfa.put("duration", collection.mfa.enabled ? collection.mfa.duration : 0);
@@ -1834,10 +1865,105 @@ public final class JsonFileStore {
                 "oauth2", oauth2,
                 "mfa", mfa,
                 "otp", otp,
-                "authProviders", List.of(),
+                "authProviders", oauthProviders.stream()
+                        .map(provider -> orderedMap(
+                                "name", provider.get("name"),
+                                "displayName", provider.get("displayName"),
+                                "state", provider.get("state"),
+                                "authURL", provider.get("authURL"),
+                                "authUrl", provider.get("authUrl"),
+                                "codeVerifier", provider.get("codeVerifier"),
+                                "codeChallenge", provider.get("codeChallenge"),
+                                "codeChallengeMethod", provider.get("codeChallengeMethod")
+                        ))
+                        .collect(Collectors.toCollection(ArrayList::new)),
                 "usernamePassword", collection.passwordAuth.enabled && collection.passwordAuth.identityFields.contains("username"),
                 "emailPassword", collection.passwordAuth.enabled && collection.passwordAuth.identityFields.contains("email")
         );
+    }
+
+    public synchronized Map<String, Object> authWithOAuth2(
+            String collectionName,
+            JsonNode body,
+            Map<String, String> query,
+            RequestPrincipal principal
+    ) {
+        CollectionSchema collection = authCollection(collectionName);
+        if (!collection.oauth2.enabled) {
+            throw new ApiException(403, "The collection is not configured to allow OAuth2 authentication.");
+        }
+
+        String providerName = requiredText(body, "provider");
+        String code = requiredText(body, "code");
+        String redirectURL = requiredText(body, "redirectURL");
+        String codeVerifier = bodyText(body, "codeVerifier", "");
+        CollectionSchema.OAuth2ProviderConfig provider = collection.oauth2.providers.stream()
+                .filter(item -> providerName.equalsIgnoreCase(item.name))
+                .findFirst()
+                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", fieldError("provider", "Provider with name " + providerName + " is missing or is not enabled.")));
+
+        OAuth2Support.OAuth2User oauthUser = OAuth2Support.authenticate(mapper, provider, code, redirectURL, codeVerifier);
+        Map<String, Object> record = findOAuth2LinkedRecord(collection, providerName, oauthUser.providerId());
+        boolean isNew = false;
+
+        if (record == null && principal != null && sameCollection(principal, collection)) {
+            record = findRecordOrNull(collection, principal.id());
+        }
+        if (record == null && !oauthUser.email().isBlank()) {
+            record = findAuthRecordByEmail(collection, oauthUser.email());
+        }
+        if (record == null) {
+            ObjectNode payload = mapper.createObjectNode();
+            JsonNode createData = body.get("createData");
+            if (createData != null && createData.isObject()) {
+                payload.setAll((ObjectNode) createData);
+            }
+            if (!payload.hasNonNull("email") && !oauthUser.email().isBlank()) {
+                payload.put("email", oauthUser.email());
+            }
+            if (!payload.hasNonNull("verified")) {
+                payload.put("verified", !oauthUser.email().isBlank());
+            }
+            if (!payload.hasNonNull(passwordField(collection))) {
+                payload.put(passwordField(collection), IdGenerator.prefixed("oauth2_") + IdGenerator.id());
+            }
+            if (!payload.hasNonNull("name") && !oauthUser.name().isBlank() && collectionHasField(collection, "name")) {
+                payload.put("name", oauthUser.name());
+            }
+            if (!payload.hasNonNull("username") && !oauthUser.username().isBlank() && collectionHasField(collection, "username")) {
+                payload.put("username", oauthUser.username());
+            }
+            record = buildRecord(collection, payload, null);
+            records(collection).add(record);
+            saveRecords(collection);
+            publishRealtime(collection, "create", record);
+            isNew = true;
+        } else {
+            boolean changed = false;
+            if (!oauthUser.email().isBlank()
+                    && oauthUser.email().equalsIgnoreCase(String.valueOf(record.getOrDefault("email", "")))
+                    && !truthyObject(record.get("verified"))) {
+                record.put("verified", true);
+                changed = true;
+            }
+            if (collectionHasField(collection, "name") && textSetting(record.get("name")).isBlank() && !oauthUser.name().isBlank()) {
+                record.put("name", oauthUser.name());
+                changed = true;
+            }
+            if (collectionHasField(collection, "username") && textSetting(record.get("username")).isBlank() && !oauthUser.username().isBlank()) {
+                record.put("username", oauthUser.username());
+                changed = true;
+            }
+            if (changed) {
+                touch(record);
+                saveRecords(collection);
+            }
+        }
+
+        upsertExternalAuth(collection, record, providerName, oauthUser.providerId());
+        Map<String, Object> meta = new LinkedHashMap<>(oauthUser.raw());
+        meta.put("isNew", isNew);
+        return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
     }
 
     public synchronized Map<String, Object> requestOtp(String collectionName, JsonNode body) {
@@ -2135,7 +2261,7 @@ public final class JsonFileStore {
             Map<String, Object> record,
             Map<String, String> query
     ) {
-        return authResponse(collection, record, query, Duration.ofDays(7), "auth");
+        return authResponse(collection, record, query, Duration.ofDays(7), "auth", Map.of());
     }
 
     private Map<String, Object> authResponse(
@@ -2144,6 +2270,17 @@ public final class JsonFileStore {
             Map<String, String> query,
             Duration ttl,
             String tokenType
+    ) {
+        return authResponse(collection, record, query, ttl, tokenType, Map.of());
+    }
+
+    private Map<String, Object> authResponse(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            Map<String, String> query,
+            Duration ttl,
+            String tokenType,
+            Map<String, Object> meta
     ) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
         ensureAuthTokenKey(collection, record);
@@ -2162,7 +2299,7 @@ public final class JsonFileStore {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("token", tokenService.create(claims, ttl == null ? Duration.ofDays(7) : ttl));
         response.put("record", responseRecord(collection, record, false, recordQuery, authPrincipal));
-        response.put("meta", Map.of());
+        response.put("meta", meta == null ? Map.of() : meta);
         return selectFields(response, safeQuery.get("fields"));
     }
 
@@ -2298,6 +2435,44 @@ public final class JsonFileStore {
             return identity.equalsIgnoreCase(String.valueOf(value));
         }
         return identity.equals(String.valueOf(value));
+    }
+
+    private boolean collectionHasField(CollectionSchema collection, String fieldName) {
+        return collection.fields.stream().anyMatch(field -> fieldName.equals(field.name));
+    }
+
+    private Map<String, Object> findOAuth2LinkedRecord(CollectionSchema collection, String provider, String providerId) {
+        return externalAuths.stream()
+                .filter(item -> Objects.equals(collection.id, item.get("collectionId")))
+                .filter(item -> provider.equalsIgnoreCase(String.valueOf(item.get("provider"))))
+                .filter(item -> Objects.equals(providerId, item.get("providerId")))
+                .map(item -> findRecordOrNull(collection, String.valueOf(item.get("recordId"))))
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void upsertExternalAuth(CollectionSchema collection, Map<String, Object> record, String provider, String providerId) {
+        Map<String, Object> existing = externalAuths.stream()
+                .filter(item -> Objects.equals(collection.id, item.get("collectionId")))
+                .filter(item -> provider.equalsIgnoreCase(String.valueOf(item.get("provider"))))
+                .filter(item -> Objects.equals(providerId, item.get("providerId")))
+                .findFirst()
+                .orElse(null);
+        String timestamp = now();
+        if (existing == null) {
+            existing = new LinkedHashMap<>();
+            existing.put("id", IdGenerator.id());
+            existing.put("created", timestamp);
+            externalAuths.add(existing);
+        }
+        existing.put("collectionId", collection.id);
+        existing.put("collectionName", collection.name);
+        existing.put("recordId", record.get("id"));
+        existing.put("provider", provider);
+        existing.put("providerId", providerId);
+        existing.put("updated", timestamp);
+        saveExternalAuths();
     }
 
     private Map<String, Object> latestReusableOtp(CollectionSchema collection, Map<String, Object> record) {
@@ -2464,6 +2639,7 @@ public final class JsonFileStore {
         loadSettings();
         loadLogs();
         loadAuthRequests();
+        loadExternalAuths();
         loadOtps();
         if (Files.exists(schemaFile)) {
             JsonNode root = mapper.readTree(schemaFile.toFile());
@@ -2513,6 +2689,13 @@ public final class JsonFileStore {
             authRequests.addAll(mapper.readValue(authRequestsFile.toFile(), RECORD_LIST));
         }
         pruneAuthRequests();
+    }
+
+    private void loadExternalAuths() throws IOException {
+        externalAuths.clear();
+        if (Files.exists(externalAuthsFile)) {
+            externalAuths.addAll(mapper.readValue(externalAuthsFile.toFile(), RECORD_LIST));
+        }
     }
 
     private void loadOtps() throws IOException {
@@ -4022,6 +4205,16 @@ public final class JsonFileStore {
         );
     }
 
+    private OAuth2ProviderMetadata oauth2ProviderMetadata(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        return oauth2Providers().stream()
+                .filter(provider -> provider.name().equalsIgnoreCase(name))
+                .findFirst()
+                .orElse(null);
+    }
+
     private void ensureAuthFields(CollectionSchema collection) {
         boolean hasEmail = collection.fields.stream().anyMatch(field -> "email".equals(field.name));
         boolean hasPassword = collection.fields.stream().anyMatch(field -> "password".equals(field.name));
@@ -4067,6 +4260,42 @@ public final class JsonFileStore {
             collection.mfa = new CollectionSchema.MfaConfig();
         }
         collection.mfa.duration = Math.max(60L, collection.mfa.duration <= 0 ? 1800L : collection.mfa.duration);
+
+        if (collection.oauth2 == null) {
+            collection.oauth2 = new CollectionSchema.OAuth2Config();
+        }
+        if (collection.oauth2.providers == null) {
+            collection.oauth2.providers = new ArrayList<>();
+        } else {
+            LinkedHashSet<String> names = new LinkedHashSet<>();
+            List<CollectionSchema.OAuth2ProviderConfig> providers = new ArrayList<>();
+            for (CollectionSchema.OAuth2ProviderConfig provider : collection.oauth2.providers) {
+                if (provider == null || provider.name == null || provider.name.isBlank()) {
+                    continue;
+                }
+                OAuth2ProviderMetadata metadata = oauth2ProviderMetadata(provider.name);
+                if (metadata == null || !names.add(metadata.name())) {
+                    continue;
+                }
+                CollectionSchema.OAuth2ProviderConfig normalized = new CollectionSchema.OAuth2ProviderConfig();
+                normalized.name = metadata.name();
+                normalized.clientId = textSetting(provider.clientId);
+                normalized.clientSecret = textSetting(provider.clientSecret);
+                normalized.authURL = textSetting(provider.authURL);
+                normalized.tokenURL = textSetting(provider.tokenURL);
+                normalized.userInfoURL = textSetting(provider.userInfoURL);
+                normalized.pkce = provider.pkce;
+                normalized.scopes = provider.scopes == null
+                        ? new ArrayList<>()
+                        : provider.scopes.stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(scope -> !scope.isBlank())
+                        .collect(Collectors.toCollection(ArrayList::new));
+                providers.add(normalized);
+            }
+            collection.oauth2.providers = providers;
+        }
     }
 
     private void ensureSuperuserCollection() {
@@ -4369,6 +4598,7 @@ public final class JsonFileStore {
         saveSettings();
         saveLogs();
         saveAuthRequests();
+        saveExternalAuths();
         saveOtps();
         saveSchema();
         for (CollectionSchema collection : collectionsByName.values()) {
@@ -4400,6 +4630,15 @@ public final class JsonFileStore {
             mapper.writerWithDefaultPrettyPrinter().writeValue(authRequestsFile.toFile(), authRequests);
         } catch (IOException e) {
             throw new IllegalStateException("failed to save auth requests", e);
+        }
+    }
+
+    private void saveExternalAuths() {
+        try {
+            Files.createDirectories(dataDir);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(externalAuthsFile.toFile(), externalAuths);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to save external auths", e);
         }
     }
 

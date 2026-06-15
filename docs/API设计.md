@@ -251,6 +251,7 @@ try {
 | `collection(name).authWithPassword(identity, password)` | `POST /api/collections/{collection}/auth-with-password` |
 | `collection(name).requestOtp(email)` | `POST /api/collections/{collection}/request-otp` |
 | `collection(name).authWithOtp(otpId, password)` | `POST /api/collections/{collection}/auth-with-otp` |
+| `collection(name).authWithOAuth2(provider, code, redirectURL, codeVerifier, createData, query)` | `POST /api/collections/{collection}/auth-with-oauth2` |
 | `collection(name).authRefresh()` | `POST /api/collections/{collection}/auth-refresh` |
 | `collection(name).listAuthMethods()` | `GET /api/collections/{collection}/auth-methods` |
 | `files().getToken()` | `POST /api/files/token` |
@@ -365,6 +366,8 @@ POST /api/collections/{collection}/impersonate/{id}
 
 - `request-otp`: 请求体 `{"email":"user@example.com"}`。collection 开启 `otp.enabled=true` 时返回 `{"otpId":"..."}`；未配置 SMTP 时验证码会写入 `pb_data/auth_requests.json` outbox。
 - `auth-with-otp`: 请求体 `{"otpId":"...","password":"123456"}`。校验通过后返回标准 auth 响应，并在 `sentTo` 匹配当前 email 时把 record 标记为 `verified=true`；OTP 仅能使用一次。
+- `auth-methods`: 现在会反映 auth collection 的 `passwordAuth.identityFields`、`otp.duration`、`mfa.duration` 和已配置的 OAuth2 provider 列表；当 provider 配了 `clientId/authURL` 时，会返回可直接拼接 `redirect_uri` 的 `authURL`、`state`、`codeVerifier`、`codeChallenge`。
+- `auth-with-oauth2`: 请求体 `{"provider":"oidc","code":"...","redirectURL":"https://app.example/callback","codeVerifier":"..."}`。当前实现支持 generic OAuth2/OIDC provider：向 provider 的 `tokenURL` 做 code exchange，再从 `userInfoURL` 或 `id_token` 读取用户信息，按 providerId / email 复用或创建 auth record，并返回标准 auth 响应。
 - `request-password-reset`: 请求体 `{"email":"user@example.com"}`，存在对应 auth record 时生成 `passwordReset` token，响应 `204`。
 - `confirm-password-reset`: 请求体 `{"token":"...","password":"newsecret456","passwordConfirm":"newsecret456"}`，校验 token 后更新密码、标记 `verified=true`，并轮换 record tokenKey，使旧登录 token 失效。
 - `request-verification`: 请求体 `{"email":"user@example.com"}`，存在未验证 auth record 时生成 `verification` token，响应 `204`。
@@ -374,6 +377,8 @@ POST /api/collections/{collection}/impersonate/{id}
 - `impersonate/{id}`: 需要 superuser token，请求体可选 `{"duration":3600}`，返回目标 auth record 的短期 token；impersonate token 可访问接口，但不能调用 `auth-refresh`。
 
 由于当前 runtime 不引入 Jakarta Mail 等额外反射型邮件依赖，OTP 和 auth request 类接口会把待发送内容写入 `pb_data/auth_requests.json`。`/api/settings/test/email` 已提供纯 JDK SMTP 测试发送路径；当 SMTP 配置启用时，`request-otp` 会直接发送邮件。
+
+`GET/POST /api/oauth2-redirect` 现已提供一个轻量 callback 页面：会把 `{state,code,error}` 通过 `window.opener.postMessage(...)` 和 `sessionStorage` 回传给前端页面，然后自动关闭窗口。它不是官方 Go 版的 realtime subscription relay 实现，但足够支撑浏览器内的 OAuth2 流程。
 
 ### 8.4 集合管理
 
@@ -872,13 +877,22 @@ title ~ "pocket"
 - `@collection.*` 当前按目标集合字段值聚合匹配，暂不支持官方 alias 的同一关联记录相关性约束。
 - 暂不支持官方完整 modifier/function 集合。
 - 暂不支持官方完整关系展开深层规则和 modifier 组合。
-- OAuth2 当前仅覆盖 collection meta provider metadata，正式 OAuth2 登录和回调仍未实现。
+- OAuth2 当前覆盖 collection meta provider metadata、auth collection provider 配置持久化、`auth-methods` authURL/codeVerifier 生成、generic `auth-with-oauth2` code exchange，以及浏览器 callback 页。官方完整 provider 特化逻辑、ExternalAuth 复杂语义、头像文件下载和 MFA 叠加流程仍未实现。
 
 ### 8.12 Admin UI
 
 ```text
 GET /_/
 ```
+
+当前 Admin UI 已支持在 auth collection 编辑弹窗中配置：
+
+- password auth 开关和 `email` / `username` identity 字段
+- OTP 开关、有效期、验证码长度
+- MFA 开关和有效期
+- OAuth2 provider 多选
+
+Schema 页会读取 `GET /api/collections/{collection}/auth-methods` 并展示当前 auth 方法预览。
 
 UI 源码位于 `UI/`，使用 React + Vite + TypeScript；执行 `cd UI && npm run build` 后，产物会写入 `src/main/resources/pocketbase-admin/`。构建 native image 时，`resource-config.json` 会把该目录资源打进二进制。
 

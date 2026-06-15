@@ -71,6 +71,9 @@ public final class HttpApi implements HttpHandler {
                 if (response == NoContent.INSTANCE) {
                     status = 204;
                     sendNoContent(exchange);
+                } else if (response instanceof HtmlResponse html) {
+                    status = html.status();
+                    sendBytes(exchange, html.status(), html.body(), html.contentType());
                 } else {
                     status = 200;
                     sendJson(exchange, 200, response);
@@ -125,6 +128,10 @@ public final class HttpApi implements HttpHandler {
             RequestPrincipal principal = principal(exchange).orElse(null);
             requireSuperuser(principal);
             return store.runSql(readJson(exchange));
+        }
+        if (segments.size() == 2 && "oauth2-redirect".equals(segments.get(1))
+                && ("GET".equals(method) || "POST".equals(method))) {
+            return oauth2RedirectPage(exchange);
         }
         if (segments.size() >= 2 && "settings".equals(segments.get(1))) {
             RequestPrincipal principal = principal(exchange).orElse(null);
@@ -281,6 +288,9 @@ public final class HttpApi implements HttpHandler {
         }
         if (segments.size() == 4 && "auth-with-otp".equals(action) && "POST".equals(method)) {
             return store.authWithOtp(collection, readJson(exchange), query);
+        }
+        if (segments.size() == 4 && "auth-with-oauth2".equals(action) && "POST".equals(method)) {
+            return store.authWithOAuth2(collection, readJson(exchange), query, principal);
         }
         if (segments.size() == 4 && "auth-refresh".equals(action) && "POST".equals(method)) {
             return store.authRefresh(collection, principal, query);
@@ -699,6 +709,53 @@ public final class HttpApi implements HttpHandler {
         return value == null || value.isNull() ? "" : value.asText("");
     }
 
+    private HtmlResponse oauth2RedirectPage(HttpExchange exchange) throws IOException {
+        Map<String, String> values = "GET".equals(exchange.getRequestMethod())
+                ? query(exchange)
+                : formOrJsonValues(exchange);
+        String state = values.getOrDefault("state", "");
+        String code = values.getOrDefault("code", "");
+        String error = values.getOrDefault("error", "");
+        String payload = store.mapper().writeValueAsString(Map.of(
+                "source", "pocketbase-java-oauth2",
+                "state", state,
+                "code", code,
+                "error", error
+        ));
+        String message = error.isBlank() && !code.isBlank()
+                ? "OAuth2 authentication completed. You can close this window."
+                : "OAuth2 authentication failed. You can close this window.";
+        String html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>OAuth2 Redirect</title></head><body>"
+                + "<script>"
+                + "const payload=" + payload + ";"
+                + "try{window.opener&&window.opener.postMessage(payload, window.location.origin);}catch(e){}"
+                + "try{sessionStorage.setItem('pbj-oauth2-result', JSON.stringify(payload));}catch(e){}"
+                + "document.body.textContent=" + store.mapper().writeValueAsString(message) + ";"
+                + "setTimeout(()=>window.close(),300);"
+                + "</script></body></html>";
+        return new HtmlResponse(200, html.getBytes(StandardCharsets.UTF_8), "text/html; charset=utf-8");
+    }
+
+    private Map<String, String> formOrJsonValues(HttpExchange exchange) throws IOException {
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        try (InputStream input = exchange.getRequestBody()) {
+            byte[] bytes = input.readAllBytes();
+            if (bytes.length == 0) {
+                return Map.of();
+            }
+            if (isFormUrlEncoded(contentType)) {
+                return query(new String(bytes, StandardCharsets.UTF_8));
+            }
+            JsonNode body = store.mapper().readTree(bytes);
+            if (body == null || !body.isObject()) {
+                return Map.of();
+            }
+            Map<String, String> values = new LinkedHashMap<>();
+            body.fields().forEachRemaining(entry -> values.put(entry.getKey(), entry.getValue().asText("")));
+            return values;
+        }
+    }
+
     private RecordInput readRecordInput(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         try (InputStream input = exchange.getRequestBody()) {
@@ -827,6 +884,15 @@ public final class HttpApi implements HttpHandler {
 
     private void sendNoContent(HttpExchange exchange) throws IOException {
         exchange.sendResponseHeaders(204, -1);
+    }
+
+    private void sendBytes(HttpExchange exchange, int status, byte[] body, String contentType) throws IOException {
+        byte[] bytes = body == null ? new byte[0] : body;
+        exchange.getResponseHeaders().set("Content-Type", contentType);
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(bytes);
+        }
     }
 
     private void addCommonHeaders(HttpExchange exchange) {
@@ -995,6 +1061,9 @@ public final class HttpApi implements HttpHandler {
     }
 
     private record ServedFile(Path path, String contentType) {
+    }
+
+    private record HtmlResponse(int status, byte[] body, String contentType) {
     }
 
     private record BatchTarget(List<String> segments, Map<String, String> query) {

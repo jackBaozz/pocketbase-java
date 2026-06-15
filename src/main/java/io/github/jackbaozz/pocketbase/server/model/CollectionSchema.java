@@ -25,6 +25,7 @@ public class CollectionSchema {
     public PasswordAuthConfig passwordAuth = new PasswordAuthConfig();
     public OtpConfig otp = new OtpConfig();
     public MfaConfig mfa = new MfaConfig();
+    public OAuth2Config oauth2 = new OAuth2Config();
 
     @JsonAlias("schema")
     public List<FieldSchema> fields = new ArrayList<>();
@@ -49,5 +50,23 @@ public class CollectionSchema {
     public static class MfaConfig {
         public boolean enabled;
         public long duration = 1800;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OAuth2Config {
+        public boolean enabled;
+        public List<OAuth2ProviderConfig> providers = new ArrayList<>();
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class OAuth2ProviderConfig {
+        public String name;
+        public String clientId;
+        public String clientSecret;
+        public String authURL;
+        public String tokenURL;
+        public String userInfoURL;
+        public List<String> scopes = new ArrayList<>();
+        public boolean pkce = true;
     }
 }

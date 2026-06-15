@@ -198,6 +198,26 @@ class PocketBaseClientTest {
     }
 
     @Test
+    void oauth2EndpointBuildsOfficialRouteAndStoresBearerToken() {
+        AuthResponse response = client.collection("users").authWithOAuth2(
+                "oidc",
+                "code-123",
+                "https://example.com/callback",
+                "verifier-xyz",
+                Map.of("name", "Demo"),
+                RecordQuery.defaults()
+        );
+
+        assertEquals("jwt-token", response.token());
+        assertEquals("/api/collections/users/auth-with-oauth2", lastCollectionsPath);
+        assertTrue(lastCollectionsBody.contains("\"provider\":\"oidc\""));
+        assertTrue(lastCollectionsBody.contains("\"code\":\"code-123\""));
+        assertTrue(lastCollectionsBody.contains("\"redirectURL\":\"https://example.com/callback\""));
+        assertTrue(lastCollectionsBody.contains("\"codeVerifier\":\"verifier-xyz\""));
+        assertTrue(client.authStore().isValid());
+    }
+
+    @Test
     void authRefreshStoresNewBearerTokenForLaterRequests() {
         client.authStore().save("old-token", null);
 
@@ -377,6 +397,16 @@ class PocketBaseClientTest {
                       "token": "jwt-token",
                       "record": {"id": "user-id", "email": "demo@example.com"},
                       "meta": null
+                    }
+                    """);
+            return;
+        }
+        if (lastCollectionsPath.endsWith("/auth-with-oauth2")) {
+            sendJson(exchange, 200, """
+                    {
+                      "token": "jwt-token",
+                      "record": {"id": "user-id", "email": "demo@example.com"},
+                      "meta": {"isNew": true}
                     }
                     """);
             return;

@@ -681,6 +681,76 @@ td code {
   margin-top: 16px;
 }
 
+.auth-methods-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 16px;
+  grid-column: 1 / -1;
+  background: rgba(244, 247, 241, 0.9);
+}
+
+.auth-method-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 12px;
+}
+
+.auth-method-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.auth-method-card header span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.auth-method-card-wide {
+  grid-column: span 2;
+}
+
+.provider-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  background: #edf0ea;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.provider-chip-detailed {
+  align-items: flex-start;
+  flex-direction: column;
+  border-radius: 6px;
+  min-height: auto;
+  padding: 8px 10px;
+}
+
+.provider-chip-detailed span {
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .field-grid {
   display: grid;
   align-content: start;
@@ -783,6 +853,80 @@ td code {
   gap: 10px;
 }
 
+.auth-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.auth-config-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(251, 252, 248, 0.92);
+  padding: 14px;
+}
+
+.auth-config-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.auth-config-card-wide {
+  grid-column: 1 / -1;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+}
+
+.stacked-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.two-col.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 12px;
+}
+
+.oauth-provider-config-list {
+  display: grid;
+  gap: 12px;
+}
+
+.oauth-provider-config-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 12px;
+}
+
+.oauth-provider-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.oauth-pkce-toggle {
+  align-self: end;
+}
+
 .file-upload-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -852,6 +996,10 @@ td code {
     grid-template-columns: 1fr;
   }
 
+  .auth-methods-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .schema-summary,
   .field-grid {
     border-right: 0;
@@ -898,11 +1046,14 @@ td code {
   }
 
   .two-col,
+  .two-col.compact,
   .rules-grid,
   .query-grid,
   .query-grid.backup-controls,
   .query-grid.logs-controls,
-  .settings-summary {
+  .settings-summary,
+  .auth-config-grid,
+  .auth-methods-panel {
     grid-template-columns: 1fr;
   }
 

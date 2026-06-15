@@ -70,6 +70,38 @@ type FieldSchema = {
   options?: Record<string, unknown>;
 };
 
+type PasswordAuthConfig = {
+  enabled?: boolean;
+  identityFields?: string[];
+};
+
+type OtpConfig = {
+  enabled?: boolean;
+  duration?: number;
+  length?: number;
+};
+
+type MfaConfig = {
+  enabled?: boolean;
+  duration?: number;
+};
+
+type OAuth2ProviderConfig = {
+  name: string;
+  clientId?: string;
+  clientSecret?: string;
+  authURL?: string;
+  tokenURL?: string;
+  userInfoURL?: string;
+  scopes?: string[];
+  pkce?: boolean;
+};
+
+type OAuth2Config = {
+  enabled?: boolean;
+  providers?: OAuth2ProviderConfig[];
+};
+
 type CollectionSchema = {
   id: string;
   name: string;
@@ -81,8 +113,49 @@ type CollectionSchema = {
   createRule?: string | null;
   updateRule?: string | null;
   deleteRule?: string | null;
+  passwordAuth?: PasswordAuthConfig;
+  otp?: OtpConfig;
+  mfa?: MfaConfig;
+  oauth2?: OAuth2Config;
   created?: string;
   updated?: string;
+};
+
+type OAuthProviderMetadata = {
+  name: string;
+  displayName: string;
+  logo: string;
+};
+
+type AuthMethodProvider = OAuthProviderMetadata & {
+  state?: string;
+  authURL?: string;
+  authUrl?: string;
+  codeVerifier?: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: string;
+};
+
+type AuthMethodsResponse = {
+  password: {
+    enabled: boolean;
+    identityFields: string[];
+  };
+  oauth2: {
+    enabled: boolean;
+    providers: AuthMethodProvider[];
+  };
+  mfa: {
+    enabled: boolean;
+    duration: number;
+  };
+  otp: {
+    enabled: boolean;
+    duration: number;
+  };
+  authProviders?: AuthMethodProvider[];
+  usernamePassword?: boolean;
+  emailPassword?: boolean;
 };
 
 type RecordItem = Record<string, unknown> & {
@@ -96,6 +169,7 @@ type RecordItem = Record<string, unknown> & {
 type AuthResponse = {
   token: string;
   record: RecordItem;
+  meta?: Record<string, unknown>;
 };
 
 type BackupInfo = {
@@ -148,6 +222,11 @@ type ToastState = {
   message: string;
 };
 
+type OAuthResultState = {
+  provider: AuthMethodProvider;
+  response: AuthResponse;
+};
+
 type ApiOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
 };
@@ -181,6 +260,10 @@ function App() {
   const [logFilter, setLogFilter] = useState("");
   const [logStats, setLogStats] = useState<LogStat[]>([]);
   const [crons, setCrons] = useState<CronJob[]>([]);
+  const [oauthProviders, setOauthProviders] = useState<OAuthProviderMetadata[]>([]);
+  const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
+  const [oauthResult, setOauthResult] = useState<OAuthResultState | null>(null);
+  const [oauthTestingProvider, setOauthTestingProvider] = useState<string>("");
   const backupUploadRef = useRef<HTMLInputElement>(null);
 
   const setupRequired = health ? !health.superuserReady : false;
@@ -313,16 +396,40 @@ function App() {
     }
   }, [token]);
 
+  const refreshOauthProviders = useCallback(async () => {
+    if (!token) return;
+    const data = await apiRequest<OAuthProviderMetadata[]>("/api/collections/meta/oauth2-providers", token);
+    setOauthProviders(data);
+  }, [token]);
+
+  const refreshAuthMethods = useCallback(async (collectionName = selectedName) => {
+    if (!collectionName) {
+      setAuthMethods(null);
+      return;
+    }
+    const collection = collections.find((item) => item.name === collectionName);
+    if (!collection || collection.type !== "auth") {
+      setAuthMethods(null);
+      return;
+    }
+    const data = await apiRequest<AuthMethodsResponse>(
+      `/api/collections/${encodeURIComponent(collectionName)}/auth-methods`,
+      token
+    );
+    setAuthMethods(data);
+  }, [collections, selectedName, token]);
+
   const refreshAll = useCallback(async () => {
     try {
       const status = await refreshHealth();
       if (token && status.superuserReady) {
         await refreshCollections();
+        await refreshOauthProviders();
       }
     } catch (error) {
       notify(errorMessage(error), "error");
     }
-  }, [notify, refreshCollections, refreshHealth, token]);
+  }, [notify, refreshCollections, refreshHealth, refreshOauthProviders, token]);
 
   useEffect(() => {
     refreshAll();
@@ -358,6 +465,14 @@ function App() {
     }
   }, [authenticated, notify, refreshCrons, view]);
 
+  useEffect(() => {
+    if (authenticated && selectedName && view === "schema") {
+      refreshAuthMethods(selectedName).catch((error) => notify(errorMessage(error), "error"));
+      return;
+    }
+    setAuthMethods(null);
+  }, [authenticated, notify, refreshAuthMethods, selectedName, view]);
+
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = authEmail.trim();
@@ -390,6 +505,8 @@ function App() {
     const data = await apiRequest<ListResponse<CollectionSchema>>("/api/collections?perPage=500&sort=name", nextToken);
     setCollections(data.items);
     setSelectedName(data.items.find((collection) => collection.name !== "_superusers")?.name ?? data.items[0]?.name ?? "");
+    const providers = await apiRequest<OAuthProviderMetadata[]>("/api/collections/meta/oauth2-providers", nextToken);
+    setOauthProviders(providers);
   }
 
   function setAuthToken(nextToken: string) {
@@ -412,6 +529,9 @@ function App() {
     setLogs([]);
     setLogPage(null);
     setLogStats([]);
+    setAuthMethods(null);
+    setOauthResult(null);
+    setOauthTestingProvider("");
     setSelectedName("");
     setView("records");
   }
@@ -444,6 +564,51 @@ function App() {
       await refreshCollections();
     } catch (error) {
       notify(errorMessage(error), "error");
+    }
+  }
+
+  async function startOAuthTest(provider: AuthMethodProvider) {
+    if (!selected) return;
+    if (!provider.authURL || !provider.state) {
+      notify(`Provider ${provider.displayName || provider.name} is missing an auth URL`, "error");
+      return;
+    }
+    const redirectURL = `${window.location.origin}/api/oauth2-redirect`;
+    const popup = window.open(
+      provider.authURL + encodeURIComponent(redirectURL),
+      `pbj-oauth-${provider.name}`,
+      "popup,width=720,height=820"
+    );
+    if (!popup) {
+      notify("OAuth popup was blocked", "error");
+      return;
+    }
+
+    setOauthTestingProvider(provider.name);
+    try {
+      const payload = await waitForOAuthResult(provider.state, popup);
+      if (payload.error) throw new Error(payload.error);
+      if (!payload.code) throw new Error("OAuth2 redirect did not provide an authorization code.");
+      const response = await apiRequest<AuthResponse>(
+        `/api/collections/${encodeURIComponent(selected.name)}/auth-with-oauth2`,
+        "",
+        {
+          method: "POST",
+          body: {
+            provider: provider.name,
+            code: payload.code,
+            codeVerifier: provider.codeVerifier ?? "",
+            redirectURL
+          }
+        }
+      );
+      setOauthResult({ provider, response });
+      notify(`OAuth2 auth completed for ${provider.displayName || provider.name}`);
+      await refreshRecords(selected.name);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setOauthTestingProvider("");
     }
   }
 
@@ -788,8 +953,11 @@ function App() {
               ) : (
                 <SchemaView
                   collection={selected}
+                  authMethods={authMethods}
+                  oauthTestingProvider={oauthTestingProvider}
                   onEdit={() => setCollectionEditor({ mode: "edit", collection: selected })}
                   onDelete={() => deleteCollection(selected)}
+                  onOAuthTest={startOAuthTest}
                   onCopy={(value) => {
                     navigator.clipboard.writeText(value).then(
                       () => notify("Copied"),
@@ -808,6 +976,7 @@ function App() {
       {collectionEditor && (
         <CollectionModal
           state={collectionEditor}
+          oauthProviders={oauthProviders}
           onClose={() => setCollectionEditor(null)}
           onSubmit={(payload) => saveCollection(payload)}
         />
@@ -820,6 +989,10 @@ function App() {
           onClose={() => setRecordEditor(null)}
           onSubmit={saveRecord}
         />
+      )}
+
+      {oauthResult && (
+        <OAuthResultModal result={oauthResult} onClose={() => setOauthResult(null)} />
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.message}</div>}
@@ -1044,12 +1217,15 @@ function CellValue({ collection, column, record, onOpenFile }: CellValueProps) {
 
 type SchemaViewProps = {
   collection: CollectionSchema;
+  authMethods: AuthMethodsResponse | null;
+  oauthTestingProvider: string;
   onEdit: () => void;
   onDelete: () => void;
+  onOAuthTest: (provider: AuthMethodProvider) => void;
   onCopy: (value: string) => void;
 };
 
-function SchemaView({ collection, onEdit, onDelete, onCopy }: SchemaViewProps) {
+function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onDelete, onOAuthTest, onCopy }: SchemaViewProps) {
   const json = JSON.stringify(collection, null, 2);
   return (
     <section className="schema-layout">
@@ -1081,6 +1257,59 @@ function SchemaView({ collection, onEdit, onDelete, onCopy }: SchemaViewProps) {
           </button>
         </div>
       </div>
+
+      {collection.type === "auth" && authMethods && (
+        <div className="auth-methods-panel">
+          <article className="auth-method-card">
+            <header>
+              <strong>Password</strong>
+              <span>{authMethods.password.enabled ? "enabled" : "disabled"}</span>
+            </header>
+            <p>{authMethods.password.identityFields.join(", ") || "none"}</p>
+          </article>
+          <article className="auth-method-card">
+            <header>
+              <strong>OTP</strong>
+              <span>{authMethods.otp.enabled ? "enabled" : "disabled"}</span>
+            </header>
+            <p>{authMethods.otp.enabled ? `${authMethods.otp.duration}s window` : "No one-time passwords"}</p>
+          </article>
+          <article className="auth-method-card">
+            <header>
+              <strong>MFA</strong>
+              <span>{authMethods.mfa.enabled ? "enabled" : "disabled"}</span>
+            </header>
+            <p>{authMethods.mfa.enabled ? `${authMethods.mfa.duration}s challenge` : "No second factor"}</p>
+          </article>
+          <article className="auth-method-card auth-method-card-wide">
+            <header>
+              <strong>OAuth2</strong>
+              <span>{authMethods.oauth2.enabled ? "enabled" : "disabled"}</span>
+            </header>
+            {authMethods.oauth2.providers.length === 0 ? (
+              <p>No providers configured</p>
+            ) : (
+              <div className="provider-chip-list">
+                {authMethods.oauth2.providers.map((provider) => (
+                  <div className="provider-chip provider-chip-detailed" key={provider.name}>
+                    <div className="provider-chip-header">
+                      <strong>{provider.displayName || provider.name}</strong>
+                      <button
+                        className="subtle provider-test-button"
+                        onClick={() => onOAuthTest(provider)}
+                        disabled={!provider.authURL || oauthTestingProvider === provider.name}
+                      >
+                        {oauthTestingProvider === provider.name ? "Waiting..." : "Test"}
+                      </button>
+                    </div>
+                    <span>{provider.authURL ? "ready" : "missing credentials"}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </div>
+      )}
 
       <div className="field-grid">
         {(collection.fields ?? []).map((field) => (
@@ -1450,19 +1679,39 @@ type CollectionPayload = {
   createRule: string | null;
   updateRule: string | null;
   deleteRule: string | null;
+  passwordAuth?: PasswordAuthConfig;
+  otp?: OtpConfig;
+  mfa?: MfaConfig;
+  oauth2?: OAuth2Config;
 };
 
 type CollectionModalProps = {
   state: CollectionEditorState;
+  oauthProviders: OAuthProviderMetadata[];
   onClose: () => void;
   onSubmit: (payload: CollectionPayload) => void;
 };
 
-function CollectionModal({ state, onClose, onSubmit }: CollectionModalProps) {
+function CollectionModal({ state, oauthProviders, onClose, onSubmit }: CollectionModalProps) {
   const collection = state.collection;
   const [name, setName] = useState(collection?.name ?? "");
   const [type, setType] = useState(collection?.type ?? "base");
   const [fields, setFields] = useState(JSON.stringify(collection?.fields ?? DEFAULT_FIELDS, null, 2));
+  const [passwordEnabled, setPasswordEnabled] = useState(collection?.passwordAuth?.enabled ?? true);
+  const [identityFields, setIdentityFields] = useState<string[]>(collection?.passwordAuth?.identityFields ?? ["email"]);
+  const [otpEnabled, setOtpEnabled] = useState(collection?.otp?.enabled ?? false);
+  const [otpDuration, setOtpDuration] = useState(String(collection?.otp?.duration ?? 300));
+  const [otpLength, setOtpLength] = useState(String(collection?.otp?.length ?? 6));
+  const [mfaEnabled, setMfaEnabled] = useState(collection?.mfa?.enabled ?? false);
+  const [mfaDuration, setMfaDuration] = useState(String(collection?.mfa?.duration ?? 1800));
+  const [oauthEnabled, setOauthEnabled] = useState(collection?.oauth2?.enabled ?? false);
+  const [oauthProviderNames, setOauthProviderNames] = useState<string[]>(
+    collection?.oauth2?.providers?.map((provider) => provider.name) ?? []
+  );
+  const [oauthProviderConfigs, setOauthProviderConfigs] = useState<Record<string, OAuth2ProviderConfig>>(() => {
+    const entries = collection?.oauth2?.providers ?? [];
+    return Object.fromEntries(entries.map((provider) => [provider.name, provider]));
+  });
   const [rules, setRules] = useState({
     listRule: collection?.listRule ?? "",
     viewRule: collection?.viewRule ?? "",
@@ -1485,11 +1734,89 @@ function CollectionModal({ state, onClose, onSubmit }: CollectionModalProps) {
         viewRule: nullableRule(rules.viewRule),
         createRule: nullableRule(rules.createRule),
         updateRule: nullableRule(rules.updateRule),
-        deleteRule: nullableRule(rules.deleteRule)
+        deleteRule: nullableRule(rules.deleteRule),
+        ...(type === "auth"
+          ? {
+              passwordAuth: {
+                enabled: passwordEnabled,
+                identityFields
+              },
+              otp: {
+                enabled: otpEnabled,
+                duration: Number(otpDuration || 300),
+                length: Number(otpLength || 6)
+              },
+              mfa: {
+                enabled: mfaEnabled,
+                duration: Number(mfaDuration || 1800)
+              },
+              oauth2: {
+                enabled: oauthEnabled,
+                providers: oauthProviderNames.map((provider) => ({
+                  name: provider,
+                  clientId: oauthProviderConfigs[provider]?.clientId?.trim() ?? "",
+                  clientSecret: oauthProviderConfigs[provider]?.clientSecret?.trim() ?? "",
+                  authURL: oauthProviderConfigs[provider]?.authURL?.trim() ?? "",
+                  tokenURL: oauthProviderConfigs[provider]?.tokenURL?.trim() ?? "",
+                  userInfoURL: oauthProviderConfigs[provider]?.userInfoURL?.trim() ?? "",
+                  scopes: splitScopes(oauthProviderConfigs[provider]?.scopes),
+                  pkce: oauthProviderConfigs[provider]?.pkce ?? true
+                }))
+              }
+            }
+          : {})
       });
     } catch (err) {
       setError(errorMessage(err));
     }
+  }
+
+  function toggleIdentityField(field: string) {
+    setIdentityFields((current) => {
+      if (current.includes(field)) {
+        return current.filter((item) => item !== field);
+      }
+      return [...current, field];
+    });
+  }
+
+  function toggleOauthProvider(name: string) {
+    setOauthProviderNames((current) => {
+      if (current.includes(name)) {
+        return current.filter((item) => item !== name);
+      }
+      return [...current, name];
+    });
+    setOauthProviderConfigs((current) => ({
+      ...current,
+      [name]: current[name] ?? {
+        name,
+        clientId: "",
+        clientSecret: "",
+        authURL: "",
+        tokenURL: "",
+        userInfoURL: "",
+        scopes: [],
+        pkce: true
+      }
+    }));
+  }
+
+  function updateOauthProviderConfig(name: string, patch: Partial<OAuth2ProviderConfig>) {
+    setOauthProviderConfigs((current) => ({
+      ...current,
+      [name]: {
+        clientId: "",
+        clientSecret: "",
+        authURL: "",
+        tokenURL: "",
+        userInfoURL: "",
+        scopes: [],
+        pkce: true,
+        ...current[name],
+        ...patch
+      }
+    }));
   }
 
   return (
@@ -1517,6 +1844,189 @@ function CollectionModal({ state, onClose, onSubmit }: CollectionModalProps) {
           Fields JSON
           <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
         </label>
+        {type === "auth" && (
+          <section className="auth-config-grid">
+            <article className="auth-config-card">
+              <header>
+                <strong>Password auth</strong>
+              </header>
+              <label className="check-row">
+                <input type="checkbox" checked={passwordEnabled} onChange={(event) => setPasswordEnabled(event.target.checked)} />
+                Enabled
+              </label>
+              <div className="stacked-checks">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={identityFields.includes("email")}
+                    onChange={() => toggleIdentityField("email")}
+                  />
+                  Email identity
+                </label>
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={identityFields.includes("username")}
+                    onChange={() => toggleIdentityField("username")}
+                  />
+                  Username identity
+                </label>
+              </div>
+            </article>
+
+            <article className="auth-config-card">
+              <header>
+                <strong>OTP</strong>
+              </header>
+              <label className="check-row">
+                <input type="checkbox" checked={otpEnabled} onChange={(event) => setOtpEnabled(event.target.checked)} />
+                Enabled
+              </label>
+              <div className="two-col compact">
+                <label>
+                  Duration (s)
+                  <input
+                    type="number"
+                    min={60}
+                    value={otpDuration}
+                    onChange={(event) => setOtpDuration(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Length
+                  <input
+                    type="number"
+                    min={4}
+                    max={12}
+                    value={otpLength}
+                    onChange={(event) => setOtpLength(event.target.value)}
+                  />
+                </label>
+              </div>
+            </article>
+
+            <article className="auth-config-card">
+              <header>
+                <strong>MFA</strong>
+              </header>
+              <label className="check-row">
+                <input type="checkbox" checked={mfaEnabled} onChange={(event) => setMfaEnabled(event.target.checked)} />
+                Enabled
+              </label>
+              <label>
+                Duration (s)
+                <input
+                  type="number"
+                  min={60}
+                  value={mfaDuration}
+                  onChange={(event) => setMfaDuration(event.target.value)}
+                />
+              </label>
+            </article>
+
+            <article className="auth-config-card auth-config-card-wide">
+              <header>
+                <strong>OAuth2</strong>
+              </header>
+              <label className="check-row">
+                <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} />
+                Enabled
+              </label>
+              <div className="provider-option-grid">
+                {oauthProviders.map((provider) => (
+                  <label className="check-row" key={provider.name}>
+                    <input
+                      type="checkbox"
+                      checked={oauthProviderNames.includes(provider.name)}
+                      onChange={() => toggleOauthProvider(provider.name)}
+                    />
+                    {provider.displayName}
+                  </label>
+                ))}
+              </div>
+              {oauthProviderNames.length > 0 && (
+                <div className="oauth-provider-config-list">
+                  {oauthProviderNames.map((providerName) => {
+                    const config = oauthProviderConfigs[providerName] ?? {
+                      name: providerName,
+                      clientId: "",
+                      clientSecret: "",
+                      authURL: "",
+                      tokenURL: "",
+                      userInfoURL: "",
+                      scopes: [],
+                      pkce: true
+                    };
+                    return (
+                      <article className="oauth-provider-config-card" key={providerName}>
+                        <header>
+                          <strong>{oauthProviders.find((provider) => provider.name === providerName)?.displayName ?? providerName}</strong>
+                        </header>
+                        <div className="two-col oauth-provider-fields">
+                          <label>
+                            Client ID
+                            <input
+                              value={config.clientId ?? ""}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { clientId: event.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Client Secret
+                            <input
+                              value={config.clientSecret ?? ""}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { clientSecret: event.target.value })}
+                            />
+                          </label>
+                        </div>
+                        <div className="two-col oauth-provider-fields">
+                          <label>
+                            Auth URL
+                            <input
+                              value={config.authURL ?? ""}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { authURL: event.target.value })}
+                            />
+                          </label>
+                          <label>
+                            Token URL
+                            <input
+                              value={config.tokenURL ?? ""}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { tokenURL: event.target.value })}
+                            />
+                          </label>
+                        </div>
+                        <label>
+                          User Info URL
+                          <input
+                            value={config.userInfoURL ?? ""}
+                            onChange={(event) => updateOauthProviderConfig(providerName, { userInfoURL: event.target.value })}
+                          />
+                        </label>
+                        <div className="two-col oauth-provider-fields">
+                          <label>
+                            Scopes
+                            <input
+                              value={Array.isArray(config.scopes) ? config.scopes.join(", ") : ""}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { scopes: splitScopes(event.target.value) })}
+                              placeholder="openid, email, profile"
+                            />
+                          </label>
+                          <label className="check-row oauth-pkce-toggle">
+                            <input
+                              type="checkbox"
+                              checked={config.pkce ?? true}
+                              onChange={(event) => updateOauthProviderConfig(providerName, { pkce: event.target.checked })}
+                            />
+                            PKCE
+                          </label>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </article>
+          </section>
+        )}
         <div className="rules-grid">
           {(["listRule", "viewRule", "createRule", "updateRule", "deleteRule"] as const).map((key) => (
             <label key={key}>
@@ -1628,6 +2138,38 @@ function Modal({ title, onClose, wide, children }: ModalProps) {
   );
 }
 
+type OAuthResultModalProps = {
+  result: OAuthResultState;
+  onClose: () => void;
+};
+
+function OAuthResultModal({ result, onClose }: OAuthResultModalProps) {
+  return (
+    <Modal title={`OAuth2 Result: ${result.provider.displayName || result.provider.name}`} onClose={onClose} wide>
+      <div className="modal-grid">
+        <div className="summary-row compact">
+          <span>Token</span>
+          <code>{result.response.token}</code>
+        </div>
+        <label>
+          Record
+          <textarea value={JSON.stringify(result.response.record, null, 2)} readOnly spellCheck={false} />
+        </label>
+        <label>
+          Meta
+          <textarea value={JSON.stringify(result.response.meta ?? {}, null, 2)} readOnly spellCheck={false} />
+        </label>
+        <div className="modal-actions">
+          <button type="button" className="subtle" onClick={onClose}>
+            <X size={16} />
+            Close
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function StatusPill({ health, loading }: { health: HealthResponse["data"] | null; loading: boolean }) {
   return (
     <span className={loading ? "status busy" : health ? "status ready" : "status offline"}>
@@ -1735,6 +2277,71 @@ function maxFiles(field: FieldSchema) {
 function nullableRule(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function splitScopes(value: string | string[] | undefined) {
+  const items = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return items.map((item) => item.trim()).filter(Boolean);
+}
+
+function waitForOAuthResult(expectedState: string, popup: Window, timeoutMs = 120000) {
+  sessionStorage.removeItem("pbj-oauth2-result");
+  return new Promise<{ state: string; code: string; error: string }>((resolve, reject) => {
+    let settled = false;
+    let intervalId = 0;
+    let timeoutId = 0;
+
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      window.clearInterval(intervalId);
+      window.clearTimeout(timeoutId);
+    };
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    const handlePayload = (payload: unknown) => {
+      if (!isPlainObject(payload)) return;
+      if (payload.source !== "pocketbase-java-oauth2") return;
+      if (String(payload.state ?? "") !== expectedState) return;
+      finish(() =>
+        resolve({
+          state: String(payload.state ?? ""),
+          code: String(payload.code ?? ""),
+          error: String(payload.error ?? "")
+        })
+      );
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      handlePayload(event.data);
+    };
+
+    window.addEventListener("message", onMessage);
+    intervalId = window.setInterval(() => {
+      try {
+        const raw = sessionStorage.getItem("pbj-oauth2-result");
+        if (raw) {
+          sessionStorage.removeItem("pbj-oauth2-result");
+          handlePayload(JSON.parse(raw));
+          return;
+        }
+      } catch {
+        // ignore invalid storage payloads
+      }
+      if (popup.closed) {
+        finish(() => reject(new Error("OAuth2 popup was closed before authentication completed.")));
+      }
+    }, 250);
+    timeoutId = window.setTimeout(() => {
+      finish(() => reject(new Error("OAuth2 popup timed out.")));
+    }, timeoutMs);
+  });
 }
 
 function formatValue(value: unknown) {

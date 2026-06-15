@@ -42,6 +42,18 @@
     "allPublicMethods": true
   },
   {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OAuth2Config",
+    "allDeclaredConstructors": true,
+    "allPublicFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OAuth2ProviderConfig",
+    "allDeclaredConstructors": true,
+    "allPublicFields": true,
+    "allPublicMethods": true
+  },
+  {
     "name": "io.github.jackbaozz.pocketbase.server.model.FieldSchema",
     "allDeclaredConstructors": true,
     "allPublicFields": true,

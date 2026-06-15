@@ -137,6 +137,36 @@ public final class CollectionService {
         return response;
     }
 
+    public AuthResponse authWithOAuth2(
+            String provider,
+            String code,
+            String redirectURL,
+            String codeVerifier,
+            Map<String, ?> createData,
+            RecordQuery query
+    ) {
+        RecordQuery actualQuery = query == null ? RecordQuery.defaults() : query;
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("provider", requireText(provider, "provider"));
+        body.put("code", requireText(code, "code"));
+        body.put("redirectURL", requireText(redirectURL, "redirectURL"));
+        if (codeVerifier != null && !codeVerifier.isBlank()) {
+            body.put("codeVerifier", codeVerifier);
+        }
+        if (createData != null && !createData.isEmpty()) {
+            body.put("createData", createData);
+        }
+        AuthResponse response = client.send(
+                "POST",
+                client.apiPath("collections", collection, "auth-with-oauth2"),
+                actualQuery.toQuery(),
+                body,
+                AuthResponse.class
+        );
+        client.authStore().save(response);
+        return response;
+    }
+
     public AuthResponse authRefresh() {
         return authRefresh(RecordQuery.defaults());
     }

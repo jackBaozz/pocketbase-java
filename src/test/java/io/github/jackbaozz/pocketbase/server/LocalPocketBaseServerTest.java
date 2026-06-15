@@ -2,6 +2,7 @@ package io.github.jackbaozz.pocketbase.server;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import io.github.jackbaozz.pocketbase.AuthResponse;
 import io.github.jackbaozz.pocketbase.PocketBaseClient;
 import io.github.jackbaozz.pocketbase.PocketBaseException;
@@ -1024,6 +1025,120 @@ class LocalPocketBaseServerTest {
                 "otpId", lockedOtpId,
                 "password", "123456"
         )).statusCode());
+    }
+
+    @Test
+    void authMethodsReflectConfiguredPasswordOtpMfaAndOauth2() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "auth_config_users",
+                "type", "auth",
+                "passwordAuth", Map.of(
+                        "enabled", true,
+                        "identityFields", List.of("email", "username")
+                ),
+                "otp", Map.of(
+                        "enabled", true,
+                        "duration", 420,
+                        "length", 8
+                ),
+                "mfa", Map.of(
+                        "enabled", true,
+                        "duration", 900
+                ),
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(
+                                Map.of("name", "github"),
+                                Map.of("name", "google")
+                        )
+                )
+        ));
+
+        JsonNode methods = request("GET", "/api/collections/auth_config_users/auth-methods", null, null);
+        assertTrue(methods.get("password").get("enabled").asBoolean());
+        assertEquals(2, methods.get("password").get("identityFields").size());
+        assertTrue(methods.get("usernamePassword").asBoolean());
+        assertTrue(methods.get("emailPassword").asBoolean());
+        assertTrue(methods.get("otp").get("enabled").asBoolean());
+        assertEquals(420, methods.get("otp").get("duration").asInt());
+        assertTrue(methods.get("mfa").get("enabled").asBoolean());
+        assertEquals(900, methods.get("mfa").get("duration").asInt());
+        assertTrue(methods.get("oauth2").get("enabled").asBoolean());
+        assertEquals(2, methods.get("oauth2").get("providers").size());
+        assertEquals("github", methods.get("oauth2").get("providers").get(0).get("name").asText());
+        assertTrue(methods.get("oauth2").get("providers").get(0).has("displayName"));
+        assertTrue(methods.get("oauth2").get("providers").get(0).has("authURL"));
+        assertEquals(2, methods.get("authProviders").size());
+    }
+
+    @Test
+    void oauth2EndpointsExchangeCodeAndReuseLinkedAuthRecord() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        try (FakeOAuth2Server oauth = FakeOAuth2Server.start()) {
+            request("POST", "/api/collections", token, Map.of(
+                    "name", "oauth_users",
+                    "type", "auth",
+                    "createRule", "",
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "providers", List.of(
+                                    Map.of(
+                                            "name", "oidc",
+                                            "clientId", "client-123",
+                                            "clientSecret", "secret-456",
+                                            "authURL", oauth.baseUrl() + "/authorize",
+                                            "tokenURL", oauth.baseUrl() + "/token",
+                                            "userInfoURL", oauth.baseUrl() + "/userinfo",
+                                            "scopes", List.of("openid", "email", "profile"),
+                                            "pkce", true
+                                    )
+                            )
+                    )
+            ));
+
+            JsonNode methods = request("GET", "/api/collections/oauth_users/auth-methods", null, null);
+            JsonNode provider = methods.get("oauth2").get("providers").get(0);
+            assertEquals("oidc", provider.get("name").asText());
+            assertTrue(provider.get("authURL").asText().contains("client_id=client-123"));
+            assertTrue(provider.get("authURL").asText().contains("scope=openid%20email%20profile"));
+            assertTrue(provider.get("codeVerifier").asText().length() >= 10);
+
+            JsonNode firstAuth = request("POST", "/api/collections/oauth_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "first-code",
+                    "codeVerifier", provider.get("codeVerifier").asText(),
+                    "redirectURL", "http://127.0.0.1/callback",
+                    "createData", Map.of("name", "OIDC User")
+            ));
+            String recordId = firstAuth.get("record").get("id").asText();
+            assertEquals("oidc@example.com", firstAuth.get("record").get("email").asText());
+            assertTrue(firstAuth.get("record").get("verified").asBoolean());
+            assertTrue(firstAuth.get("meta").get("isNew").asBoolean());
+            assertEquals("oidc-user", firstAuth.get("meta").get("preferred_username").asText());
+            assertTrue(oauth.lastTokenBody().contains("code=first-code"));
+            assertTrue(oauth.lastTokenBody().contains("code_verifier="));
+
+            JsonNode secondAuth = request("POST", "/api/collections/oauth_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "second-code",
+                    "codeVerifier", provider.get("codeVerifier").asText(),
+                    "redirectURL", "http://127.0.0.1/callback"
+            ));
+            assertEquals(recordId, secondAuth.get("record").get("id").asText());
+            assertFalse(secondAuth.get("meta").get("isNew").asBoolean());
+        }
+
+        HttpResponse<String> redirect = rawRequest("GET", "/api/oauth2-redirect?state=test-state&code=abc123", null, null);
+        assertEquals(200, redirect.statusCode());
+        assertTrue(redirect.body().contains("postMessage"));
+        assertTrue(redirect.body().contains("pocketbase-java-oauth2"));
     }
 
     @Test
@@ -2170,6 +2285,60 @@ class LocalPocketBaseServerTest {
         public void close() throws IOException {
             serverSocket.close();
             executor.shutdownNow();
+        }
+    }
+
+    private static final class FakeOAuth2Server implements AutoCloseable {
+        private final HttpServer server;
+        private final AtomicReference<String> lastTokenBody = new AtomicReference<>("");
+
+        private FakeOAuth2Server(HttpServer server) {
+            this.server = server;
+        }
+
+        static FakeOAuth2Server start() throws IOException {
+            HttpServer server = HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            FakeOAuth2Server fake = new FakeOAuth2Server(server);
+            server.createContext("/token", exchange -> {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                fake.lastTokenBody.set(body);
+                byte[] bytes = """
+                        {"access_token":"token-123","token_type":"Bearer"}
+                        """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            server.createContext("/userinfo", exchange -> {
+                byte[] bytes = """
+                        {
+                          "sub":"oauth-sub-123",
+                          "email":"oidc@example.com",
+                          "name":"OIDC User",
+                          "preferred_username":"oidc-user"
+                        }
+                        """.getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            server.start();
+            return fake;
+        }
+
+        String baseUrl() {
+            return "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        String lastTokenBody() {
+            return lastTokenBody.get();
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
         }
     }
 
