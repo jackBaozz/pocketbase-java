@@ -235,22 +235,20 @@ Use this checklist as the project board seed.
 Every feature should pass the relevant subset of these commands before commit:
 
 ```bash
-/Users/bao/work/apache-maven-3.9.12/bin/mvn -gs settings.xml -s settings.xml test
+mvn test
 ```
 
 ```bash
-/Users/bao/work/apache-maven-3.9.12/bin/mvn -gs settings.xml -s settings.xml package
+mvn package
 ```
 
 ```bash
 cd UI
-/Users/bao/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node /tmp/pbj-npm-bootstrap/package/bin/npm-cli.js run build
+npm run build
 ```
 
 ```bash
-JAVA_HOME=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home \
-PATH=/Library/Java/JavaVirtualMachines/graalvm-25.jdk/Contents/Home/bin:$PATH \
-/Users/bao/work/apache-maven-3.9.12/bin/mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
+JAVA_HOME=<graalvm-home> PATH=<graalvm-home>/bin:$PATH mvn -Pnative -DskipTests package
 ```
 
 For UI work, also run a browser smoke against the embedded Admin UI and verify the changed page is visible and usable.
