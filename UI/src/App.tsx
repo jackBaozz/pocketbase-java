@@ -974,7 +974,7 @@ function App() {
     [allColumns, hiddenColumns]
   );
   const pageMeta = viewMeta(view, selected);
-  const showWorkspaceTopbar = !authenticated || (!collectionView && view !== "logs");
+  const showWorkspaceTopbar = !authenticated || (!collectionView && !settingsView && view !== "logs");
 
   return (
     <div className="app-shell">
@@ -1335,17 +1335,11 @@ function CollectionSidebar(props: CollectionSidebarProps) {
   const pinnedSet = new Set(pinned.map((collection) => collection.name));
   const regular = props.collections.filter((collection) => !pinnedSet.has(collection.name) && !isSystemCollection(collection));
   const system = props.collections.filter((collection) => !pinnedSet.has(collection.name) && isSystemCollection(collection));
+  const noMatches = props.search.trim().length > 0 && props.collections.length === 0;
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-topline">
-        <div className="sidebar-section-title">Collections</div>
-        <button className="icon-button tiny" onClick={props.onCreate} title="New collection" aria-label="New collection">
-          <Plus size={15} />
-        </button>
-      </div>
-
-      <div className="search-box">
+    <aside className="sidebar collections-sidebar">
+      <div className="search-box sidebar-search">
         <Search size={15} />
         <input
           id="collection-search"
@@ -1353,40 +1347,59 @@ function CollectionSidebar(props: CollectionSidebarProps) {
           autoComplete="off"
           value={props.search}
           onChange={(event) => props.onSearch(event.target.value)}
-          placeholder="Search collections"
+          placeholder="Search collections..."
         />
+        {props.search && (
+          <button className="icon-button tiny" onClick={() => props.onSearch("")} title="Clear search" aria-label="Clear search">
+            <X size={14} />
+          </button>
+        )}
       </div>
 
-      <CollectionGroup
-        title="Pinned"
-        collections={pinned}
-        currentName={props.currentName}
-        pinnedNames={props.pinnedNames}
-        onSelect={props.onSelect}
-        onTogglePinned={props.onTogglePinned}
-        empty="Pin frequently used collections"
-      />
-      <CollectionGroup
-        title="Collections"
-        collections={regular}
-        currentName={props.currentName}
-        pinnedNames={props.pinnedNames}
-        onSelect={props.onSelect}
-        onTogglePinned={props.onTogglePinned}
-        empty="No collections"
-      />
-      <CollectionGroup
-        title="System"
-        collections={system}
-        currentName={props.currentName}
-        pinnedNames={props.pinnedNames}
-        onSelect={props.onSelect}
-        onTogglePinned={props.onTogglePinned}
-        empty="No system collections"
-      />
+      {noMatches ? (
+        <div className="sidebar-no-results">
+          <p>No collections found.</p>
+          <button className="subtle" onClick={() => props.onSearch("")}>
+            Clear search
+          </button>
+        </div>
+      ) : (
+        <nav className={(pinned.length + regular.length > 12 ? "collection-nav compact" : "collection-nav")} aria-label="Collections">
+          {pinned.length > 0 && (
+            <CollectionGroup
+              title="Pinned"
+              collections={pinned}
+              currentName={props.currentName}
+              pinnedNames={props.pinnedNames}
+              onSelect={props.onSelect}
+              onTogglePinned={props.onTogglePinned}
+            />
+          )}
+          {regular.length > 0 && (
+            <CollectionGroup
+              title={pinned.length > 0 ? "Others" : "Collections"}
+              collections={regular}
+              currentName={props.currentName}
+              pinnedNames={props.pinnedNames}
+              onSelect={props.onSelect}
+              onTogglePinned={props.onTogglePinned}
+            />
+          )}
+          {system.length > 0 && (
+            <CollectionGroup
+              title="System"
+              collections={system}
+              currentName={props.currentName}
+              pinnedNames={props.pinnedNames}
+              onSelect={props.onSelect}
+              onTogglePinned={props.onTogglePinned}
+            />
+          )}
+        </nav>
+      )}
 
       <div className="sidebar-actions">
-        <button className="primary" onClick={props.onCreate}>
+        <button className="subtle outline-button" onClick={props.onCreate}>
           <Plus size={16} />
           New collection
         </button>
@@ -1400,7 +1413,6 @@ type CollectionGroupProps = {
   collections: CollectionSchema[];
   currentName: string;
   pinnedNames: string[];
-  empty: string;
   onSelect: (collection: CollectionSchema) => void;
   onTogglePinned: (collection: CollectionSchema) => void;
 };
@@ -1409,36 +1421,29 @@ function CollectionGroup(props: CollectionGroupProps) {
   return (
     <section className="sidebar-group">
       <div className="sidebar-section-title">{props.title}</div>
-      <nav className="collection-nav" aria-label={props.title}>
-        {props.collections.length === 0 ? (
-          <p className="sidebar-empty">{props.empty}</p>
-        ) : (
-          props.collections.map((collection) => {
-            const pinned = props.pinnedNames.includes(collection.name);
-            return (
-              <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
-                <button className="collection-nav-main" onClick={() => props.onSelect(collection)}>
-                  <span className="nav-icon">
-                    {collection.type === "auth" ? <Shield size={16} /> : <Database size={16} />}
-                  </span>
-                  <span className="nav-text">
-                    <strong>{collection.name}</strong>
-                    <small>{collection.type}</small>
-                  </span>
-                </button>
-                <button
-                  className="icon-button pin-button"
-                  onClick={() => props.onTogglePinned(collection)}
-                  title={pinned ? "Unpin collection" : "Pin collection"}
-                  aria-label={pinned ? "Unpin collection" : "Pin collection"}
-                >
-                  {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-                </button>
-              </div>
-            );
-          })
-        )}
-      </nav>
+      {props.collections.map((collection) => {
+        const pinned = props.pinnedNames.includes(collection.name);
+        return (
+          <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
+            <button className="collection-nav-main" onClick={() => props.onSelect(collection)} title={collection.name}>
+              <span className="nav-icon">
+                {collection.type === "auth" ? <Shield size={16} /> : <Database size={16} />}
+              </span>
+              <span className="nav-text">
+                <strong>{collection.name}</strong>
+              </span>
+            </button>
+            <button
+              className="icon-button pin-button"
+              onClick={() => props.onTogglePinned(collection)}
+              title={pinned ? "Unpin collection" : "Pin collection"}
+              aria-label={pinned ? "Unpin collection" : "Pin collection"}
+            >
+              {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -1926,100 +1931,123 @@ type BackupViewProps = {
   onDelete: (backup: BackupInfo) => void;
 };
 
+function SettingsPageHeader({ section, actions }: { section: string; actions?: ReactNode }) {
+  return (
+    <header className="page-header settings-page-header">
+      <nav className="breadcrumbs" aria-label="Breadcrumb">
+        <span>Settings</span>
+        <span>{section}</span>
+      </nav>
+      {actions && <div className="page-header-primary-btns">{actions}</div>}
+    </header>
+  );
+}
+
 function BackupView(props: BackupViewProps) {
   return (
-    <section className="surface">
-      <div className="surface-toolbar">
-        <div className="query-grid backup-controls">
-          <label>
-            Name
-            <input
-              value={props.backupName}
-              onChange={(event) => props.onBackupName(event.target.value)}
-              placeholder="backup.zip"
-            />
-          </label>
-          <button className="primary apply-button" onClick={props.onCreate} disabled={!props.canBackup || props.loading}>
-            <Archive size={16} />
-            Create
-          </button>
-          <button className="subtle apply-button" onClick={() => props.uploadRef.current?.click()}>
-            <Upload size={16} />
-            Upload
-          </button>
-          <button className="icon-button" onClick={props.onRefresh} title="Refresh backups" aria-label="Refresh backups">
+    <section className="settings-page">
+      <SettingsPageHeader
+        section="Backups"
+        actions={
+          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh backups" aria-label="Refresh backups">
             <RefreshCw size={17} />
           </button>
-          <input
-            ref={props.uploadRef}
-            className="hidden-input"
-            type="file"
-            accept=".zip,application/zip"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) props.onUpload(file);
-            }}
-          />
+        }
+      />
+      <section className="surface">
+        <div className="surface-toolbar">
+          <div className="query-grid backup-controls">
+            <label>
+              Name
+              <input
+                id="backup-name"
+                name="backupName"
+                autoComplete="off"
+                value={props.backupName}
+                onChange={(event) => props.onBackupName(event.target.value)}
+                placeholder="backup.zip"
+              />
+            </label>
+            <button className="primary apply-button" onClick={props.onCreate} disabled={!props.canBackup || props.loading}>
+              <Archive size={16} />
+              Create
+            </button>
+            <button className="subtle apply-button" onClick={() => props.uploadRef.current?.click()}>
+              <Upload size={16} />
+              Upload
+            </button>
+            <input
+              ref={props.uploadRef}
+              className="hidden-input"
+              name="backupFile"
+              type="file"
+              accept=".zip,application/zip"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) props.onUpload(file);
+              }}
+            />
+          </div>
         </div>
-      </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Size</th>
-              <th>Modified</th>
-              <th className="actions-col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {props.backups.length === 0 ? (
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td className="empty-row" colSpan={4}>
-                  No backups
-                </td>
+                <th>Name</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th className="actions-col">Actions</th>
               </tr>
-            ) : (
-              props.backups.map((backup) => (
-                <tr key={backup.key}>
-                  <td>
-                    <code>{backup.name}</code>
-                  </td>
-                  <td>{formatBytes(backup.size)}</td>
-                  <td>{formatDate(backup.modified)}</td>
-                  <td className="row-actions">
-                    <button
-                      className="icon-button"
-                      onClick={() => props.onDownload(backup)}
-                      title="Download"
-                      aria-label="Download"
-                    >
-                      <Download size={16} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      onClick={() => props.onRestore(backup)}
-                      title="Restore"
-                      aria-label="Restore"
-                    >
-                      <FileUp size={16} />
-                    </button>
-                    <button
-                      className="icon-button danger"
-                      onClick={() => props.onDelete(backup)}
-                      title="Delete"
-                      aria-label="Delete"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+            </thead>
+            <tbody>
+              {props.backups.length === 0 ? (
+                <tr>
+                  <td className="empty-row" colSpan={4}>
+                    No backups
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ) : (
+                props.backups.map((backup) => (
+                  <tr key={backup.key}>
+                    <td>
+                      <code>{backup.name}</code>
+                    </td>
+                    <td>{formatBytes(backup.size)}</td>
+                    <td>{formatDate(backup.modified)}</td>
+                    <td className="row-actions">
+                      <button
+                        className="icon-button"
+                        onClick={() => props.onDownload(backup)}
+                        title="Download"
+                        aria-label="Download"
+                      >
+                        <Download size={16} />
+                      </button>
+                      <button
+                        className="icon-button"
+                        onClick={() => props.onRestore(backup)}
+                        title="Restore"
+                        aria-label="Restore"
+                      >
+                        <FileUp size={16} />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        onClick={() => props.onDelete(backup)}
+                        title="Delete"
+                        aria-label="Delete"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   );
 }
@@ -2033,58 +2061,65 @@ type CronsViewProps = {
 
 function CronsView(props: CronsViewProps) {
   return (
-    <section className="surface crons-surface">
-      <div className="surface-toolbar">
-        <div className="table-meta crons-meta">
-          <span>{props.crons.length} jobs</span>
+    <section className="settings-page">
+      <SettingsPageHeader
+        section="Crons"
+        actions={
+          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh crons" aria-label="Refresh crons">
+            <RefreshCw size={17} />
+          </button>
+        }
+      />
+      <section className="surface crons-surface">
+        <div className="surface-toolbar">
+          <div className="table-meta crons-meta">
+            <span>{props.crons.length} jobs</span>
+          </div>
         </div>
-        <button className="icon-button" onClick={props.onRefresh} title="Refresh crons" aria-label="Refresh crons">
-          <RefreshCw size={17} />
-        </button>
-      </div>
 
-      <div className="table-wrap">
-        <table className="crons-table">
-          <thead>
-            <tr>
-              <th>Job</th>
-              <th>Expression</th>
-              <th className="actions-col">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {props.crons.length === 0 ? (
+        <div className="table-wrap">
+          <table className="crons-table">
+            <thead>
               <tr>
-                <td className="empty-row" colSpan={3}>
-                  No crons
-                </td>
+                <th>Job</th>
+                <th>Expression</th>
+                <th className="actions-col">Actions</th>
               </tr>
-            ) : (
-              props.crons.map((cron) => (
-                <tr key={cron.id}>
-                  <td>
-                    <code>{cron.id}</code>
-                  </td>
-                  <td>
-                    <code>{cron.expression}</code>
-                  </td>
-                  <td className="row-actions">
-                    <button
-                      className="icon-button"
-                      onClick={() => props.onRun(cron)}
-                      title="Run"
-                      aria-label="Run"
-                      disabled={props.loading}
-                    >
-                      <Play size={16} />
-                    </button>
+            </thead>
+            <tbody>
+              {props.crons.length === 0 ? (
+                <tr>
+                  <td className="empty-row" colSpan={3}>
+                    No crons
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              ) : (
+                props.crons.map((cron) => (
+                  <tr key={cron.id}>
+                    <td>
+                      <code>{cron.id}</code>
+                    </td>
+                    <td>
+                      <code>{cron.expression}</code>
+                    </td>
+                    <td className="row-actions">
+                      <button
+                        className="icon-button"
+                        onClick={() => props.onRun(cron)}
+                        title="Run"
+                        aria-label="Run"
+                        disabled={props.loading}
+                      >
+                        <Play size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   );
 }
@@ -2107,8 +2142,10 @@ function SettingsView(props: SettingsViewProps) {
   const backups = isPlainObject(rawBackups) ? rawBackups : {};
   return (
     <section className="settings-page">
-      <div className="settings-page-toolbar">
-        <div className="top-actions">
+      <SettingsPageHeader
+        section="Application"
+        actions={
+          <>
           <button className="icon-button" onClick={props.onRefresh} title="Refresh settings" aria-label="Refresh settings">
             <RefreshCw size={17} />
           </button>
@@ -2116,8 +2153,9 @@ function SettingsView(props: SettingsViewProps) {
             <Save size={16} />
             Save settings
           </button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div className="settings-card-grid">
         <SettingValueCard title="Application" value={String(meta.appName ?? "pocketbase-java")} detail={String(meta.appURL ?? "")} />
@@ -2129,7 +2167,13 @@ function SettingsView(props: SettingsViewProps) {
       <section className="surface settings-editor">
         <label>
           Settings JSON
-          <textarea value={props.draft} onChange={(event) => props.onDraft(event.target.value)} spellCheck={false} />
+          <textarea
+            id="settings-json"
+            name="settingsJson"
+            value={props.draft}
+            onChange={(event) => props.onDraft(event.target.value)}
+            spellCheck={false}
+          />
         </label>
       </section>
     </section>
@@ -2167,6 +2211,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
   const smtp = settingsObject(props.settings, "smtp");
   return (
     <section className="settings-page">
+      <SettingsPageHeader section="Mail settings" />
       <div className="settings-card-grid two">
         <SettingValueCard title="Sender name" value={String(meta.senderName ?? "")} detail={String(meta.senderAddress ?? "")} />
         <SettingValueCard title="SMTP" value={truthyText(smtp.enabled)} detail={`${String(smtp.host ?? "no host")}:${String(smtp.port ?? "")}`} />
@@ -2182,11 +2227,24 @@ function MailSettingsView(props: MailSettingsViewProps) {
         <div className="settings-form-grid">
           <label>
             Recipient
-            <input value={props.email} onChange={(event) => props.onEmail(event.target.value)} placeholder="admin@example.com" />
+            <input
+              id="test-email-recipient"
+              name="testEmailRecipient"
+              type="email"
+              autoComplete="off"
+              value={props.email}
+              onChange={(event) => props.onEmail(event.target.value)}
+              placeholder="admin@example.com"
+            />
           </label>
           <label>
             Template
-            <select value={props.template} onChange={(event) => props.onTemplate(event.target.value)}>
+            <select
+              id="test-email-template"
+              name="testEmailTemplate"
+              value={props.template}
+              onChange={(event) => props.onTemplate(event.target.value)}
+            >
               <option value="verification">verification</option>
               <option value="password-reset">password-reset</option>
               <option value="email-change">email-change</option>
@@ -2218,6 +2276,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
   const backupS3 = isPlainObject(backups.s3) ? backups.s3 : {};
   return (
     <section className="settings-page">
+      <SettingsPageHeader section="File storage" />
       <div className="settings-card-grid two">
         <SettingValueCard title="Storage S3" value={truthyText(storage.enabled)} detail={String(storage.bucket ?? "no bucket")} />
         <SettingValueCard title="Backup S3" value={truthyText(backupS3.enabled)} detail={String(backupS3.bucket ?? "no bucket")} />
@@ -2233,7 +2292,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
         <div className="settings-form-grid compact">
           <label>
             Target
-            <select value={props.target} onChange={(event) => props.onTarget(event.target.value)}>
+            <select id="s3-test-target" name="s3TestTarget" value={props.target} onChange={(event) => props.onTarget(event.target.value)}>
               <option value="storage">storage</option>
               <option value="backups">backups</option>
             </select>
@@ -2263,53 +2322,59 @@ type CollectionTransferViewProps = {
 function CollectionTransferView(props: CollectionTransferViewProps) {
   const importing = props.mode === "import";
   return (
-    <section className="surface transfer-surface">
-      <div className="surface-toolbar">
-        <div className="table-meta transfer-meta">
-          <span>{importing ? "Paste a collections export" : "Current collection schema snapshot"}</span>
-        </div>
-        <div className="top-actions">
-          <button className="subtle" onClick={props.onExport}>
-            <RefreshCw size={16} />
-            Refresh export
-          </button>
-          {!importing && (
-            <button className="subtle" onClick={() => props.onCopy(props.draft)}>
-              <Copy size={16} />
-              Copy JSON
+    <section className="settings-page">
+      <SettingsPageHeader section={importing ? "Import collections" : "Export collections"} />
+      <section className="surface transfer-surface">
+        <div className="surface-toolbar">
+          <div className="table-meta transfer-meta">
+            <span>{importing ? "Paste a collections export" : "Current collection schema snapshot"}</span>
+          </div>
+          <div className="top-actions">
+            <button className="subtle" onClick={props.onExport}>
+              <RefreshCw size={16} />
+              Refresh export
             </button>
-          )}
-          {importing && (
-            <button className="primary" onClick={props.onImport} disabled={props.loading || !props.draft.trim()}>
-              <Upload size={16} />
-              Import
-            </button>
-          )}
+            {!importing && (
+              <button className="subtle" onClick={() => props.onCopy(props.draft)}>
+                <Copy size={16} />
+                Copy JSON
+              </button>
+            )}
+            {importing && (
+              <button className="primary" onClick={props.onImport} disabled={props.loading || !props.draft.trim()}>
+                <Upload size={16} />
+                Import
+              </button>
+            )}
+          </div>
         </div>
-      </div>
-      {importing && (
-        <div className="bulkbar import-options">
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={props.deleteMissing}
-              onChange={(event) => props.onDeleteMissing(event.target.checked)}
+        {importing && (
+          <div className="bulkbar import-options">
+            <label className="check-row">
+              <input
+                type="checkbox"
+                name="deleteMissingCollections"
+                checked={props.deleteMissing}
+                onChange={(event) => props.onDeleteMissing(event.target.checked)}
+              />
+              Delete missing collections
+            </label>
+          </div>
+        )}
+        <div className="settings-editor">
+          <label>
+            Collections JSON
+            <textarea
+              id={importing ? "import-collections-json" : "export-collections-json"}
+              name="collectionsJson"
+              value={props.draft}
+              onChange={(event) => props.onDraft(event.target.value)}
+              readOnly={!importing}
+              spellCheck={false}
             />
-            Delete missing collections
           </label>
         </div>
-      )}
-      <div className="settings-editor">
-        <label>
-          Collections JSON
-          <textarea
-            value={props.draft}
-            onChange={(event) => props.onDraft(event.target.value)}
-            readOnly={!importing}
-            spellCheck={false}
-          />
-        </label>
-      </div>
+      </section>
     </section>
   );
 }
@@ -2327,58 +2392,67 @@ function SqlView(props: SqlViewProps) {
   const columns = props.result?.columns ?? [];
   const rows = props.result?.rows ?? [];
   return (
-    <section className="sql-layout">
-      <section className="surface sql-editor">
-        <div className="surface-toolbar">
-          <div className="table-meta transfer-meta">
-            <span>Superuser SQL console</span>
+    <section className="settings-page">
+      <SettingsPageHeader section="SQL console" />
+      <div className="sql-layout">
+        <section className="surface sql-editor">
+          <div className="surface-toolbar">
+            <div className="table-meta transfer-meta">
+              <span>Superuser SQL console</span>
+            </div>
+            <button className="primary" onClick={props.onRun} disabled={props.loading || !props.query.trim()}>
+              <Play size={16} />
+              Run query
+            </button>
           </div>
-          <button className="primary" onClick={props.onRun} disabled={props.loading || !props.query.trim()}>
-            <Play size={16} />
-            Run query
-          </button>
-        </div>
-        <label className="sql-textarea">
-          Query
-          <textarea value={props.query} onChange={(event) => props.onQuery(event.target.value)} spellCheck={false} />
-        </label>
-      </section>
+          <label className="sql-textarea">
+            Query
+            <textarea
+              id="sql-query"
+              name="sqlQuery"
+              value={props.query}
+              onChange={(event) => props.onQuery(event.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        </section>
 
-      <section className="surface sql-result">
-        <div className="table-meta">
-          <span>{Number(props.result?.affectedRows ?? 0)} affected rows</span>
-          <span>{rows.length} result rows</span>
-          {props.error && <span className="danger">{props.error}</span>}
-        </div>
-        <div className="table-wrap">
-          <table className="sql-table">
-            <thead>
-              <tr>
-                {columns.length === 0 ? <th>Result</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
+        <section className="surface sql-result">
+          <div className="table-meta">
+            <span>{Number(props.result?.affectedRows ?? 0)} affected rows</span>
+            <span>{rows.length} result rows</span>
+            {props.error && <span className="danger">{props.error}</span>}
+          </div>
+          <div className="table-wrap">
+            <table className="sql-table">
+              <thead>
                 <tr>
-                  <td className="empty-row" colSpan={Math.max(1, columns.length)}>
-                    No rows
-                  </td>
+                  {columns.length === 0 ? <th>Result</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
                 </tr>
-              ) : (
-                rows.map((row, rowIndex) => (
-                  <tr key={rowIndex}>
-                    {columns.map((column, columnIndex) => (
-                      <td key={column.name}>
-                        <code>{formatValue(Array.isArray(row) ? row[columnIndex] : "")}</code>
-                      </td>
-                    ))}
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td className="empty-row" colSpan={Math.max(1, columns.length)}>
+                      No rows
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                ) : (
+                  rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {columns.map((column, columnIndex) => (
+                        <td key={column.name}>
+                          <code>{formatValue(Array.isArray(row) ? row[columnIndex] : "")}</code>
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </section>
   );
 }
