@@ -974,6 +974,7 @@ function App() {
     [allColumns, hiddenColumns]
   );
   const pageMeta = viewMeta(view, selected);
+  const showWorkspaceTopbar = !authenticated || (!collectionView && view !== "logs");
 
   return (
     <div className="app-shell">
@@ -1046,13 +1047,15 @@ function App() {
           <SettingsSidebar current={view} onSelect={setView} />
         )}
 
-        <main className="workspace">
-          <header className="topbar">
-            <div>
-              <p className="eyebrow">{pageMeta.eyebrow}</p>
-              <h1>{pageMeta.title}</h1>
-            </div>
-          </header>
+        <main className={showWorkspaceTopbar ? "workspace" : "workspace workspace-flush"}>
+          {showWorkspaceTopbar && (
+            <header className="topbar">
+              <div>
+                <p className="eyebrow">{pageMeta.eyebrow}</p>
+                <h1>{pageMeta.title}</h1>
+              </div>
+            </header>
+          )}
 
           {!authenticated ? (
             <AuthPanel
@@ -1191,6 +1194,8 @@ function App() {
                     loading={loading}
                     onQuery={setQuery}
                     onApply={(nextQuery) => refreshRecords(selected.name, nextQuery)}
+                    onRefresh={() => refreshRecords(selected.name, query)}
+                    onEditCollection={() => setCollectionEditor({ mode: "edit", collection: selected })}
                     onNew={() => setRecordEditor({})}
                     onEdit={(record) => setRecordEditor({ record })}
                     onDelete={deleteRecord}
@@ -1506,6 +1511,8 @@ type RecordsViewProps = {
   loading: boolean;
   onQuery: (query: QueryState) => void;
   onApply: (query: QueryState) => void;
+  onRefresh: () => void | Promise<void>;
+  onEditCollection: () => void;
   onNew: () => void;
   onEdit: (record: RecordItem) => void;
   onDelete: (record: RecordItem) => void;
@@ -1524,6 +1531,7 @@ function RecordsView(props: RecordsViewProps) {
   const selectedSet = useMemo(() => new Set(props.selectedIds), [props.selectedIds]);
   const allVisibleSelected =
     props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
+  const canCreateRecord = props.collection.type !== "view";
 
   useEffect(() => setDraft(props.query), [props.query]);
 
@@ -1533,83 +1541,102 @@ function RecordsView(props: RecordsViewProps) {
   }
 
   return (
-    <section className="surface">
-      <div className="surface-toolbar">
-        <div className="query-grid">
-          <label>
-            Filter
-            <input
-              id="records-filter"
-              name="filter"
-              autoComplete="off"
-              value={draft.filter}
-              onChange={(event) => setDraft({ ...draft, filter: event.target.value })}
-              placeholder='published = true'
-            />
-          </label>
-          <label>
-            Sort
-            <input
-              id="records-sort"
-              name="sort"
-              autoComplete="off"
-              value={draft.sort}
-              onChange={(event) => setDraft({ ...draft, sort: event.target.value })}
-            />
-          </label>
-          <label>
-            Per page
-            <select
-              id="records-per-page"
-              name="perPage"
-              value={draft.perPage}
-              onChange={(event) => setDraft({ ...draft, perPage: Number(event.target.value) })}
-            >
-              {[25, 50, 100, 200].map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="subtle apply-button" onClick={apply} disabled={props.loading}>
-            <ListFilter size={16} />
-            Apply
+    <section className="records-page">
+      <header className="page-header records-page-header">
+        <nav className="breadcrumbs" aria-label="Breadcrumb">
+          <span>Collections</span>
+          <span title={props.collection.name}>{props.collection.name}</span>
+        </nav>
+        <div className="page-header-secondary-btns">
+          <button className="icon-button page-circle" onClick={props.onEditCollection} title="Collection settings" aria-label="Collection settings">
+            <Settings size={17} />
+          </button>
+          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh records" aria-label="Refresh records">
+            <RefreshCw size={17} />
           </button>
         </div>
-        <div className="records-toolbar-actions">
-          <div className="column-picker">
-            <button className="subtle" onClick={() => setColumnsOpen((open) => !open)}>
-              <Columns3 size={16} />
-              Columns
+        {canCreateRecord && (
+          <div className="page-header-primary-btns">
+            <button className="primary new-record-btn" onClick={props.onNew}>
+              <Plus size={16} />
+              <span>New record</span>
             </button>
-            {columnsOpen && (
-              <div className="columns-popover">
-                <div className="columns-popover-header">
-                  <strong>Visible columns</strong>
-                  <button className="icon-button tiny" onClick={props.onResetColumns} title="Reset columns" aria-label="Reset columns">
-                    <RotateCcw size={14} />
-                  </button>
-                </div>
-                <div className="stacked-checks">
-                  {props.allColumns.map((column) => (
-                    <label className="check-row" key={column}>
-                      <input
-                        type="checkbox"
-                        checked={!props.hiddenColumns.includes(column)}
-                        onChange={() => props.onToggleColumn(column)}
-                      />
-                      {column}
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
-          <button className="primary" onClick={props.onNew}>
-            <Plus size={16} />
-            New record
+        )}
+      </header>
+
+      <div className="records-searchbar-row">
+        <div className="searchbar records-searchbar">
+          <Search size={17} />
+          <input
+            id="records-filter"
+            name="filter"
+            autoComplete="off"
+            aria-label="Search term or filter"
+            value={draft.filter}
+            onChange={(event) => setDraft({ ...draft, filter: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") apply();
+            }}
+            placeholder="Search term or filter..."
+          />
+        </div>
+        <label className="compact-field sort-field">
+          Sort
+          <input
+            id="records-sort"
+            name="sort"
+            autoComplete="off"
+            value={draft.sort}
+            onChange={(event) => setDraft({ ...draft, sort: event.target.value })}
+          />
+        </label>
+        <label className="compact-field per-page-field">
+          Per page
+          <select
+            id="records-per-page"
+            name="perPage"
+            value={draft.perPage}
+            onChange={(event) => setDraft({ ...draft, perPage: Number(event.target.value) })}
+          >
+            {[25, 50, 100, 200].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="subtle apply-button" onClick={apply} disabled={props.loading}>
+          <ListFilter size={16} />
+          Apply
+        </button>
+        <div className="column-picker">
+          <button className="subtle" onClick={() => setColumnsOpen((open) => !open)}>
+            <Columns3 size={16} />
+            Columns
           </button>
+          {columnsOpen && (
+            <div className="columns-popover">
+              <div className="columns-popover-header">
+                <strong>Visible columns</strong>
+                <button className="icon-button tiny" onClick={props.onResetColumns} title="Reset columns" aria-label="Reset columns">
+                  <RotateCcw size={14} />
+                </button>
+              </div>
+              <div className="stacked-checks">
+                {props.allColumns.map((column) => (
+                  <label className="check-row" key={column}>
+                    <input
+                      type="checkbox"
+                      checked={!props.hiddenColumns.includes(column)}
+                      onChange={() => props.onToggleColumn(column)}
+                    />
+                    {column}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1627,14 +1654,8 @@ function RecordsView(props: RecordsViewProps) {
         </div>
       )}
 
-      <div className="table-meta">
-        <span>{props.recordPage?.totalItems ?? props.records.length} records</span>
-        <span>{props.collection.fields?.length ?? 0} fields</span>
-        <span>{props.columns.length}/{props.allColumns.length} columns</span>
-      </div>
-
-      <div className="table-wrap">
-        <table>
+      <div className="page-table-wrapper">
+        <table className="records-table responsive-table">
           <thead>
             <tr>
               <th className="select-col">
@@ -1657,7 +1678,28 @@ function RecordsView(props: RecordsViewProps) {
             {props.records.length === 0 ? (
               <tr>
                 <td className="empty-row" colSpan={props.columns.length + 2}>
-                  No records
+                  <div className="empty-table-message">
+                    <strong>No records found.</strong>
+                    {!draft.filter && canCreateRecord && (
+                      <button className="subtle" onClick={props.onNew}>
+                        <Plus size={16} />
+                        New record
+                      </button>
+                    )}
+                    {draft.filter && (
+                      <button
+                        className="subtle"
+                        onClick={() => {
+                          const next = { ...draft, filter: "" };
+                          setDraft(next);
+                          props.onQuery(next);
+                          props.onApply(next);
+                        }}
+                      >
+                        Clear search
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -1705,6 +1747,11 @@ function RecordsView(props: RecordsViewProps) {
           </tbody>
         </table>
       </div>
+      <footer className="page-footer">
+        <span>Total: {props.recordPage?.totalItems ?? props.records.length}</span>
+        <span>{props.collection.fields?.length ?? 0} fields</span>
+        <span>{props.columns.length}/{props.allColumns.length} columns</span>
+      </footer>
     </section>
   );
 }
@@ -2350,6 +2397,8 @@ function LogsView(props: LogsViewProps) {
   const [selected, setSelected] = useState<LogItem | null>(null);
   const total = props.logPage?.totalItems ?? props.logs.length;
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  const maxStat = Math.max(1, ...props.stats.map((item) => Number(item.total || 0)));
+  const chartStats = props.stats.slice(-28);
 
   useEffect(() => {
     if (selected && !props.logs.some((log) => log.id === selected.id)) {
@@ -2358,33 +2407,58 @@ function LogsView(props: LogsViewProps) {
   }, [props.logs, selected]);
 
   return (
-    <section className="surface logs-surface">
-      <div className="surface-toolbar">
-        <div className="query-grid logs-controls">
-          <label>
-            Filter
-            <input
-              value={props.filter}
-              onChange={(event) => props.onFilter(event.target.value)}
-              placeholder="data.status >= 400"
-            />
-          </label>
-          <button className="subtle apply-button" onClick={props.onRefresh} disabled={props.loading}>
-            <ListFilter size={16} />
-            Apply
-          </button>
-          <button className="icon-button" onClick={props.onRefresh} title="Refresh logs" aria-label="Refresh logs">
-            <RefreshCw size={17} />
-          </button>
+    <section className="logs-page">
+      <div className="logs-chart-strip">
+        <div className="logs-chart-bars" aria-label="Log activity">
+          {chartStats.length === 0 ? (
+            <span className="logs-chart-empty">No log activity</span>
+          ) : (
+            chartStats.map((item) => {
+              const totalValue = Number(item.total || 0);
+              return (
+                <span
+                  key={item.date}
+                  style={{ height: `${Math.max(8, (totalValue / maxStat) * 100)}%` }}
+                  title={`${item.date}: ${totalValue}`}
+                />
+              );
+            })
+          )}
         </div>
       </div>
 
-      <div className="table-meta">
-        <span>{total} logs</span>
-        <span>{statsTotal} hourly events</span>
-      </div>
+      <header className="page-header logs-page-header">
+        <nav className="breadcrumbs" aria-label="Breadcrumb">
+          <span>Logs</span>
+        </nav>
+        <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh logs" aria-label="Refresh logs">
+          <RefreshCw size={17} />
+        </button>
+        <div className="searchbar logs-searchbar">
+          <Search size={17} />
+          <input
+            id="logs-filter"
+            name="logsFilter"
+            autoComplete="off"
+            aria-label="Search term or filter"
+            value={props.filter}
+            onChange={(event) => props.onFilter(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") props.onRefresh();
+            }}
+            placeholder="Search term or filter like `level > 0`"
+          />
+        </div>
+        <button className="subtle apply-button" onClick={props.onRefresh} disabled={props.loading}>
+          <ListFilter size={16} />
+          Apply
+        </button>
+        <div className="logs-header-meta">
+          <span>{statsTotal} hourly events</span>
+        </div>
+      </header>
 
-      <div className="table-wrap">
+      <div className="page-table-wrapper">
         <table className="logs-table">
           <thead>
             <tr>
@@ -2439,7 +2513,16 @@ function LogsView(props: LogsViewProps) {
         </table>
       </div>
 
-      {selected && <pre className="json-panel log-json">{JSON.stringify(selected, null, 2)}</pre>}
+      <footer className="page-footer">
+        <span>Total: {total}</span>
+        <span>{props.logs.length} visible</span>
+      </footer>
+
+      {selected && (
+        <Modal title={`Log ${selected.id}`} onClose={() => setSelected(null)} wide>
+          <pre className="json-panel log-json">{JSON.stringify(selected, null, 2)}</pre>
+        </Modal>
+      )}
     </section>
   );
 }
