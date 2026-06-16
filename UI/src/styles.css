@@ -1371,6 +1371,99 @@ td.row-actions .icon-button:last-child {
   padding: 15px;
 }
 
+.collection-upsert-form {
+  gap: 0;
+  padding: 0;
+}
+
+.collection-upsert-form > .form-error {
+  margin: 15px 15px 0;
+}
+
+.collection-modal-head {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) max-content;
+  gap: 12px;
+  align-items: end;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  background: var(--surfaceAlt1Color);
+  padding: 15px;
+}
+
+.collection-name-field {
+  min-width: 0;
+}
+
+.collection-type-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--btnHeight);
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  padding: 4px;
+}
+
+.collection-type-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  min-width: 72px;
+  border-radius: var(--borderRadius);
+  padding: 4px 10px;
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.collection-type-switch button:hover:not(:disabled),
+.collection-type-switch button:focus-visible,
+.collection-type-switch button.active {
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}
+
+.collection-modal-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  background: var(--surfaceColor);
+}
+
+.collection-modal-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border-radius: 0;
+  border-right: 1px solid var(--surfaceAlt2Color);
+  color: var(--surfaceTxtHintColor);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.collection-modal-tabs button:last-child {
+  border-right: 0;
+}
+
+.collection-modal-tabs button:hover:not(:disabled),
+.collection-modal-tabs button:focus-visible,
+.collection-modal-tabs button.active {
+  background: var(--surfaceAlt1Color);
+  color: var(--surfaceTxtColor);
+}
+
+.collection-tab-panel {
+  margin: 15px;
+}
+
+.collection-query-panel textarea {
+  min-height: 360px;
+}
+
 .two-col {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 160px;
@@ -1381,6 +1474,44 @@ td.row-actions .icon-button:last-child {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
   gap: 10px;
+}
+
+.collection-rules-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.rules-helper {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+  padding: 12px;
+}
+
+.rules-helper > div {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rules-helper strong {
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.rules-grid.official {
+  grid-template-columns: 1fr;
+}
+
+.rules-grid.official textarea {
+  min-height: 82px;
 }
 
 .field-builder-panel {
@@ -1648,6 +1779,11 @@ td.row-actions .icon-button:last-child {
   gap: 8px;
 }
 
+.collection-upsert-form > .modal-actions {
+  border-top: 1px solid var(--surfaceAlt2Color);
+  padding: 15px;
+}
+
 .form-error {
   border-radius: var(--borderRadius);
   background: var(--surfaceDangerColor);
@@ -1723,7 +1859,9 @@ td.row-actions .icon-button:last-child {
   .settings-form-grid.compact,
   .sql-layout,
   .record-editor-layout,
-  .record-field-grid {
+  .record-field-grid,
+  .collection-modal-head,
+  .rules-helper {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -1794,10 +1932,26 @@ td.row-actions .icon-button:last-child {
   .sql-layout,
   .record-editor-layout,
   .record-field-grid,
+  .collection-modal-head,
+  .rules-helper,
   .auth-config-grid,
   .auth-methods-panel,
   .oauth-provider-fields {
     grid-template-columns: 1fr;
+  }
+
+  .collection-type-switch {
+    width: 100%;
+  }
+
+  .collection-type-switch button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .collection-modal-tabs {
+    overflow-x: auto;
+    grid-template-columns: repeat(3, minmax(115px, 1fr));
   }
 
   .field-builder-panel > header,

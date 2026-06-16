@@ -126,6 +126,7 @@ type CollectionSchema = {
   otp?: OtpConfig;
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
+  viewQuery?: string | null;
   created?: string;
   updated?: string;
 };
@@ -2429,7 +2430,10 @@ type CollectionPayload = {
   otp?: OtpConfig;
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
+  viewQuery?: string | null;
 };
+
+type RuleKey = "listRule" | "viewRule" | "createRule" | "updateRule" | "deleteRule";
 
 type CollectionModalProps = {
   state: CollectionEditorState;
@@ -2443,6 +2447,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
   const [name, setName] = useState(collection?.name ?? "");
   const [type, setType] = useState(collection?.type ?? "base");
   const [fields, setFields] = useState(JSON.stringify(collection?.fields ?? DEFAULT_FIELDS, null, 2));
+  const [viewQuery, setViewQuery] = useState(collection?.viewQuery ?? "");
   const [passwordEnabled, setPasswordEnabled] = useState(collection?.passwordAuth?.enabled ?? true);
   const [identityFields, setIdentityFields] = useState<string[]>(collection?.passwordAuth?.identityFields ?? ["email"]);
   const [otpEnabled, setOtpEnabled] = useState(collection?.otp?.enabled ?? false);
@@ -2466,6 +2471,14 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     deleteRule: collection?.deleteRule ?? ""
   });
   const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState("fields");
+  const tabs = useMemo(() => collectionModalTabs(type), [type]);
+
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab(tabs[0]?.id ?? "fields");
+    }
+  }, [activeTab, tabs]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2475,12 +2488,13 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
       onSubmit({
         name: name.trim(),
         type,
-        fields: parsedFields,
+        fields: type === "view" ? [] : parsedFields,
         listRule: nullableRule(rules.listRule),
         viewRule: nullableRule(rules.viewRule),
         createRule: nullableRule(rules.createRule),
         updateRule: nullableRule(rules.updateRule),
         deleteRule: nullableRule(rules.deleteRule),
+        ...(type === "view" ? { viewQuery: viewQuery.trim() } : {}),
         ...(type === "auth"
           ? {
               passwordAuth: {
@@ -2601,26 +2615,59 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
 
   return (
     <Modal title={state.mode === "edit" ? `Edit ${collection?.name}` : "New collection"} onClose={onClose} wide>
-      <form className="modal-grid" onSubmit={submit}>
-        <div className="two-col">
-          <label>
-            Name
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              required
-              pattern="[A-Za-z_][A-Za-z0-9_]{0,62}"
-            />
-          </label>
-          <label>
-            Type
-            <select value={type} onChange={(event) => setType(event.target.value)} disabled={collection?.system}>
-              <option value="base">base</option>
-              <option value="auth">auth</option>
-            </select>
-          </label>
-        </div>
-        <section className="field-builder-panel">
+      <form className="modal-grid collection-upsert-form" onSubmit={submit}>
+        <section className="collection-modal-head">
+          <div className="collection-name-field">
+            <label>
+              Name{collection?.system ? " (system)" : ""}
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+                pattern="[A-Za-z_][A-Za-z0-9_]{0,62}"
+                placeholder="posts"
+                disabled={Boolean(collection?.system)}
+              />
+            </label>
+          </div>
+          <div className="collection-type-switch" aria-label="Collection type">
+            {[
+              { id: "base", label: "Base", icon: Database },
+              { id: "view", label: "View", icon: Code2 },
+              { id: "auth", label: "Auth", icon: Shield }
+            ].map((option) => {
+              const Icon = option.icon;
+              return (
+                <button
+                  type="button"
+                  key={option.id}
+                  className={type === option.id ? "active" : ""}
+                  disabled={Boolean(collection)}
+                  onClick={() => setType(option.id)}
+                >
+                  <Icon size={15} />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <nav className="collection-modal-tabs" aria-label="Collection editor tabs">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={activeTab === tab.id ? "active" : ""}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {activeTab === "fields" && (
+          <section className="field-builder-panel collection-tab-panel">
           <header>
             <div>
               <strong>Fields</strong>
@@ -2672,9 +2719,25 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
             Fields JSON
             <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
           </label>
-        </section>
-        {type === "auth" && (
-          <section className="auth-config-grid">
+          </section>
+        )}
+
+        {activeTab === "query" && (
+          <section className="collection-query-panel collection-tab-panel">
+            <label>
+              View query
+              <textarea
+                value={viewQuery}
+                onChange={(event) => setViewQuery(event.target.value)}
+                placeholder="select id, created, updated from posts"
+                spellCheck={false}
+              />
+            </label>
+          </section>
+        )}
+
+        {activeTab === "auth" && type === "auth" && (
+          <section className="auth-config-grid collection-tab-panel">
             <article className="auth-config-card">
               <header>
                 <strong>Password auth</strong>
@@ -2856,14 +2919,46 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
             </article>
           </section>
         )}
-        <div className="rules-grid">
-          {(["listRule", "viewRule", "createRule", "updateRule", "deleteRule"] as const).map((key) => (
-            <label key={key}>
-              {key}
-              <input value={rules[key]} onChange={(event) => setRules({ ...rules, [key]: event.target.value })} />
-            </label>
-          ))}
-        </div>
+        {activeTab === "rules" && (
+          <section className="collection-rules-panel collection-tab-panel">
+            <div className="rules-helper">
+              <div>
+                <strong>Available fields</strong>
+                <div className="chips">
+                  {fieldsPreview.fields.length === 0 ? (
+                    <span>id</span>
+                  ) : (
+                    fieldsPreview.fields.map((field) => <span key={field.name}>{field.name}</span>)
+                  )}
+                  <span>created</span>
+                  <span>updated</span>
+                </div>
+              </div>
+              <div>
+                <strong>Request fields</strong>
+                <div className="chips">
+                  {["@request.auth.*", "@request.body.*", "@request.query.*", "@collection.*"].map((item) => (
+                    <span key={item}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="rules-grid official">
+              {collectionRuleKeys(type).map((key) => (
+                <label key={key}>
+                  {collectionRuleLabel(key)}
+                  <textarea
+                    value={rules[key]}
+                    onChange={(event) => setRules({ ...rules, [key]: event.target.value })}
+                    placeholder={key === "listRule" ? '@request.auth.id != ""' : ""}
+                    spellCheck={false}
+                    disabled={Boolean(collection?.system)}
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="subtle" onClick={onClose}>
@@ -3433,6 +3528,42 @@ function parseFieldsPreview(value: string) {
   } catch (error) {
     return { fields: [] as FieldSchema[], error: errorMessage(error) };
   }
+}
+
+function collectionModalTabs(type: string) {
+  if (type === "view") {
+    return [
+      { id: "query", label: "Query" },
+      { id: "rules", label: "API rules" }
+    ];
+  }
+  if (type === "auth") {
+    return [
+      { id: "fields", label: "Fields" },
+      { id: "rules", label: "API rules" },
+      { id: "auth", label: "Options" }
+    ];
+  }
+  return [
+    { id: "fields", label: "Fields" },
+    { id: "rules", label: "API rules" }
+  ];
+}
+
+function collectionRuleKeys(type: string): RuleKey[] {
+  if (type === "view") return ["listRule", "viewRule"];
+  return ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"];
+}
+
+function collectionRuleLabel(key: RuleKey) {
+  const labels: Record<RuleKey, string> = {
+    listRule: "List/Search rule",
+    viewRule: "View rule",
+    createRule: "Create rule",
+    updateRule: "Update rule",
+    deleteRule: "Delete rule"
+  };
+  return labels[key];
 }
 
 function uniqueFieldName(fields: FieldSchema[], type: string) {
