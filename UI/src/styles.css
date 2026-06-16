@@ -1355,7 +1355,7 @@ td.row-actions .icon-button:last-child {
 }
 
 .modal.wide {
-  width: min(920px, calc(100vw - 36px));
+  width: min(1080px, calc(100vw - 36px));
 }
 
 .modal header {
@@ -1381,6 +1381,182 @@ td.row-actions .icon-button:last-child {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
   gap: 10px;
+}
+
+.field-builder-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+  padding: 14px;
+}
+
+.field-builder-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+
+.field-builder-panel > header div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.field-builder-panel > header span {
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field-builder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.field-builder-actions button {
+  min-height: 30px;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.field-builder-list {
+  display: grid;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.field-builder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto) 32px;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  padding: 7px 8px 7px 11px;
+}
+
+.field-builder-row > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.field-builder-row strong,
+.field-builder-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-builder-row > div:first-child span {
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+}
+
+.record-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.95fr) minmax(340px, 1.05fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.record-form-panel,
+.record-json-panel {
+  min-width: 0;
+}
+
+.record-form-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+  padding: 14px;
+}
+
+.section-heading.compact {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.section-heading.compact h2 {
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.record-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.record-field-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  padding: 11px;
+  color: var(--surfaceTxtColor);
+}
+
+.record-field-card.wide {
+  grid-column: 1 / -1;
+}
+
+.record-field-card > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.record-field-card strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.record-field-meta {
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.record-field-card.checkbox-field {
+  grid-template-columns: minmax(0, 1fr) 22px;
+  align-items: center;
+}
+
+.record-field-card.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+}
+
+.compact-textarea {
+  min-height: 120px;
+}
+
+.record-json-panel textarea {
+  min-height: 520px;
+}
+
+.record-file-grid {
+  border-top: 1px solid var(--surfaceAlt2Color);
+  padding-top: 12px;
 }
 
 .auth-config-grid {
@@ -1545,7 +1721,9 @@ td.row-actions .icon-button:last-child {
   .settings-card-grid.two,
   .settings-form-grid,
   .settings-form-grid.compact,
-  .sql-layout {
+  .sql-layout,
+  .record-editor-layout,
+  .record-field-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -1614,10 +1792,25 @@ td.row-actions .icon-button:last-child {
   .settings-form-grid,
   .settings-form-grid.compact,
   .sql-layout,
+  .record-editor-layout,
+  .record-field-grid,
   .auth-config-grid,
   .auth-methods-panel,
   .oauth-provider-fields {
     grid-template-columns: 1fr;
+  }
+
+  .field-builder-panel > header,
+  .field-builder-row {
+    grid-template-columns: 1fr;
+  }
+
+  .field-builder-panel > header {
+    display: grid;
+  }
+
+  .field-builder-actions {
+    justify-content: flex-start;
   }
 
   .view-tabs {

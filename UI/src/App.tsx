@@ -2565,6 +2565,40 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     }));
   }
 
+  const fieldsPreview = useMemo(() => parseFieldsPreview(fields), [fields]);
+
+  function updateFields(nextFields: FieldSchema[]) {
+    setFields(JSON.stringify(nextFields, null, 2));
+  }
+
+  function addField(fieldType: string) {
+    if (fieldsPreview.error) {
+      setError(fieldsPreview.error);
+      return;
+    }
+    const current = fieldsPreview.fields;
+    const fieldName = uniqueFieldName(current, fieldType);
+    updateFields([
+      ...current,
+      {
+        name: fieldName,
+        type: fieldType,
+        required: false,
+        unique: false,
+        hidden: false,
+        system: false
+      }
+    ]);
+  }
+
+  function removeField(index: number) {
+    if (fieldsPreview.error) {
+      setError(fieldsPreview.error);
+      return;
+    }
+    updateFields(fieldsPreview.fields.filter((_, currentIndex) => currentIndex !== index));
+  }
+
   return (
     <Modal title={state.mode === "edit" ? `Edit ${collection?.name}` : "New collection"} onClose={onClose} wide>
       <form className="modal-grid" onSubmit={submit}>
@@ -2586,10 +2620,59 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
             </select>
           </label>
         </div>
-        <label>
-          Fields JSON
-          <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
-        </label>
+        <section className="field-builder-panel">
+          <header>
+            <div>
+              <strong>Fields</strong>
+              <span>{fieldsPreview.error ? "Invalid fields JSON" : `${fieldsPreview.fields.length} configured fields`}</span>
+            </div>
+            <div className="field-builder-actions">
+              {["text", "number", "bool", "email", "file", "json", "relation"].map((fieldType) => (
+                <button className="subtle" type="button" key={fieldType} onClick={() => addField(fieldType)}>
+                  <Plus size={14} />
+                  {fieldType}
+                </button>
+              ))}
+            </div>
+          </header>
+          {fieldsPreview.error ? (
+            <p className="form-error">{fieldsPreview.error}</p>
+          ) : (
+            <div className="field-builder-list">
+              {fieldsPreview.fields.length === 0 ? (
+                <p className="sidebar-empty">No fields configured</p>
+              ) : (
+                fieldsPreview.fields.map((field, index) => (
+                  <article className="field-builder-row" key={`${field.name}-${index}`}>
+                    <div>
+                      <strong>{field.name || "(unnamed)"}</strong>
+                      <span>{field.type || "unknown"}</span>
+                    </div>
+                    <div className="chips">
+                      {field.required && <span>required</span>}
+                      {field.unique && <span>unique</span>}
+                      {field.hidden && <span>hidden</span>}
+                      {field.system && <span>system</span>}
+                    </div>
+                    <button
+                      className="icon-button danger"
+                      type="button"
+                      onClick={() => removeField(index)}
+                      title="Remove field"
+                      aria-label="Remove field"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </article>
+                ))
+              )}
+            </div>
+          )}
+          <label>
+            Fields JSON
+            <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
+          </label>
+        </section>
         {type === "auth" && (
           <section className="auth-config-grid">
             <article className="auth-config-card">
@@ -2806,9 +2889,35 @@ type RecordModalProps = {
 
 function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps) {
   const fileFields = (collection.fields ?? []).filter((field) => field.type === "file" && !field.hidden);
+  const editableFields = (collection.fields ?? []).filter(
+    (field) => field.type !== "file" && !field.hidden && !field.system
+  );
+  const [payload, setPayload] = useState<Record<string, unknown>>(() => recordEditorPayload(collection, state.record));
   const [json, setJson] = useState(JSON.stringify(recordEditorPayload(collection, state.record), null, 2));
   const [files, setFiles] = useState<Record<string, File[]>>({});
   const [error, setError] = useState("");
+
+  function updatePayload(field: FieldSchema, value: unknown) {
+    setPayload((current) => {
+      const next = { ...current, [field.name]: value };
+      setJson(JSON.stringify(next, null, 2));
+      return next;
+    });
+    setError("");
+  }
+
+  function updateJson(value: string) {
+    setJson(value);
+    try {
+      const parsed = JSON.parse(value || "{}") as Record<string, unknown>;
+      if (isPlainObject(parsed)) {
+        setPayload(parsed);
+        setError("");
+      }
+    } catch {
+      // Keep the raw JSON text so the submit path can surface the exact validation error.
+    }
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2824,27 +2933,55 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
   return (
     <Modal title={state.record ? `Edit ${state.record.id}` : `New ${collection.name}`} onClose={onClose} wide>
       <form className="modal-grid" onSubmit={submit}>
-        <label>
-          JSON
-          <textarea value={json} onChange={(event) => setJson(event.target.value)} spellCheck={false} />
-        </label>
-        {fileFields.length > 0 && (
-          <div className="file-upload-grid">
-            {fileFields.map((field) => (
-              <label key={field.name}>
-                {field.name}
-                <input
-                  type="file"
-                  multiple={maxFiles(field) > 1}
-                  accept={(field.mimeTypes ?? []).join(",")}
-                  onChange={(event) =>
-                    setFiles({ ...files, [field.name]: Array.from(event.target.files ?? []) })
-                  }
-                />
-              </label>
-            ))}
-          </div>
-        )}
+        <div className="record-editor-layout">
+          <section className="record-form-panel">
+            <div className="section-heading compact">
+              <div>
+                <h2>Fields</h2>
+                <p>{editableFields.length} editable fields</p>
+              </div>
+            </div>
+            <div className="record-field-grid">
+              {editableFields.length === 0 ? (
+                <p className="sidebar-empty">No editable fields</p>
+              ) : (
+                editableFields.map((field) => (
+                  <RecordFieldControl
+                    key={field.name}
+                    field={field}
+                    value={payload[field.name]}
+                    onChange={(value) => updatePayload(field, value)}
+                  />
+                ))
+              )}
+            </div>
+
+            {fileFields.length > 0 && (
+              <div className="file-upload-grid record-file-grid">
+                {fileFields.map((field) => (
+                  <label key={field.name}>
+                    {field.name}
+                    <input
+                      type="file"
+                      multiple={maxFiles(field) > 1}
+                      accept={(field.mimeTypes ?? []).join(",")}
+                      onChange={(event) =>
+                        setFiles({ ...files, [field.name]: Array.from(event.target.files ?? []) })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="record-json-panel">
+            <label>
+              JSON
+              <textarea value={json} onChange={(event) => updateJson(event.target.value)} spellCheck={false} />
+            </label>
+          </section>
+        </div>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button type="button" className="subtle" onClick={onClose}>
@@ -2858,6 +2995,107 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
         </div>
       </form>
     </Modal>
+  );
+}
+
+type RecordFieldControlProps = {
+  field: FieldSchema;
+  value: unknown;
+  onChange: (value: unknown) => void;
+};
+
+function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps) {
+  const commonMeta = (
+    <span className="record-field-meta">
+      {field.type}
+      {field.required ? " / required" : ""}
+      {field.unique ? " / unique" : ""}
+    </span>
+  );
+
+  if (field.type === "bool") {
+    return (
+      <label className="record-field-card checkbox-field">
+        <span>
+          <strong>{field.name}</strong>
+          {commonMeta}
+        </span>
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+      </label>
+    );
+  }
+
+  if (field.type === "number" || field.type === "autonumber") {
+    return (
+      <label className="record-field-card">
+        <span>
+          <strong>{field.name}</strong>
+          {commonMeta}
+        </span>
+        <input
+          type="number"
+          value={value === undefined || value === null ? "" : String(value)}
+          onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+        />
+      </label>
+    );
+  }
+
+  if (field.type === "json") {
+    return (
+      <label className="record-field-card wide">
+        <span>
+          <strong>{field.name}</strong>
+          {commonMeta}
+        </span>
+        <textarea
+          className="compact-textarea"
+          value={value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+          onChange={(event) => {
+            const raw = event.target.value;
+            try {
+              onChange(raw.trim() ? JSON.parse(raw) : null);
+            } catch {
+              onChange(raw);
+            }
+          }}
+          spellCheck={false}
+        />
+      </label>
+    );
+  }
+
+  if (field.type === "editor") {
+    return (
+      <label className="record-field-card wide">
+        <span>
+          <strong>{field.name}</strong>
+          {commonMeta}
+        </span>
+        <textarea
+          className="compact-textarea"
+          value={value === undefined || value === null ? "" : String(value)}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </label>
+    );
+  }
+
+  const inputType = field.type === "email" ? "email" : field.type === "url" ? "url" : field.type === "password" ? "password" : "text";
+  const relationMulti = field.type === "relation" && maxFiles(field) > 1;
+  return (
+    <label className="record-field-card">
+      <span>
+        <strong>{field.name}</strong>
+        {commonMeta}
+      </span>
+      <input
+        type={inputType}
+        value={fieldInputValue(value)}
+        placeholder={relationMulti ? "id1, id2" : ""}
+        onChange={(event) => onChange(relationMulti ? splitCsv(event.target.value) : event.target.value)}
+      />
+    </label>
   );
 }
 
@@ -3185,6 +3423,36 @@ function readStringArrayRecord(key: string) {
   } catch {
     return {};
   }
+}
+
+function parseFieldsPreview(value: string) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    if (!Array.isArray(parsed)) return { fields: [] as FieldSchema[], error: "Fields must be an array." };
+    return { fields: parsed as FieldSchema[], error: "" };
+  } catch (error) {
+    return { fields: [] as FieldSchema[], error: errorMessage(error) };
+  }
+}
+
+function uniqueFieldName(fields: FieldSchema[], type: string) {
+  const base = type.replace(/[^A-Za-z0-9_]/g, "_") || "field";
+  const existing = new Set(fields.map((field) => field.name));
+  if (!existing.has(base)) return base;
+  let index = fields.length + 1;
+  while (existing.has(`${base}_${index}`)) index++;
+  return `${base}_${index}`;
+}
+
+function fieldInputValue(value: unknown) {
+  if (value === undefined || value === null) return "";
+  if (Array.isArray(value)) return value.map(String).join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function splitCsv(value: string) {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function errorMessage(error: unknown) {
