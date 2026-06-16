@@ -690,7 +690,7 @@ function App() {
     }
   }
 
-  async function saveRecord(payload: Record<string, unknown>, files: Record<string, File[]>) {
+  async function saveRecord(payload: Record<string, unknown>, files: Record<string, File[]>, options: { close?: boolean } = {}) {
     if (!selected) return;
     try {
       const body = recordRequestBody(payload, files);
@@ -698,12 +698,17 @@ function App() {
       const path = id
         ? `/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`
         : `/api/collections/${encodeURIComponent(selected.name)}/records`;
-      await api(path, { method: id ? "PATCH" : "POST", body });
+      const saved = await api<RecordItem>(path, { method: id ? "PATCH" : "POST", body });
       notify(id ? "Record saved" : "Record created");
-      setRecordEditor(null);
+      if (options.close !== false) {
+        setRecordEditor(null);
+      } else {
+        setRecordEditor({ record: saved });
+      }
       await refreshRecords(selected.name);
     } catch (error) {
       notify(errorMessage(error), "error");
+      throw error;
     }
   }
 
@@ -1276,6 +1281,8 @@ function AuthPanel(props: AuthPanelProps) {
         <label>
           Email
           <input
+            id="superuser-email"
+            name="email"
             type="email"
             autoComplete="username"
             required
@@ -1286,6 +1293,8 @@ function AuthPanel(props: AuthPanelProps) {
         <label>
           Password
           <input
+            id="superuser-password"
+            name="password"
             type="password"
             autoComplete={props.setupRequired ? "new-password" : "current-password"}
             required
@@ -1333,7 +1342,14 @@ function CollectionSidebar(props: CollectionSidebarProps) {
 
       <div className="search-box">
         <Search size={15} />
-        <input value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="Search collections" />
+        <input
+          id="collection-search"
+          name="collectionSearch"
+          autoComplete="off"
+          value={props.search}
+          onChange={(event) => props.onSearch(event.target.value)}
+          placeholder="Search collections"
+        />
       </div>
 
       <CollectionGroup
@@ -1523,6 +1539,9 @@ function RecordsView(props: RecordsViewProps) {
           <label>
             Filter
             <input
+              id="records-filter"
+              name="filter"
+              autoComplete="off"
               value={draft.filter}
               onChange={(event) => setDraft({ ...draft, filter: event.target.value })}
               placeholder='published = true'
@@ -1530,11 +1549,19 @@ function RecordsView(props: RecordsViewProps) {
           </label>
           <label>
             Sort
-            <input value={draft.sort} onChange={(event) => setDraft({ ...draft, sort: event.target.value })} />
+            <input
+              id="records-sort"
+              name="sort"
+              autoComplete="off"
+              value={draft.sort}
+              onChange={(event) => setDraft({ ...draft, sort: event.target.value })}
+            />
           </label>
           <label>
             Per page
             <select
+              id="records-per-page"
+              name="perPage"
               value={draft.perPage}
               onChange={(event) => setDraft({ ...draft, perPage: Number(event.target.value) })}
             >
@@ -2979,7 +3006,11 @@ type RecordModalProps = {
   collection: CollectionSchema;
   state: RecordEditorState;
   onClose: () => void;
-  onSubmit: (payload: Record<string, unknown>, files: Record<string, File[]>) => void;
+  onSubmit: (
+    payload: Record<string, unknown>,
+    files: Record<string, File[]>,
+    options?: { close?: boolean }
+  ) => Promise<void> | void;
 };
 
 function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps) {
@@ -2987,10 +3018,27 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
   const editableFields = (collection.fields ?? []).filter(
     (field) => field.type !== "file" && !field.hidden && !field.system
   );
-  const [payload, setPayload] = useState<Record<string, unknown>>(() => recordEditorPayload(collection, state.record));
-  const [json, setJson] = useState(JSON.stringify(recordEditorPayload(collection, state.record), null, 2));
+  const initialPayload = useMemo(() => recordEditorPayload(collection, state.record), [collection, state.record]);
+  const draftKey = `pbj_record_draft_${collection.id || collection.name}_${state.record?.id || "new"}`;
+  const [basePayload, setBasePayload] = useState<Record<string, unknown>>(() => initialPayload);
+  const [payload, setPayload] = useState<Record<string, unknown>>(() => initialPayload);
+  const [json, setJson] = useState(JSON.stringify(initialPayload, null, 2));
+  const [initialDraft, setInitialDraft] = useState<Record<string, unknown> | null>(() => readRecordDraft(draftKey));
+  const [activeTab, setActiveTab] = useState<"main" | "providers">("main");
   const [files, setFiles] = useState<Record<string, File[]>>({});
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const showTabs = Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
+  const changed = JSON.stringify(payload) !== JSON.stringify(basePayload) || Object.values(files).some((items) => items.length > 0);
+
+  useEffect(() => {
+    if (!changed) return;
+    localStorage.setItem(draftKey, JSON.stringify(payload));
+  }, [changed, draftKey, payload]);
+
+  useEffect(() => {
+    if (!showTabs && activeTab !== "main") setActiveTab("main");
+  }, [activeTab, showTabs]);
 
   function updatePayload(field: FieldSchema, value: unknown) {
     setPayload((current) => {
@@ -3014,82 +3062,187 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
     }
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function restoreDraft() {
+    if (!initialDraft) return;
+    setPayload(initialDraft);
+    setJson(JSON.stringify(initialDraft, null, 2));
+    setInitialDraft(null);
+    setError("");
+  }
+
+  function discardDraft() {
+    localStorage.removeItem(draftKey);
+    setInitialDraft(null);
+  }
+
+  function resetForm() {
+    setPayload(basePayload);
+    setJson(JSON.stringify(basePayload, null, 2));
+    setFiles({});
+    localStorage.removeItem(draftKey);
+    setInitialDraft(null);
+    setError("");
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement> | null, close = true) {
+    event?.preventDefault();
+    if (saving) return;
+    setSaving(true);
     try {
-      const payload = JSON.parse(json || "{}") as Record<string, unknown>;
-      if (!isPlainObject(payload)) throw new Error("Record payload must be an object.");
-      onSubmit(payload, files);
+      const parsedPayload = JSON.parse(json || "{}") as Record<string, unknown>;
+      if (!isPlainObject(parsedPayload)) throw new Error("Record payload must be an object.");
+      await onSubmit(parsedPayload, files, { close });
+      setBasePayload(parsedPayload);
+      setPayload(parsedPayload);
+      setFiles({});
+      localStorage.removeItem(draftKey);
+      setInitialDraft(null);
     } catch (err) {
       setError(errorMessage(err));
+    } finally {
+      setSaving(false);
     }
   }
 
   return (
     <Modal title={state.record ? `Edit ${state.record.id}` : `New ${collection.name}`} onClose={onClose} wide>
-      <form className="modal-grid" onSubmit={submit}>
-        <div className="record-editor-layout">
-          <section className="record-form-panel">
-            <div className="section-heading compact">
-              <div>
-                <h2>Fields</h2>
-                <p>{editableFields.length} editable fields</p>
-              </div>
+      <form className="modal-grid record-upsert-form" onSubmit={(event) => submit(event, true)}>
+        {initialDraft && (
+          <div className="draft-alert">
+            <div>
+              <strong>Unsaved draft</strong>
+              <span>This record has locally saved changes.</span>
             </div>
-            <div className="record-field-grid">
-              {editableFields.length === 0 ? (
-                <p className="sidebar-empty">No editable fields</p>
-              ) : (
-                editableFields.map((field) => (
-                  <RecordFieldControl
-                    key={field.name}
-                    field={field}
-                    value={payload[field.name]}
-                    onChange={(value) => updatePayload(field, value)}
-                  />
-                ))
-              )}
-            </div>
+            <button type="button" className="subtle" onClick={restoreDraft}>
+              <RotateCcw size={15} />
+              Restore draft
+            </button>
+            <button type="button" className="icon-button" onClick={discardDraft} title="Discard draft" aria-label="Discard draft">
+              <X size={15} />
+            </button>
+          </div>
+        )}
 
-            {fileFields.length > 0 && (
-              <div className="file-upload-grid record-file-grid">
-                {fileFields.map((field) => (
-                  <label key={field.name}>
-                    {field.name}
-                    <input
-                      type="file"
-                      multiple={maxFiles(field) > 1}
-                      accept={(field.mimeTypes ?? []).join(",")}
-                      onChange={(event) =>
-                        setFiles({ ...files, [field.name]: Array.from(event.target.files ?? []) })
-                      }
+        {showTabs && (
+          <nav className="record-modal-tabs" aria-label="Record editor tabs">
+            <button type="button" className={activeTab === "main" ? "active" : ""} onClick={() => setActiveTab("main")}>
+              Account
+              {changed && activeTab !== "main" && <span className="tab-dot" />}
+            </button>
+            <button
+              type="button"
+              className={activeTab === "providers" ? "active" : ""}
+              onClick={() => setActiveTab("providers")}
+            >
+              Auth providers
+            </button>
+          </nav>
+        )}
+
+        {activeTab === "providers" ? (
+          <AuthProvidersPanel collection={collection} record={state.record} />
+        ) : (
+          <div className="record-editor-layout">
+            <section className="record-form-panel">
+              <div className="section-heading compact">
+                <div>
+                  <h2>{collection.type === "auth" ? "Account" : "Fields"}</h2>
+                  <p>{editableFields.length} editable fields</p>
+                </div>
+              </div>
+              <div className="record-field-grid">
+                {editableFields.length === 0 ? (
+                  <p className="sidebar-empty">No editable fields</p>
+                ) : (
+                  editableFields.map((field) => (
+                    <RecordFieldControl
+                      key={field.name}
+                      field={field}
+                      value={payload[field.name]}
+                      onChange={(value) => updatePayload(field, value)}
                     />
-                  </label>
-                ))}
+                  ))
+                )}
               </div>
-            )}
-          </section>
 
-          <section className="record-json-panel">
-            <label>
-              JSON
-              <textarea value={json} onChange={(event) => updateJson(event.target.value)} spellCheck={false} />
-            </label>
-          </section>
-        </div>
+              {fileFields.length > 0 && (
+                <div className="file-upload-grid record-file-grid">
+                  {fileFields.map((field) => (
+                    <label key={field.name}>
+                      {field.name}
+                      <input
+                        name={field.name}
+                        type="file"
+                        multiple={maxFiles(field) > 1}
+                        accept={(field.mimeTypes ?? []).join(",")}
+                        onChange={(event) =>
+                          setFiles({ ...files, [field.name]: Array.from(event.target.files ?? []) })
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="record-json-panel">
+              <label>
+                JSON
+                <textarea
+                  name={`${collection.name}RecordJson`}
+                  value={json}
+                  onChange={(event) => updateJson(event.target.value)}
+                  spellCheck={false}
+                />
+              </label>
+            </section>
+          </div>
+        )}
         {error && <p className="form-error">{error}</p>}
-        <div className="modal-actions">
+        <div className="modal-actions record-footer-actions">
           <button type="button" className="subtle" onClick={onClose}>
             <X size={16} />
-            Cancel
+            Close
           </button>
-          <button className="primary" type="submit">
+          <button type="button" className="subtle" onClick={resetForm} disabled={!changed || saving}>
+            <RotateCcw size={16} />
+            Reset form
+          </button>
+          <span className="modal-actions-spacer" />
+          <button className="primary" type="submit" disabled={saving}>
             <Save size={16} />
-            Save
+            {state.record ? "Save changes" : "Create"}
+          </button>
+          <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={saving}>
+            Save and continue
           </button>
         </div>
       </form>
     </Modal>
+  );
+}
+
+function AuthProvidersPanel({ collection, record }: { collection: CollectionSchema; record?: RecordItem }) {
+  const providers = collection.oauth2?.providers ?? [];
+  return (
+    <section className="auth-providers-panel">
+      {providers.length === 0 ? (
+        <EmptyState icon={Shield} title="No auth providers configured" />
+      ) : (
+        providers.map((provider) => (
+          <article className="auth-provider-row" key={provider.name}>
+            <div className="nav-icon">
+              <Shield size={16} />
+            </div>
+            <div>
+              <strong>{provider.name}</strong>
+              <span>{provider.clientId ? "configured" : "missing credentials"}</span>
+            </div>
+            <code>{String(record?.[`${provider.name}Id`] ?? "not linked")}</code>
+          </article>
+        ))
+      )}
+    </section>
   );
 }
 
@@ -3115,7 +3268,7 @@ function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps)
           <strong>{field.name}</strong>
           {commonMeta}
         </span>
-        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        <input name={field.name} type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
       </label>
     );
   }
@@ -3128,6 +3281,8 @@ function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps)
           {commonMeta}
         </span>
         <input
+          name={field.name}
+          autoComplete="off"
           type="number"
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
@@ -3144,6 +3299,7 @@ function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps)
           {commonMeta}
         </span>
         <textarea
+          name={field.name}
           className="compact-textarea"
           value={value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2)}
           onChange={(event) => {
@@ -3168,6 +3324,7 @@ function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps)
           {commonMeta}
         </span>
         <textarea
+          name={field.name}
           className="compact-textarea"
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value)}
@@ -3185,6 +3342,8 @@ function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps)
         {commonMeta}
       </span>
       <input
+        name={field.name}
+        autoComplete="off"
         type={inputType}
         value={fieldInputValue(value)}
         placeholder={relationMulti ? "id1, id2" : ""}
@@ -3517,6 +3676,16 @@ function readStringArrayRecord(key: string) {
     );
   } catch {
     return {};
+  }
+}
+
+function readRecordDraft(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    localStorage.removeItem(key);
+    return null;
   }
 }
 
