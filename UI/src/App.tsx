@@ -1,25 +1,34 @@
 import {
   Activity,
   Archive,
-  Check,
+  CheckSquare2,
   ChevronRight,
   Clock3,
+  Code2,
+  Columns3,
   Copy,
   Database,
   Download,
   Edit3,
   FileArchive,
   FileUp,
+  HardDrive,
   KeyRound,
   ListFilter,
   LogOut,
+  Mail,
+  Pin,
+  PinOff,
   Plus,
   Play,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
+  Server,
   Settings,
   Shield,
+  Square,
   Trash2,
   Upload,
   X
@@ -200,13 +209,36 @@ type CronJob = {
   expression: string;
 };
 
+type SqlColumn = {
+  name: string;
+  type?: string;
+  nullable?: boolean;
+};
+
+type SqlResult = {
+  columns?: SqlColumn[];
+  rows?: unknown[][];
+  affectedRows?: number;
+};
+
 type QueryState = {
   filter: string;
   sort: string;
   perPage: number;
 };
 
-type ViewName = "records" | "schema" | "backups" | "settings" | "logs" | "crons";
+type ViewName =
+  | "records"
+  | "schema"
+  | "settings"
+  | "mail"
+  | "storage"
+  | "backups"
+  | "crons"
+  | "export"
+  | "import"
+  | "sql"
+  | "logs";
 
 type CollectionEditorState = {
   mode: "create" | "edit";
@@ -232,6 +264,8 @@ type ApiOptions = Omit<RequestInit, "body"> & {
 };
 
 const TOKEN_KEY = "pbj_token";
+const PINNED_COLLECTIONS_KEY = "pbj_pinned_collections";
+const HIDDEN_COLUMNS_KEY = "pbj_hidden_columns";
 const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
@@ -264,11 +298,28 @@ function App() {
   const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
   const [oauthResult, setOauthResult] = useState<OAuthResultState | null>(null);
   const [oauthTestingProvider, setOauthTestingProvider] = useState<string>("");
+  const [pinnedCollectionNames, setPinnedCollectionNames] = useState<string[]>(() =>
+    readStringArray(PINNED_COLLECTIONS_KEY)
+  );
+  const [hiddenColumnsByCollection, setHiddenColumnsByCollection] = useState<Record<string, string[]>>(() =>
+    readStringArrayRecord(HIDDEN_COLUMNS_KEY)
+  );
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [sqlQuery, setSqlQuery] = useState("select 1");
+  const [sqlResult, setSqlResult] = useState<SqlResult | null>(null);
+  const [sqlError, setSqlError] = useState("");
+  const [exportDraft, setExportDraft] = useState("");
+  const [importDraft, setImportDraft] = useState("");
+  const [deleteMissingCollections, setDeleteMissingCollections] = useState(false);
+  const [testEmail, setTestEmail] = useState("");
+  const [testEmailTemplate, setTestEmailTemplate] = useState("verification");
+  const [testS3Target, setTestS3Target] = useState("storage");
   const backupUploadRef = useRef<HTMLInputElement>(null);
 
   const setupRequired = health ? !health.superuserReady : false;
   const authenticated = Boolean(token) && !setupRequired;
   const collectionView = view === "records" || view === "schema";
+  const settingsView = isSettingsView(view);
   const selected = useMemo(
     () => collections.find((collection) => collection.name === selectedName) ?? null,
     [collections, selectedName]
@@ -281,6 +332,11 @@ function App() {
       return collection.name.toLowerCase().includes(search) || collection.type.toLowerCase().includes(search);
     });
   }, [collectionSearch, collections]);
+
+  const hiddenColumns = useMemo(() => {
+    if (!selected) return [];
+    return hiddenColumnsByCollection[selected.name] ?? [];
+  }, [hiddenColumnsByCollection, selected]);
 
   const notify = useCallback((message: string, kind: ToastState["kind"] = "ok") => {
     setToast({ message, kind });
@@ -436,6 +492,18 @@ function App() {
   }, [refreshAll]);
 
   useEffect(() => {
+    localStorage.setItem(PINNED_COLLECTIONS_KEY, JSON.stringify(pinnedCollectionNames));
+  }, [pinnedCollectionNames]);
+
+  useEffect(() => {
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(hiddenColumnsByCollection));
+  }, [hiddenColumnsByCollection]);
+
+  useEffect(() => {
+    setSelectedRecordIds([]);
+  }, [records, selectedName]);
+
+  useEffect(() => {
     if (authenticated && selectedName && view === "records") {
       refreshRecords(selectedName).catch((error) => notify(errorMessage(error), "error"));
     }
@@ -448,10 +516,16 @@ function App() {
   }, [authenticated, notify, refreshBackups, view]);
 
   useEffect(() => {
-    if (authenticated && view === "settings") {
+    if (authenticated && (view === "settings" || view === "mail" || view === "storage")) {
       refreshSettings().catch((error) => notify(errorMessage(error), "error"));
     }
   }, [authenticated, notify, refreshSettings, view]);
+
+  useEffect(() => {
+    if (authenticated && view === "export") {
+      setExportDraft(JSON.stringify(collections, null, 2));
+    }
+  }, [authenticated, collections, view]);
 
   useEffect(() => {
     if (authenticated && view === "logs") {
@@ -532,6 +606,9 @@ function App() {
     setAuthMethods(null);
     setOauthResult(null);
     setOauthTestingProvider("");
+    setSelectedRecordIds([]);
+    setSqlResult(null);
+    setSqlError("");
     setSelectedName("");
     setView("records");
   }
@@ -642,6 +719,69 @@ function App() {
     }
   }
 
+  async function deleteSelectedRecords() {
+    if (!selected || selectedRecordIds.length === 0) return;
+    if (!window.confirm(`Delete ${selectedRecordIds.length} selected records?`)) return;
+    try {
+      await Promise.all(
+        selectedRecordIds.map((id) =>
+          api(`/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`, {
+            method: "DELETE"
+          })
+        )
+      );
+      notify("Records deleted");
+      setSelectedRecordIds([]);
+      await refreshRecords(selected.name);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  function togglePinnedCollection(collection: CollectionSchema) {
+    setPinnedCollectionNames((current) => {
+      if (current.includes(collection.name)) return current.filter((name) => name !== collection.name);
+      return [collection.name, ...current];
+    });
+  }
+
+  function toggleRecordSelection(id: string) {
+    setSelectedRecordIds((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+      return [...current, id];
+    });
+  }
+
+  function toggleCurrentPageSelection(checked: boolean) {
+    if (!checked) {
+      setSelectedRecordIds([]);
+      return;
+    }
+    setSelectedRecordIds(records.map((record) => record.id));
+  }
+
+  function toggleColumn(column: string) {
+    if (!selected) return;
+    setHiddenColumnsByCollection((current) => {
+      const existing = new Set(current[selected.name] ?? []);
+      if (existing.has(column)) {
+        existing.delete(column);
+      } else {
+        existing.add(column);
+      }
+      return { ...current, [selected.name]: Array.from(existing) };
+    });
+  }
+
+  function resetColumns() {
+    if (!selected) return;
+    setHiddenColumnsByCollection((current) => {
+      const next = { ...current };
+      delete next[selected.name];
+      return next;
+    });
+  }
+
   async function openFile(record: RecordItem, filename: string) {
     if (!selected) return;
     try {
@@ -740,6 +880,76 @@ function App() {
     }
   }
 
+  async function testEmailSettings() {
+    try {
+      await api("/api/settings/test/email", {
+        method: "POST",
+        body: {
+          email: testEmail.trim(),
+          template: testEmailTemplate || "verification"
+        }
+      });
+      notify("Test email queued");
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function testS3Settings() {
+    try {
+      await api("/api/settings/test/s3", {
+        method: "POST",
+        body: {
+          filesystem: testS3Target
+        }
+      });
+      notify("S3 connection check completed");
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function importCollections() {
+    try {
+      const parsed = JSON.parse(importDraft || "{}");
+      const collectionsPayload = Array.isArray(parsed)
+        ? parsed
+        : isPlainObject(parsed) && Array.isArray(parsed.collections)
+          ? parsed.collections
+          : null;
+      if (!collectionsPayload) throw new Error("Import JSON must be an array or an object with collections.");
+      await api("/api/collections/import", {
+        method: "PUT",
+        body: {
+          deleteMissing: deleteMissingCollections,
+          collections: collectionsPayload
+        }
+      });
+      notify("Collections imported");
+      await refreshCollections();
+      setExportDraft(JSON.stringify(collectionsPayload, null, 2));
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function runSql() {
+    setSqlError("");
+    setLoading(true);
+    try {
+      const result = await api<SqlResult>("/api/sql", { method: "POST", body: { query: sqlQuery } });
+      setSqlResult(result);
+      notify("SQL executed");
+      await refreshCollections();
+    } catch (error) {
+      const message = errorMessage(error);
+      setSqlError(message);
+      notify(message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function runCron(job: CronJob) {
     setLoading(true);
     try {
@@ -752,212 +962,170 @@ function App() {
     }
   }
 
-  const columns = useMemo(() => recordColumns(selected), [selected]);
-  const pageTitle =
-    view === "backups"
-      ? "Backups"
-      : view === "settings"
-        ? "Settings"
-        : view === "logs"
-          ? "Logs"
-          : view === "crons"
-            ? "Crons"
-            : selected?.name ?? "Collections";
-  const pageEyebrow =
-    view === "backups"
-      ? "Maintenance"
-      : view === "settings"
-        ? "System"
-        : view === "logs"
-          ? "Observability"
-          : view === "crons"
-            ? "Scheduler"
-            : selected?.type ?? "Admin console";
+  const allColumns = useMemo(() => recordColumns(selected), [selected]);
+  const columns = useMemo(
+    () => allColumns.filter((column) => !hiddenColumns.includes(column)),
+    [allColumns, hiddenColumns]
+  );
+  const pageMeta = viewMeta(view, selected);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">PB</div>
-          <div>
-            <strong>pocketbase-java</strong>
-            <span>{health ? (setupRequired ? "setup" : "ready") : "checking"}</span>
-          </div>
-        </div>
-
-        <div className="search-box">
-          <Search size={15} />
-          <input
-            value={collectionSearch}
-            onChange={(event) => setCollectionSearch(event.target.value)}
-            placeholder="Search collections"
-          />
-        </div>
-
-        <nav className="collection-nav" aria-label="Collections">
-          {visibleCollections.map((collection) => (
-            <button
-              key={collection.id || collection.name}
-              className={selectedName === collection.name && collectionView ? "active" : ""}
-              onClick={() => {
-                setSelectedName(collection.name);
-                setView("records");
-              }}
-              disabled={!authenticated}
-            >
-              <span className="nav-icon">{collection.type === "auth" ? <Shield size={16} /> : <Database size={16} />}</span>
-              <span className="nav-text">
-                <strong>{collection.name}</strong>
-                <small>{collection.type}</small>
-              </span>
-              <ChevronRight size={15} />
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-actions">
-          <button className="primary" onClick={() => setCollectionEditor({ mode: "create" })} disabled={!authenticated}>
-            <Plus size={16} />
-            Collection
-          </button>
+      <header className="app-header">
+        <button
+          className="logo"
+          onClick={() => {
+            if (selectedName) setView("records");
+          }}
+          aria-label="Open collections"
+        >
+          <span className="brand-mark">PB</span>
+          <span className="brand-title">pocketbase-java</span>
+        </button>
+        <nav className="app-main-nav" aria-label="Primary">
           <button
-            className={view === "backups" ? "active subtle" : "subtle"}
-            onClick={() => setView("backups")}
-            disabled={!authenticated}
+            className={collectionView ? "header-link active" : "header-link"}
+            onClick={() => setView("records")}
+            disabled={!authenticated || !selectedName}
           >
-            <FileArchive size={16} />
-            Backups
+            <Database size={15} />
+            Collections
           </button>
           <button
-            className={view === "settings" ? "active subtle" : "subtle"}
-            onClick={() => setView("settings")}
-            disabled={!authenticated}
-          >
-            <Settings size={16} />
-            Settings
-          </button>
-          <button
-            className={view === "logs" ? "active subtle" : "subtle"}
+            className={view === "logs" ? "header-link active" : "header-link"}
             onClick={() => setView("logs")}
             disabled={!authenticated}
           >
-            <Activity size={16} />
+            <Activity size={15} />
             Logs
           </button>
           <button
-            className={view === "crons" ? "active subtle" : "subtle"}
-            onClick={() => setView("crons")}
+            className={settingsView ? "header-link active" : "header-link"}
+            onClick={() => setView("settings")}
             disabled={!authenticated}
           >
-            <Clock3 size={16} />
-            Crons
+            <Settings size={15} />
+            Settings
+          </button>
+        </nav>
+        <div className="header-tools">
+          <StatusPill health={health} loading={loading} />
+          <button className="icon-button header-icon" onClick={refreshAll} title="Refresh" aria-label="Refresh">
+            <RefreshCw size={17} />
+          </button>
+          <button className="icon-button header-icon danger" onClick={logout} title="Logout" aria-label="Logout" disabled={!token}>
+            <LogOut size={17} />
           </button>
         </div>
-      </aside>
+      </header>
 
-      <main className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">{pageEyebrow}</p>
-            <h1>{pageTitle}</h1>
-          </div>
-          <div className="top-actions">
-            <StatusPill health={health} loading={loading} />
-            <button className="icon-button" onClick={refreshAll} title="Refresh" aria-label="Refresh">
-              <RefreshCw size={17} />
-            </button>
-            <button className="icon-button danger" onClick={logout} title="Logout" aria-label="Logout" disabled={!token}>
-              <LogOut size={17} />
-            </button>
-          </div>
-        </header>
-
-        {!authenticated ? (
-          <AuthPanel
-            setupRequired={setupRequired}
-            email={authEmail}
-            password={authPassword}
-            loading={loading}
-            dataDir={health?.dataDir}
-            onEmail={setAuthEmail}
-            onPassword={setAuthPassword}
-            onSubmit={handleAuth}
+      <div className={view === "logs" ? "app-body app-body-wide" : "app-body"}>
+        {authenticated && !setupRequired && collectionView && (
+          <CollectionSidebar
+            collections={visibleCollections}
+            currentName={selectedName}
+            pinnedNames={pinnedCollectionNames}
+            search={collectionSearch}
+            onSearch={setCollectionSearch}
+            onCreate={() => setCollectionEditor({ mode: "create" })}
+            onSelect={(collection) => {
+              setSelectedName(collection.name);
+              setView("records");
+            }}
+            onTogglePinned={togglePinnedCollection}
           />
-        ) : (
-          <>
-            {collectionView && (
-              <div className="view-tabs" role="tablist" aria-label="Collection views">
-                <button className={view === "records" ? "active" : ""} onClick={() => setView("records")}>
-                  <Database size={16} />
-                  Records
-                </button>
-                <button className={view === "schema" ? "active" : ""} onClick={() => setView("schema")}>
-                  <ListFilter size={16} />
-                  Schema
-                </button>
-              </div>
-            )}
+        )}
 
-            {view === "backups" ? (
-              <BackupView
-                backups={backups}
-                backupName={backupName}
-                canBackup={Boolean(health?.canBackup)}
-                loading={loading}
-                uploadRef={backupUploadRef}
-                onBackupName={setBackupName}
-                onCreate={createBackup}
-                onRefresh={refreshBackups}
-                onUpload={uploadBackup}
-                onDownload={downloadBackup}
-                onRestore={restoreBackup}
-                onDelete={deleteBackup}
-              />
-            ) : view === "settings" ? (
-              <SettingsView
-                settings={settings}
-                draft={settingsDraft}
-                loading={loading}
-                onDraft={setSettingsDraft}
-                onRefresh={refreshSettings}
-                onSave={saveSettings}
-              />
-            ) : view === "logs" ? (
-              <LogsView
-                logs={logs}
-                logPage={logPage}
-                filter={logFilter}
-                stats={logStats}
-                loading={loading}
-                onFilter={setLogFilter}
-                onRefresh={refreshLogs}
-              />
-            ) : view === "crons" ? (
-              <CronsView crons={crons} loading={loading} onRefresh={refreshCrons} onRun={runCron} />
-            ) : selected ? (
-              view === "records" ? (
-                <RecordsView
-                  collection={selected}
-                  records={records}
-                  columns={columns}
-                  query={query}
-                  recordPage={recordPage}
+        {authenticated && !setupRequired && settingsView && (
+          <SettingsSidebar current={view} onSelect={setView} />
+        )}
+
+        <main className="workspace">
+          <header className="topbar">
+            <div>
+              <p className="eyebrow">{pageMeta.eyebrow}</p>
+              <h1>{pageMeta.title}</h1>
+            </div>
+          </header>
+
+          {!authenticated ? (
+            <AuthPanel
+              setupRequired={setupRequired}
+              email={authEmail}
+              password={authPassword}
+              loading={loading}
+              dataDir={health?.dataDir}
+              onEmail={setAuthEmail}
+              onPassword={setAuthPassword}
+              onSubmit={handleAuth}
+            />
+          ) : (
+            <>
+              {collectionView && (
+                <div className="view-tabs" role="tablist" aria-label="Collection views">
+                  <button className={view === "records" ? "active" : ""} onClick={() => setView("records")}>
+                    <Database size={16} />
+                    Records
+                  </button>
+                  <button className={view === "schema" ? "active" : ""} onClick={() => setView("schema")}>
+                    <ListFilter size={16} />
+                    Schema
+                  </button>
+                </div>
+              )}
+
+              {view === "backups" ? (
+                <BackupView
+                  backups={backups}
+                  backupName={backupName}
+                  canBackup={Boolean(health?.canBackup)}
                   loading={loading}
-                  onQuery={setQuery}
-                  onApply={(nextQuery) => refreshRecords(selected.name, nextQuery)}
-                  onNew={() => setRecordEditor({})}
-                  onEdit={(record) => setRecordEditor({ record })}
-                  onDelete={deleteRecord}
-                  onOpenFile={openFile}
+                  uploadRef={backupUploadRef}
+                  onBackupName={setBackupName}
+                  onCreate={createBackup}
+                  onRefresh={refreshBackups}
+                  onUpload={uploadBackup}
+                  onDownload={downloadBackup}
+                  onRestore={restoreBackup}
+                  onDelete={deleteBackup}
                 />
-              ) : (
-                <SchemaView
-                  collection={selected}
-                  authMethods={authMethods}
-                  oauthTestingProvider={oauthTestingProvider}
-                  onEdit={() => setCollectionEditor({ mode: "edit", collection: selected })}
-                  onDelete={() => deleteCollection(selected)}
-                  onOAuthTest={startOAuthTest}
+              ) : view === "settings" ? (
+                <SettingsView
+                  settings={settings}
+                  draft={settingsDraft}
+                  loading={loading}
+                  onDraft={setSettingsDraft}
+                  onRefresh={refreshSettings}
+                  onSave={saveSettings}
+                />
+              ) : view === "mail" ? (
+                <MailSettingsView
+                  settings={settings}
+                  email={testEmail}
+                  template={testEmailTemplate}
+                  loading={loading}
+                  onEmail={setTestEmail}
+                  onTemplate={setTestEmailTemplate}
+                  onTest={testEmailSettings}
+                />
+              ) : view === "storage" ? (
+                <StorageSettingsView
+                  settings={settings}
+                  target={testS3Target}
+                  loading={loading}
+                  onTarget={setTestS3Target}
+                  onTest={testS3Settings}
+                />
+              ) : view === "export" ? (
+                <CollectionTransferView
+                  mode="export"
+                  draft={exportDraft}
+                  deleteMissing={deleteMissingCollections}
+                  loading={loading}
+                  onDraft={setExportDraft}
+                  onDeleteMissing={setDeleteMissingCollections}
+                  onExport={() => setExportDraft(JSON.stringify(collections, null, 2))}
+                  onImport={importCollections}
                   onCopy={(value) => {
                     navigator.clipboard.writeText(value).then(
                       () => notify("Copied"),
@@ -965,13 +1133,92 @@ function App() {
                     );
                   }}
                 />
-              )
-            ) : (
-              <EmptyState icon={Database} title="No collection selected" />
-            )}
-          </>
-        )}
-      </main>
+              ) : view === "import" ? (
+                <CollectionTransferView
+                  mode="import"
+                  draft={importDraft}
+                  deleteMissing={deleteMissingCollections}
+                  loading={loading}
+                  onDraft={setImportDraft}
+                  onDeleteMissing={setDeleteMissingCollections}
+                  onExport={() => setExportDraft(JSON.stringify(collections, null, 2))}
+                  onImport={importCollections}
+                  onCopy={(value) => {
+                    navigator.clipboard.writeText(value).then(
+                      () => notify("Copied"),
+                      (error) => notify(errorMessage(error), "error")
+                    );
+                  }}
+                />
+              ) : view === "sql" ? (
+                <SqlView
+                  query={sqlQuery}
+                  result={sqlResult}
+                  error={sqlError}
+                  loading={loading}
+                  onQuery={setSqlQuery}
+                  onRun={runSql}
+                />
+              ) : view === "logs" ? (
+                <LogsView
+                  logs={logs}
+                  logPage={logPage}
+                  filter={logFilter}
+                  stats={logStats}
+                  loading={loading}
+                  onFilter={setLogFilter}
+                  onRefresh={refreshLogs}
+                />
+              ) : view === "crons" ? (
+                <CronsView crons={crons} loading={loading} onRefresh={refreshCrons} onRun={runCron} />
+              ) : selected ? (
+                view === "records" ? (
+                  <RecordsView
+                    collection={selected}
+                    records={records}
+                    columns={columns}
+                    allColumns={allColumns}
+                    hiddenColumns={hiddenColumns}
+                    selectedIds={selectedRecordIds}
+                    query={query}
+                    recordPage={recordPage}
+                    loading={loading}
+                    onQuery={setQuery}
+                    onApply={(nextQuery) => refreshRecords(selected.name, nextQuery)}
+                    onNew={() => setRecordEditor({})}
+                    onEdit={(record) => setRecordEditor({ record })}
+                    onDelete={deleteRecord}
+                    onDeleteSelected={deleteSelectedRecords}
+                    onToggleColumn={toggleColumn}
+                    onResetColumns={resetColumns}
+                    onToggleSelected={toggleRecordSelection}
+                    onToggleAll={toggleCurrentPageSelection}
+                    onClearSelection={() => setSelectedRecordIds([])}
+                    onOpenFile={openFile}
+                  />
+                ) : (
+                  <SchemaView
+                    collection={selected}
+                    authMethods={authMethods}
+                    oauthTestingProvider={oauthTestingProvider}
+                    onEdit={() => setCollectionEditor({ mode: "edit", collection: selected })}
+                    onDelete={() => deleteCollection(selected)}
+                    onOAuthTest={startOAuthTest}
+                    onCopy={(value) => {
+                      navigator.clipboard.writeText(value).then(
+                        () => notify("Copied"),
+                        (error) => notify(errorMessage(error), "error")
+                      );
+                    }}
+                  />
+                )
+              ) : (
+                <EmptyState icon={Database} title="No collection selected" />
+              )}
+            </>
+          )}
+        </main>
+      </div>
 
       {collectionEditor && (
         <CollectionModal
@@ -1055,10 +1302,188 @@ function AuthPanel(props: AuthPanelProps) {
   );
 }
 
+type CollectionSidebarProps = {
+  collections: CollectionSchema[];
+  currentName: string;
+  pinnedNames: string[];
+  search: string;
+  onSearch: (value: string) => void;
+  onCreate: () => void;
+  onSelect: (collection: CollectionSchema) => void;
+  onTogglePinned: (collection: CollectionSchema) => void;
+};
+
+function CollectionSidebar(props: CollectionSidebarProps) {
+  const pinned = props.pinnedNames
+    .map((name) => props.collections.find((collection) => collection.name === name))
+    .filter(Boolean) as CollectionSchema[];
+  const pinnedSet = new Set(pinned.map((collection) => collection.name));
+  const regular = props.collections.filter((collection) => !pinnedSet.has(collection.name) && !isSystemCollection(collection));
+  const system = props.collections.filter((collection) => !pinnedSet.has(collection.name) && isSystemCollection(collection));
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-topline">
+        <div className="sidebar-section-title">Collections</div>
+        <button className="icon-button tiny" onClick={props.onCreate} title="New collection" aria-label="New collection">
+          <Plus size={15} />
+        </button>
+      </div>
+
+      <div className="search-box">
+        <Search size={15} />
+        <input value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="Search collections" />
+      </div>
+
+      <CollectionGroup
+        title="Pinned"
+        collections={pinned}
+        currentName={props.currentName}
+        pinnedNames={props.pinnedNames}
+        onSelect={props.onSelect}
+        onTogglePinned={props.onTogglePinned}
+        empty="Pin frequently used collections"
+      />
+      <CollectionGroup
+        title="Collections"
+        collections={regular}
+        currentName={props.currentName}
+        pinnedNames={props.pinnedNames}
+        onSelect={props.onSelect}
+        onTogglePinned={props.onTogglePinned}
+        empty="No collections"
+      />
+      <CollectionGroup
+        title="System"
+        collections={system}
+        currentName={props.currentName}
+        pinnedNames={props.pinnedNames}
+        onSelect={props.onSelect}
+        onTogglePinned={props.onTogglePinned}
+        empty="No system collections"
+      />
+
+      <div className="sidebar-actions">
+        <button className="primary" onClick={props.onCreate}>
+          <Plus size={16} />
+          New collection
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+type CollectionGroupProps = {
+  title: string;
+  collections: CollectionSchema[];
+  currentName: string;
+  pinnedNames: string[];
+  empty: string;
+  onSelect: (collection: CollectionSchema) => void;
+  onTogglePinned: (collection: CollectionSchema) => void;
+};
+
+function CollectionGroup(props: CollectionGroupProps) {
+  return (
+    <section className="sidebar-group">
+      <div className="sidebar-section-title">{props.title}</div>
+      <nav className="collection-nav" aria-label={props.title}>
+        {props.collections.length === 0 ? (
+          <p className="sidebar-empty">{props.empty}</p>
+        ) : (
+          props.collections.map((collection) => {
+            const pinned = props.pinnedNames.includes(collection.name);
+            return (
+              <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
+                <button className="collection-nav-main" onClick={() => props.onSelect(collection)}>
+                  <span className="nav-icon">
+                    {collection.type === "auth" ? <Shield size={16} /> : <Database size={16} />}
+                  </span>
+                  <span className="nav-text">
+                    <strong>{collection.name}</strong>
+                    <small>{collection.type}</small>
+                  </span>
+                </button>
+                <button
+                  className="icon-button pin-button"
+                  onClick={() => props.onTogglePinned(collection)}
+                  title={pinned ? "Unpin collection" : "Pin collection"}
+                  aria-label={pinned ? "Unpin collection" : "Pin collection"}
+                >
+                  {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+                </button>
+              </div>
+            );
+          })
+        )}
+      </nav>
+    </section>
+  );
+}
+
+const SETTINGS_NAV_GROUPS: Array<{
+  title: string;
+  items: Array<{ view: ViewName; label: string; icon: LucideIcon }>;
+}> = [
+  {
+    title: "Application",
+    items: [
+      { view: "settings", label: "General", icon: Settings },
+      { view: "mail", label: "Mail settings", icon: Mail },
+      { view: "storage", label: "File storage", icon: HardDrive }
+    ]
+  },
+  {
+    title: "System",
+    items: [
+      { view: "backups", label: "Backups", icon: FileArchive },
+      { view: "crons", label: "Crons", icon: Clock3 },
+      { view: "export", label: "Export collections", icon: Download },
+      { view: "import", label: "Import collections", icon: Upload },
+      { view: "sql", label: "SQL console", icon: Code2 }
+    ]
+  }
+];
+
+function SettingsSidebar({ current, onSelect }: { current: ViewName; onSelect: (view: ViewName) => void }) {
+  return (
+    <aside className="sidebar settings-sidebar">
+      {SETTINGS_NAV_GROUPS.map((group) => (
+        <section className="sidebar-group" key={group.title}>
+          <div className="sidebar-section-title">{group.title}</div>
+          <nav className="settings-nav" aria-label={group.title}>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.view}
+                  className={current === item.view ? "active" : ""}
+                  onClick={() => onSelect(item.view)}
+                >
+                  <span className="nav-icon">
+                    <Icon size={16} />
+                  </span>
+                  <span className="nav-text">
+                    <strong>{item.label}</strong>
+                  </span>
+                  <ChevronRight size={15} />
+                </button>
+              );
+            })}
+          </nav>
+        </section>
+      ))}
+    </aside>
+  );
+}
+
 type RecordsViewProps = {
   collection: CollectionSchema;
   records: RecordItem[];
   columns: string[];
+  allColumns: string[];
+  hiddenColumns: string[];
+  selectedIds: string[];
   query: QueryState;
   recordPage: ListResponse<RecordItem> | null;
   loading: boolean;
@@ -1067,11 +1492,21 @@ type RecordsViewProps = {
   onNew: () => void;
   onEdit: (record: RecordItem) => void;
   onDelete: (record: RecordItem) => void;
+  onDeleteSelected: () => void;
+  onToggleColumn: (column: string) => void;
+  onResetColumns: () => void;
+  onToggleSelected: (id: string) => void;
+  onToggleAll: (checked: boolean) => void;
+  onClearSelection: () => void;
   onOpenFile: (record: RecordItem, filename: string) => void;
 };
 
 function RecordsView(props: RecordsViewProps) {
   const [draft, setDraft] = useState(props.query);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const selectedSet = useMemo(() => new Set(props.selectedIds), [props.selectedIds]);
+  const allVisibleSelected =
+    props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
 
   useEffect(() => setDraft(props.query), [props.query]);
 
@@ -1114,21 +1549,76 @@ function RecordsView(props: RecordsViewProps) {
             Apply
           </button>
         </div>
-        <button className="primary" onClick={props.onNew}>
-          <Plus size={16} />
-          Record
-        </button>
+        <div className="records-toolbar-actions">
+          <div className="column-picker">
+            <button className="subtle" onClick={() => setColumnsOpen((open) => !open)}>
+              <Columns3 size={16} />
+              Columns
+            </button>
+            {columnsOpen && (
+              <div className="columns-popover">
+                <div className="columns-popover-header">
+                  <strong>Visible columns</strong>
+                  <button className="icon-button tiny" onClick={props.onResetColumns} title="Reset columns" aria-label="Reset columns">
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+                <div className="stacked-checks">
+                  {props.allColumns.map((column) => (
+                    <label className="check-row" key={column}>
+                      <input
+                        type="checkbox"
+                        checked={!props.hiddenColumns.includes(column)}
+                        onChange={() => props.onToggleColumn(column)}
+                      />
+                      {column}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button className="primary" onClick={props.onNew}>
+            <Plus size={16} />
+            New record
+          </button>
+        </div>
       </div>
+
+      {props.selectedIds.length > 0 && (
+        <div className="bulkbar">
+          <span>{props.selectedIds.length} selected</span>
+          <button className="subtle" onClick={props.onClearSelection}>
+            <X size={16} />
+            Clear
+          </button>
+          <button className="danger subtle" onClick={props.onDeleteSelected}>
+            <Trash2 size={16} />
+            Delete selected
+          </button>
+        </div>
+      )}
 
       <div className="table-meta">
         <span>{props.recordPage?.totalItems ?? props.records.length} records</span>
         <span>{props.collection.fields?.length ?? 0} fields</span>
+        <span>{props.columns.length}/{props.allColumns.length} columns</span>
       </div>
 
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th className="select-col">
+                <button
+                  className="checkbox-button"
+                  onClick={() => props.onToggleAll(!allVisibleSelected)}
+                  title={allVisibleSelected ? "Clear selection" : "Select page"}
+                  aria-label={allVisibleSelected ? "Clear selection" : "Select page"}
+                >
+                  {allVisibleSelected ? <CheckSquare2 size={17} /> : <Square size={17} />}
+                </button>
+              </th>
               {props.columns.map((column) => (
                 <th key={column}>{column}</th>
               ))}
@@ -1138,38 +1628,51 @@ function RecordsView(props: RecordsViewProps) {
           <tbody>
             {props.records.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={props.columns.length + 1}>
+                <td className="empty-row" colSpan={props.columns.length + 2}>
                   No records
                 </td>
               </tr>
             ) : (
-              props.records.map((record) => (
-                <tr key={record.id}>
-                  {props.columns.map((column) => (
-                    <td key={column}>
-                      <CellValue
-                        collection={props.collection}
-                        column={column}
-                        record={record}
-                        onOpenFile={props.onOpenFile}
-                      />
+              props.records.map((record) => {
+                const selected = selectedSet.has(record.id);
+                return (
+                  <tr className={selected ? "selected" : ""} key={record.id}>
+                    <td className="select-col">
+                      <button
+                        className="checkbox-button"
+                        onClick={() => props.onToggleSelected(record.id)}
+                        title={selected ? "Unselect record" : "Select record"}
+                        aria-label={selected ? "Unselect record" : "Select record"}
+                      >
+                        {selected ? <CheckSquare2 size={17} /> : <Square size={17} />}
+                      </button>
                     </td>
-                  ))}
-                  <td className="row-actions">
-                    <button className="icon-button" onClick={() => props.onEdit(record)} title="Edit" aria-label="Edit">
-                      <Edit3 size={16} />
-                    </button>
-                    <button
-                      className="icon-button danger"
-                      onClick={() => props.onDelete(record)}
-                      title="Delete"
-                      aria-label="Delete"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
-              ))
+                    {props.columns.map((column) => (
+                      <td key={column}>
+                        <CellValue
+                          collection={props.collection}
+                          column={column}
+                          record={record}
+                          onOpenFile={props.onOpenFile}
+                        />
+                      </td>
+                    ))}
+                    <td className="row-actions">
+                      <button className="icon-button" onClick={() => props.onEdit(record)} title="Edit" aria-label="Edit">
+                        <Edit3 size={16} />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        onClick={() => props.onDelete(record)}
+                        title="Delete"
+                        aria-label="Delete"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -1523,41 +2026,284 @@ type SettingsViewProps = {
 function SettingsView(props: SettingsViewProps) {
   const rawMeta = props.settings?.meta;
   const rawLogs = props.settings?.logs;
+  const rawBackups = props.settings?.backups;
   const meta = isPlainObject(rawMeta) ? rawMeta : {};
   const logs = isPlainObject(rawLogs) ? rawLogs : {};
+  const backups = isPlainObject(rawBackups) ? rawBackups : {};
   return (
-    <section className="surface settings-surface">
-      <div className="surface-toolbar">
-        <div className="settings-summary">
-          <div className="summary-row compact">
-            <span>App</span>
-            <strong>{String(meta.appName ?? "pocketbase-java")}</strong>
-          </div>
-          <div className="summary-row compact">
-            <span>URL</span>
-            <code>{String(meta.appURL ?? "")}</code>
-          </div>
-          <div className="summary-row compact">
-            <span>Logs</span>
-            <strong>{String(logs.maxDays ?? 7)} days</strong>
-          </div>
-        </div>
-        <div className="row-actions">
+    <section className="settings-page">
+      <div className="settings-page-toolbar">
+        <div className="top-actions">
           <button className="icon-button" onClick={props.onRefresh} title="Refresh settings" aria-label="Refresh settings">
             <RefreshCw size={17} />
           </button>
           <button className="primary" onClick={props.onSave} disabled={props.loading}>
             <Save size={16} />
-            Save
+            Save settings
           </button>
         </div>
       </div>
-      <div className="settings-editor">
+
+      <div className="settings-card-grid">
+        <SettingValueCard title="Application" value={String(meta.appName ?? "pocketbase-java")} detail={String(meta.appURL ?? "")} />
+        <SettingValueCard title="Sender" value={String(meta.senderName ?? "")} detail={String(meta.senderAddress ?? "")} />
+        <SettingValueCard title="Logs retention" value={`${String(logs.maxDays ?? 5)} days`} detail={`min level ${String(logs.minLevel ?? 0)}`} />
+        <SettingValueCard title="Auto backup" value={String(backups.cron || "disabled")} detail={`keep ${String(backups.cronMaxKeep ?? 3)}`} />
+      </div>
+
+      <section className="surface settings-editor">
         <label>
           Settings JSON
           <textarea value={props.draft} onChange={(event) => props.onDraft(event.target.value)} spellCheck={false} />
         </label>
+      </section>
+    </section>
+  );
+}
+
+type SettingValueCardProps = {
+  title: string;
+  value: string;
+  detail: string;
+};
+
+function SettingValueCard(props: SettingValueCardProps) {
+  return (
+    <article className="setting-card">
+      <span>{props.title}</span>
+      <strong title={props.value}>{props.value || "not set"}</strong>
+      <code title={props.detail}>{props.detail || "not set"}</code>
+    </article>
+  );
+}
+
+type MailSettingsViewProps = {
+  settings: AppSettings | null;
+  email: string;
+  template: string;
+  loading: boolean;
+  onEmail: (value: string) => void;
+  onTemplate: (value: string) => void;
+  onTest: () => void;
+};
+
+function MailSettingsView(props: MailSettingsViewProps) {
+  const meta = settingsObject(props.settings, "meta");
+  const smtp = settingsObject(props.settings, "smtp");
+  return (
+    <section className="settings-page">
+      <div className="settings-card-grid two">
+        <SettingValueCard title="Sender name" value={String(meta.senderName ?? "")} detail={String(meta.senderAddress ?? "")} />
+        <SettingValueCard title="SMTP" value={truthyText(smtp.enabled)} detail={`${String(smtp.host ?? "no host")}:${String(smtp.port ?? "")}`} />
       </div>
+      <section className="surface settings-section">
+        <div className="section-heading">
+          <div>
+            <h2>Test email</h2>
+            <p>Send a test auth email with the current mail configuration.</p>
+          </div>
+          <Mail size={18} />
+        </div>
+        <div className="settings-form-grid">
+          <label>
+            Recipient
+            <input value={props.email} onChange={(event) => props.onEmail(event.target.value)} placeholder="admin@example.com" />
+          </label>
+          <label>
+            Template
+            <select value={props.template} onChange={(event) => props.onTemplate(event.target.value)}>
+              <option value="verification">verification</option>
+              <option value="password-reset">password-reset</option>
+              <option value="email-change">email-change</option>
+              <option value="otp">otp</option>
+              <option value="login-alert">login-alert</option>
+            </select>
+          </label>
+          <button className="primary apply-button" onClick={props.onTest} disabled={props.loading || !props.email.trim()}>
+            <Play size={16} />
+            Send test
+          </button>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+type StorageSettingsViewProps = {
+  settings: AppSettings | null;
+  target: string;
+  loading: boolean;
+  onTarget: (value: string) => void;
+  onTest: () => void;
+};
+
+function StorageSettingsView(props: StorageSettingsViewProps) {
+  const storage = settingsObject(props.settings, "s3");
+  const backups = settingsObject(props.settings, "backups");
+  const backupS3 = isPlainObject(backups.s3) ? backups.s3 : {};
+  return (
+    <section className="settings-page">
+      <div className="settings-card-grid two">
+        <SettingValueCard title="Storage S3" value={truthyText(storage.enabled)} detail={String(storage.bucket ?? "no bucket")} />
+        <SettingValueCard title="Backup S3" value={truthyText(backupS3.enabled)} detail={String(backupS3.bucket ?? "no bucket")} />
+      </div>
+      <section className="surface settings-section">
+        <div className="section-heading">
+          <div>
+            <h2>S3 connection</h2>
+            <p>Check the configured storage or backups filesystem target.</p>
+          </div>
+          <Server size={18} />
+        </div>
+        <div className="settings-form-grid compact">
+          <label>
+            Target
+            <select value={props.target} onChange={(event) => props.onTarget(event.target.value)}>
+              <option value="storage">storage</option>
+              <option value="backups">backups</option>
+            </select>
+          </label>
+          <button className="primary apply-button" onClick={props.onTest} disabled={props.loading}>
+            <Play size={16} />
+            Test S3
+          </button>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+type CollectionTransferViewProps = {
+  mode: "export" | "import";
+  draft: string;
+  deleteMissing: boolean;
+  loading: boolean;
+  onDraft: (value: string) => void;
+  onDeleteMissing: (value: boolean) => void;
+  onExport: () => void;
+  onImport: () => void;
+  onCopy: (value: string) => void;
+};
+
+function CollectionTransferView(props: CollectionTransferViewProps) {
+  const importing = props.mode === "import";
+  return (
+    <section className="surface transfer-surface">
+      <div className="surface-toolbar">
+        <div className="table-meta transfer-meta">
+          <span>{importing ? "Paste a collections export" : "Current collection schema snapshot"}</span>
+        </div>
+        <div className="top-actions">
+          <button className="subtle" onClick={props.onExport}>
+            <RefreshCw size={16} />
+            Refresh export
+          </button>
+          {!importing && (
+            <button className="subtle" onClick={() => props.onCopy(props.draft)}>
+              <Copy size={16} />
+              Copy JSON
+            </button>
+          )}
+          {importing && (
+            <button className="primary" onClick={props.onImport} disabled={props.loading || !props.draft.trim()}>
+              <Upload size={16} />
+              Import
+            </button>
+          )}
+        </div>
+      </div>
+      {importing && (
+        <div className="bulkbar import-options">
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={props.deleteMissing}
+              onChange={(event) => props.onDeleteMissing(event.target.checked)}
+            />
+            Delete missing collections
+          </label>
+        </div>
+      )}
+      <div className="settings-editor">
+        <label>
+          Collections JSON
+          <textarea
+            value={props.draft}
+            onChange={(event) => props.onDraft(event.target.value)}
+            readOnly={!importing}
+            spellCheck={false}
+          />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+type SqlViewProps = {
+  query: string;
+  result: SqlResult | null;
+  error: string;
+  loading: boolean;
+  onQuery: (value: string) => void;
+  onRun: () => void;
+};
+
+function SqlView(props: SqlViewProps) {
+  const columns = props.result?.columns ?? [];
+  const rows = props.result?.rows ?? [];
+  return (
+    <section className="sql-layout">
+      <section className="surface sql-editor">
+        <div className="surface-toolbar">
+          <div className="table-meta transfer-meta">
+            <span>Superuser SQL console</span>
+          </div>
+          <button className="primary" onClick={props.onRun} disabled={props.loading || !props.query.trim()}>
+            <Play size={16} />
+            Run query
+          </button>
+        </div>
+        <label className="sql-textarea">
+          Query
+          <textarea value={props.query} onChange={(event) => props.onQuery(event.target.value)} spellCheck={false} />
+        </label>
+      </section>
+
+      <section className="surface sql-result">
+        <div className="table-meta">
+          <span>{Number(props.result?.affectedRows ?? 0)} affected rows</span>
+          <span>{rows.length} result rows</span>
+          {props.error && <span className="danger">{props.error}</span>}
+        </div>
+        <div className="table-wrap">
+          <table className="sql-table">
+            <thead>
+              <tr>
+                {columns.length === 0 ? <th>Result</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td className="empty-row" colSpan={Math.max(1, columns.length)}>
+                    No rows
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {columns.map((column, columnIndex) => (
+                      <td key={column.name}>
+                        <code>{formatValue(Array.isArray(row) ? row[columnIndex] : "")}</code>
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   );
 }
@@ -2381,6 +3127,64 @@ function formatBytes(value: number) {
     unit++;
   }
   return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function isSettingsView(view: ViewName) {
+  return ["settings", "mail", "storage", "backups", "crons", "export", "import", "sql"].includes(view);
+}
+
+function isSystemCollection(collection: CollectionSchema) {
+  return Boolean(collection.system) || collection.name.startsWith("_");
+}
+
+function viewMeta(view: ViewName, collection: CollectionSchema | null) {
+  const titles: Record<ViewName, { title: string; eyebrow: string }> = {
+    records: { title: collection?.name ?? "Collections", eyebrow: collection?.type ?? "Admin console" },
+    schema: { title: collection?.name ?? "Collections", eyebrow: "Schema" },
+    settings: { title: "Settings", eyebrow: "Application" },
+    mail: { title: "Mail settings", eyebrow: "Application" },
+    storage: { title: "File storage", eyebrow: "Application" },
+    backups: { title: "Backups", eyebrow: "Maintenance" },
+    crons: { title: "Crons", eyebrow: "Scheduler" },
+    export: { title: "Export collections", eyebrow: "System" },
+    import: { title: "Import collections", eyebrow: "System" },
+    sql: { title: "SQL console", eyebrow: "System" },
+    logs: { title: "Logs", eyebrow: "Observability" }
+  };
+  return titles[view];
+}
+
+function settingsObject(settings: AppSettings | null, section: string) {
+  const value = settings?.[section];
+  return isPlainObject(value) ? value : {};
+}
+
+function truthyText(value: unknown) {
+  return value ? "enabled" : "disabled";
+}
+
+function readStringArray(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function readStringArrayRecord(key: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "{}");
+    if (!isPlainObject(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([name, value]) => [
+        name,
+        Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+      ])
+    );
+  } catch {
+    return {};
+  }
 }
 
 function errorMessage(error: unknown) {
