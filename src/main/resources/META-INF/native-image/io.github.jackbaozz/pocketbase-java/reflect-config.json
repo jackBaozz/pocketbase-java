@@ -1,18 +1,18 @@
 [
   {
-    "name": "io.github.jackbaozz.pocketbase.AuthResponse",
+    "name": "io.github.jackbaozz.pocketbase.client.AuthResponse",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
     "allPublicMethods": true
   },
   {
-    "name": "io.github.jackbaozz.pocketbase.RecordList",
+    "name": "io.github.jackbaozz.pocketbase.client.RecordList",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
     "allPublicMethods": true
   },
   {
-    "name": "io.github.jackbaozz.pocketbase.PocketBaseError",
+    "name": "io.github.jackbaozz.pocketbase.client.PocketBaseError",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
     "allPublicMethods": true

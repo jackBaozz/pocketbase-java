@@ -6,7 +6,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,7 +13,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -47,7 +45,6 @@ public class RouteConformanceTest {
     private static class RouteInfo {
         String method;
         String path;
-        boolean authRequired; // to determine if we should send a mock token or not for correct test scope
 
         RouteInfo(String method, String path) {
             this.method = method;

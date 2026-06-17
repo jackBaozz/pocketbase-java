@@ -105,9 +105,9 @@ public class App {
 `pocketbase-java` includes a built-in Java SDK client to interact with either this Java server or the official Go PocketBase server:
 
 ```java
-import io.github.jackbaozz.pocketbase.PocketBaseClient;
-import io.github.jackbaozz.pocketbase.RecordList;
-import io.github.jackbaozz.pocketbase.ListOptions;
+import io.github.jackbaozz.pocketbase.client.PocketBaseClient;
+import io.github.jackbaozz.pocketbase.client.RecordList;
+import io.github.jackbaozz.pocketbase.client.ListOptions;
 import java.util.Map;
 
 // 1. Initialize the client
@@ -165,8 +165,8 @@ mvn -gs settings.xml -s settings.xml clean install
 ```text
 pocketbase-java/
 ├── docs/                               # Documentation
-│   ├── API设计.md
-│   └── 技术架构与开发规范.md
+│   ├── API-Design.md
+│   └── Technical-Architecture-and-Development-Standards.md
 ├── UI/                                 # Admin UI React + Vite codebase
 │   ├── package.json
 │   ├── vite.config.ts

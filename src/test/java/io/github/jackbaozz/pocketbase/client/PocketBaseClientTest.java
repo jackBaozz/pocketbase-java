@@ -1,4 +1,4 @@
-package io.github.jackbaozz.pocketbase;
+package io.github.jackbaozz.pocketbase.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;

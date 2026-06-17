@@ -276,9 +276,9 @@ try {
 
 官方文档：
 
-- https://pocketbase.io/docs/
-- https://pocketbase.io/docs/api-records/
-- https://pocketbase.io/docs/api-collections/
+- <https://pocketbase.io/docs/>
+- <https://pocketbase.io/docs/api-records/>
+- <https://pocketbase.io/docs/api-collections/>
 
 ---
 

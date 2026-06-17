@@ -1,4 +1,4 @@
-package io.github.jackbaozz.pocketbase;
+package io.github.jackbaozz.pocketbase.client;
 
 import java.net.URI;
 

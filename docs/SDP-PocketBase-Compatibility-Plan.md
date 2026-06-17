@@ -202,6 +202,7 @@ Official Admin UI routes from `ui/src/router.js`:
 Use this checklist as the project board seed.
 
 ### P0
+
 - [x] **SDP-001**: Route manifest conformance tests (Backend)
 - [x] **SDP-002**: Official JS SDK smoke suite (Backend/SDK)
 - [x] **SDP-003**: `POST /api/collections/meta/dry-run-view` (Backend)
@@ -215,6 +216,7 @@ Use this checklist as the project board seed.
 - [x] **SDP-011**: Field-specific collection editor UI (UI)
 
 ### P1
+
 - [ ] **SDP-012**: Field-specific record editor UI (UI)
 - [ ] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
 - [/] **SDP-014**: Structured application settings page (UI/Backend)
@@ -226,6 +228,7 @@ Use this checklist as the project board seed.
 - [x] **SDP-020**: SQL console UI (UI)
 
 ### P2
+
 - [/] **SDP-021**: Logs chart/stats parity (UI/Backend)
 - [ ] **SDP-022**: File range/cache/S3 parity (Backend)
 - [ ] **SDP-023**: Installer and auth action pages (UI)

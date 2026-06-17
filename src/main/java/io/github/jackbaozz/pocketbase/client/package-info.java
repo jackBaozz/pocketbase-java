@@ -1,4 +1,4 @@
 /**
  * Lightweight Java SDK for PocketBase HTTP APIs.
  */
-package io.github.jackbaozz.pocketbase;
+package io.github.jackbaozz.pocketbase.client;

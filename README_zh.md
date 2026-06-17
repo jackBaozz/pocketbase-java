@@ -165,8 +165,8 @@ mvn -gs settings.xml -s settings.xml clean install
 ```text
 pocketbase-java/
 ├── docs/                               # 技术文档
-│   ├── API设计.md
-│   └── 技术架构与开发规范.md
+│   ├── API-Design.md
+│   └── Technical-Architecture-and-Development-Standards.md
 ├── UI/                                 # Admin UI 前端工程 (React + Vite)
 │   ├── package.json
 │   ├── vite.config.ts

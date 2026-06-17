@@ -1,7 +1,6 @@
 package io.github.jackbaozz.pocketbase.server.internal;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -710,14 +709,6 @@ public final class HttpApi implements HttpHandler {
         }
         return store.verifyToken(token)
                 .map(RequestPrincipal::fromClaims);
-    }
-
-    private String requiredText(JsonNode body, String field) {
-        JsonNode value = body == null ? null : body.get(field);
-        if (value == null || value.isNull() || value.asText().isBlank()) {
-            throw new ApiException(400, field + " is required.");
-        }
-        return value.asText();
     }
 
     private String optionalText(JsonNode body, String field) {

@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 
-import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.IOException;
@@ -22,6 +21,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -3805,8 +3805,6 @@ public final class JsonFileStore {
         copy.remove(INTERNAL_ROWID);
         return copy;
     }
-
-    @SuppressWarnings("unchecked")
     private Map<String, Object> s3SettingsFor(String filesystem, JsonNode body) {
         String target = filesystem == null || filesystem.isBlank() ? "storage" : filesystem;
         Map<String, Object> base;

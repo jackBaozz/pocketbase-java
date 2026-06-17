@@ -93,8 +93,8 @@ SDK 不直接依赖 Spring、OkHttp、Retrofit 等框架，避免把使用方锁
 ```text
 pocketbase-java/
 ├── docs/
-│   ├── API设计.md
-│   └── 技术架构与开发规范.md
+│   ├── API-Design.md
+│   └── Technical-Architecture-and-Development-Standards.md
 ├── UI/
 │   ├── package.json
 │   ├── vite.config.ts
