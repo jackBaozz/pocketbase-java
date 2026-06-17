@@ -2134,12 +2134,28 @@ type SettingsViewProps = {
 };
 
 function SettingsView(props: SettingsViewProps) {
-  const rawMeta = props.settings?.meta;
-  const rawLogs = props.settings?.logs;
-  const rawBackups = props.settings?.backups;
-  const meta = isPlainObject(rawMeta) ? rawMeta : {};
-  const logs = isPlainObject(rawLogs) ? rawLogs : {};
-  const backups = isPlainObject(rawBackups) ? rawBackups : {};
+  const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
+  const meta = settingsObject(draftSettings, "meta");
+  const logs = settingsObject(draftSettings, "logs");
+  const batch = settingsObject(draftSettings, "batch");
+  const trustedProxy = settingsObject(draftSettings, "trustedProxy");
+  const rateLimits = settingsObject(draftSettings, "rateLimits");
+  const superuserIPs = Array.isArray(draftSettings.superuserIPs)
+    ? draftSettings.superuserIPs.map((item) => String(item)).join(", ")
+    : "";
+  const rawTrustedHeaders = trustedProxy.headers;
+  const trustedHeaders = Array.isArray(rawTrustedHeaders) ? rawTrustedHeaders.map((item) => String(item)).join(", ") : "";
+
+  function updateSetting(path: string[], value: unknown) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, path, value);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
+  function updateNumber(path: string[], value: string) {
+    updateSetting(path, value === "" ? 0 : Number(value));
+  }
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
@@ -2157,16 +2173,220 @@ function SettingsView(props: SettingsViewProps) {
         }
       />
 
-      <div className="settings-card-grid">
-        <SettingValueCard title="Application" value={String(meta.appName ?? "pocketbase-java")} detail={String(meta.appURL ?? "")} />
-        <SettingValueCard title="Sender" value={String(meta.senderName ?? "")} detail={String(meta.senderAddress ?? "")} />
-        <SettingValueCard title="Logs retention" value={`${String(logs.maxDays ?? 5)} days`} detail={`min level ${String(logs.minLevel ?? 0)}`} />
-        <SettingValueCard title="Auto backup" value={String(backups.cron || "disabled")} detail={`keep ${String(backups.cronMaxKeep ?? 3)}`} />
-      </div>
+      <section className="surface application-settings-form">
+        <div className="settings-form-row primary-fields">
+          <label>
+            Application name
+            <input
+              id="meta-app-name"
+              name="meta.appName"
+              autoComplete="off"
+              value={String(meta.appName ?? "")}
+              onChange={(event) => updateSetting(["meta", "appName"], event.target.value)}
+            />
+          </label>
+          <label>
+            Application URL
+            <input
+              id="meta-app-url"
+              name="meta.appURL"
+              autoComplete="off"
+              value={String(meta.appURL ?? "")}
+              onChange={(event) => updateSetting(["meta", "appURL"], event.target.value)}
+            />
+          </label>
+          <label>
+            Accent color
+            <input
+              id="meta-accent-color"
+              name="meta.accentColor"
+              type="color"
+              value={String(meta.accentColor ?? "#1055c9")}
+              onChange={(event) => updateSetting(["meta", "accentColor"], event.target.value)}
+            />
+          </label>
+        </div>
 
-      <section className="surface settings-editor">
+        <div className="settings-switch-row">
+          <label className="check-row switch-row">
+            <input
+              id="meta-hide-controls"
+              name="meta.hideControls"
+              type="checkbox"
+              checked={Boolean(meta.hideControls)}
+              onChange={(event) => updateSetting(["meta", "hideControls"], event.target.checked)}
+            />
+            Hide/Lock collection and record controls
+          </label>
+        </div>
+
+        <section className="settings-accordion-grid">
+          <article className="settings-accordion-card">
+            <header>
+              <div>
+                <strong>Logs</strong>
+                <span>Retention and request metadata</span>
+              </div>
+              <Activity size={18} />
+            </header>
+            <div className="settings-form-row two">
+              <label>
+                Max days
+                <input
+                  id="logs-max-days"
+                  name="logs.maxDays"
+                  type="number"
+                  min="0"
+                  value={String(logs.maxDays ?? 5)}
+                  onChange={(event) => updateNumber(["logs", "maxDays"], event.target.value)}
+                />
+              </label>
+              <label>
+                Min level
+                <input
+                  id="logs-min-level"
+                  name="logs.minLevel"
+                  type="number"
+                  value={String(logs.minLevel ?? 0)}
+                  onChange={(event) => updateNumber(["logs", "minLevel"], event.target.value)}
+                />
+              </label>
+            </div>
+            <label className="check-row switch-row">
+              <input
+                id="logs-log-ip"
+                name="logs.logIP"
+                type="checkbox"
+                checked={Boolean(logs.logIP)}
+                onChange={(event) => updateSetting(["logs", "logIP"], event.target.checked)}
+              />
+              Log request IP
+            </label>
+            <label className="check-row switch-row">
+              <input
+                id="logs-log-auth-id"
+                name="logs.logAuthId"
+                type="checkbox"
+                checked={Boolean(logs.logAuthId)}
+                onChange={(event) => updateSetting(["logs", "logAuthId"], event.target.checked)}
+              />
+              Log auth record id
+            </label>
+          </article>
+
+          <article className="settings-accordion-card">
+            <header>
+              <div>
+                <strong>Batch requests</strong>
+                <span>Server-side batch request limits</span>
+              </div>
+              <Archive size={18} />
+            </header>
+            <label className="check-row switch-row">
+              <input
+                id="batch-enabled"
+                name="batch.enabled"
+                type="checkbox"
+                checked={Boolean(batch.enabled)}
+                onChange={(event) => updateSetting(["batch", "enabled"], event.target.checked)}
+              />
+              Enable batch API
+            </label>
+            <div className="settings-form-row three">
+              <label>
+                Max requests
+                <input
+                  id="batch-max-requests"
+                  name="batch.maxRequests"
+                  type="number"
+                  value={String(batch.maxRequests ?? 50)}
+                  onChange={(event) => updateNumber(["batch", "maxRequests"], event.target.value)}
+                />
+              </label>
+              <label>
+                Timeout
+                <input
+                  id="batch-timeout"
+                  name="batch.timeout"
+                  type="number"
+                  value={String(batch.timeout ?? 3)}
+                  onChange={(event) => updateNumber(["batch", "timeout"], event.target.value)}
+                />
+              </label>
+              <label>
+                Max body size
+                <input
+                  id="batch-max-body-size"
+                  name="batch.maxBodySize"
+                  type="number"
+                  value={String(batch.maxBodySize ?? 33554432)}
+                  onChange={(event) => updateNumber(["batch", "maxBodySize"], event.target.value)}
+                />
+              </label>
+            </div>
+          </article>
+
+          <article className="settings-accordion-card">
+            <header>
+              <div>
+                <strong>Trusted proxy</strong>
+                <span>Forwarded IP header handling</span>
+              </div>
+              <Server size={18} />
+            </header>
+            <label>
+              Trusted headers
+              <input
+                id="trusted-proxy-headers"
+                name="trustedProxy.headers"
+                autoComplete="off"
+                placeholder="X-Forwarded-For, X-Real-IP"
+                value={trustedHeaders}
+                onChange={(event) => updateSetting(["trustedProxy", "headers"], splitCsv(event.target.value))}
+              />
+            </label>
+            <label className="check-row switch-row">
+              <input
+                id="trusted-proxy-leftmost"
+                name="trustedProxy.useLeftmostIP"
+                type="checkbox"
+                checked={Boolean(trustedProxy.useLeftmostIP)}
+                onChange={(event) => updateSetting(["trustedProxy", "useLeftmostIP"], event.target.checked)}
+              />
+              Use leftmost IP
+            </label>
+          </article>
+
+          <article className="settings-accordion-card">
+            <header>
+              <div>
+                <strong>Superusers</strong>
+                <span>Restrict dashboard access by IP</span>
+              </div>
+              <Shield size={18} />
+            </header>
+            <label>
+              Allowed IPs
+              <input
+                id="superuser-ips"
+                name="superuserIPs"
+                autoComplete="off"
+                placeholder="127.0.0.1, 10.0.0.0/8"
+                value={superuserIPs}
+                onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
+              />
+            </label>
+            <div className="settings-inline-metrics">
+              <span>{Array.isArray(rateLimits.rules) ? rateLimits.rules.length : 0} rate limit rules</span>
+              <span>{Array.isArray(rateLimits.excludedIPs) ? rateLimits.excludedIPs.length : 0} excluded IPs</span>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section className="surface settings-editor advanced-settings-editor">
         <label>
-          Settings JSON
+          Advanced JSON
           <textarea
             id="settings-json"
             name="settingsJson"
@@ -3806,6 +4026,33 @@ function viewMeta(view: ViewName, collection: CollectionSchema | null) {
 function settingsObject(settings: AppSettings | null, section: string) {
   const value = settings?.[section];
   return isPlainObject(value) ? value : {};
+}
+
+function parseSettingsDraft(draft: string, fallback: AppSettings | null) {
+  try {
+    const parsed = JSON.parse(draft || "{}");
+    if (isPlainObject(parsed)) return parsed;
+  } catch {
+    // Keep rendering the last loaded settings if the advanced JSON is temporarily invalid.
+  }
+  return cloneJsonObject(fallback ?? {});
+}
+
+function cloneJsonObject(value: Record<string, unknown>) {
+  return JSON.parse(JSON.stringify(value || {})) as Record<string, unknown>;
+}
+
+function setNestedSetting(target: Record<string, unknown>, path: string[], value: unknown) {
+  let cursor = target;
+  for (let index = 0; index < path.length - 1; index++) {
+    const key = path[index];
+    const next = cursor[key];
+    if (!isPlainObject(next)) {
+      cursor[key] = {};
+    }
+    cursor = cursor[key] as Record<string, unknown>;
+  }
+  cursor[path[path.length - 1]] = value;
 }
 
 function truthyText(value: unknown) {

@@ -1283,6 +1283,115 @@ td.row-actions .icon-button:last-child {
   min-height: var(--smBtnHeight);
 }
 
+.application-settings-form {
+  display: grid;
+  gap: 0;
+  padding: 15px;
+}
+
+.settings-form-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.settings-form-row.primary-fields {
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) 120px;
+}
+
+.settings-form-row.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-form-row.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-form-row input[type="color"] {
+  min-height: var(--btnHeight);
+  padding: 5px;
+}
+
+.settings-switch-row {
+  border-top: 1px solid var(--surfaceAlt2Color);
+  margin-top: 15px;
+  padding-top: 15px;
+}
+
+.settings-accordion-grid {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+  margin-top: 15px;
+  padding-top: 15px;
+}
+
+.settings-accordion-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+  padding: 14px;
+}
+
+.settings-accordion-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.settings-accordion-card > header div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-accordion-card > header strong,
+.settings-accordion-card > header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-accordion-card > header span,
+.settings-inline-metrics {
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  line-height: var(--smLineHeight);
+}
+
+.switch-row {
+  width: max-content;
+  max-width: 100%;
+  color: var(--surfaceTxtColor);
+  font-size: var(--fontSize);
+  font-weight: 700;
+}
+
+.settings-inline-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-inline-metrics span {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt2Color);
+  padding: 0 8px;
+}
+
+.advanced-settings-editor textarea {
+  min-height: 420px;
+}
+
 .settings-card-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2285,6 +2394,10 @@ td.row-actions .icon-button:last-child {
   .records-searchbar-row,
   .settings-card-grid,
   .settings-card-grid.two,
+  .settings-form-row,
+  .settings-form-row.primary-fields,
+  .settings-form-row.two,
+  .settings-form-row.three,
   .settings-form-grid,
   .settings-form-grid.compact,
   .sql-layout,
@@ -2379,6 +2492,10 @@ td.row-actions .icon-button:last-child {
   .records-searchbar-row,
   .settings-card-grid,
   .settings-card-grid.two,
+  .settings-form-row,
+  .settings-form-row.primary-fields,
+  .settings-form-row.two,
+  .settings-form-row.three,
   .settings-form-grid,
   .settings-form-grid.compact,
   .sql-layout,
