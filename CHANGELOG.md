@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-SNAPSHOT
+## 0.2.0-SNAPSHOT
 
 **Features:**
 - 完成了对 PocketBase 官方 API 路由结构的一致性测试套件 (Route manifest conformance tests)。
@@ -15,6 +15,10 @@
 - 完成集合数据导入、导出与本地差异比对与审查流程。
 - 实现了集合 Schema 建立与更新中，面向单个字段展开编辑的细化 UI 表单界面（Field-specific collection editor UI）。
 - 将内置的系统参数表单（包含应用配置、邮件发信测试、存储 S3 配置、备份操作管理以及定时 Cron 管理等界面），全方位适配并对齐到官方 PocketBase 相应的用户交互逻辑和外观。
+- 将客户端 SDK 类统一迁移到了 `client` 包下。
+- 将开发文档均重命名为英文命名风格。
+
+## 0.1.0-SNAPSHOT
 
 **Initial Implementation:**
 - 初始化 Maven 项目骨架。
