@@ -97,6 +97,7 @@ public final class JsonFileStore {
     private final Map<String, List<Map<String, Object>>> recordsByCollectionId = new LinkedHashMap<>();
     private final Map<String, Object> settings = new LinkedHashMap<>();
     private final List<Map<String, Object>> logs = new ArrayList<>();
+    private final List<Map<String, Object>> mfas = new ArrayList<>();
     private final List<Map<String, Object>> authRequests = new ArrayList<>();
     private final List<Map<String, Object>> externalAuths = new ArrayList<>();
     private final List<Map<String, Object>> otps = new ArrayList<>();
@@ -2020,7 +2021,9 @@ public final class JsonFileStore {
         upsertExternalAuth(collection, record, providerName, oauthUser.providerId());
         Map<String, Object> meta = new LinkedHashMap<>(oauthUser.raw());
         meta.put("isNew", isNew);
-        return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+
+        String mfaId = bodyText(body, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId, meta);
     }
 
     public synchronized Map<String, Object> requestOtp(String collectionName, JsonNode body) {
@@ -2109,7 +2112,9 @@ public final class JsonFileStore {
             touch(record);
             saveRecords(collection);
         }
-        return authResponse(collection, record, query);
+
+        String mfaId = bodyText(body, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId);
     }
 
     public synchronized void requestPasswordReset(String collectionName, JsonNode body) {
@@ -2284,7 +2289,8 @@ public final class JsonFileStore {
             throw new ApiException(400, "Invalid identity or password.");
         }
 
-        return authResponse(collection, record, query);
+        String mfaId = bodyText(body, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId);
     }
 
     public synchronized Map<String, Object> authRefresh(String collectionName, RequestPrincipal principal) {
@@ -2311,6 +2317,49 @@ public final class JsonFileStore {
                 .findFirst()
                 .orElseThrow(() -> new ApiException(401, "Auth record no longer exists."));
         return authResponse(collection, record, query);
+    }
+
+    private Map<String, Object> handleAuthWithMfa(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            Map<String, String> query,
+            String mfaIdParam,
+            Map<String, Object> meta
+    ) {
+        if (!collection.mfa.enabled) {
+            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+        }
+        if (mfaIdParam != null && !mfaIdParam.isBlank()) {
+            boolean found = mfas.removeIf(mfa -> Objects.equals(mfa.get("id"), mfaIdParam) &&
+                    Objects.equals(mfa.get("recordId"), record.get("id")) &&
+                    Objects.equals(mfa.get("collectionId"), collection.id));
+            if (!found) {
+                throw new ApiException(400, "Missing or invalid MFA ID.");
+            }
+            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+        }
+        boolean requireMfa = collection.mfa.rule != null && !collection.mfa.rule.isBlank() &&
+                RuleEvaluator.matches(collection.mfa.rule, ruleContext(record, null, query, "POST", null));
+        if (!requireMfa) {
+            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+        }
+        String newMfaId = IdGenerator.generate();
+        Map<String, Object> mfaRecord = new LinkedHashMap<>();
+        mfaRecord.put("id", newMfaId);
+        mfaRecord.put("created", RuntimeJson.now());
+        mfaRecord.put("collectionId", collection.id);
+        mfaRecord.put("recordId", record.get("id"));
+        mfas.add(mfaRecord);
+        return Map.of("mfaId", newMfaId);
+    }
+
+    private Map<String, Object> handleAuthWithMfa(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            Map<String, String> query,
+            String mfaIdParam
+    ) {
+        return handleAuthWithMfa(collection, record, query, mfaIdParam, Map.of());
     }
 
     private Map<String, Object> authResponse(
@@ -3942,6 +3991,25 @@ public final class JsonFileStore {
         }
     }
 
+    private void pruneMfas() {
+        mfas.removeIf(mfa -> {
+            try {
+                CollectionSchema collection = collections.stream()
+                        .filter(c -> Objects.equals(c.id, mfa.get("collectionId")))
+                        .findFirst()
+                        .orElse(null);
+                if (collection == null) {
+                    return true;
+                }
+                long durationSeconds = collection.mfa.duration > 0 ? collection.mfa.duration : 1800;
+                Instant cutoff = Instant.now().minus(Duration.ofSeconds(durationSeconds));
+                return Instant.parse(String.valueOf(mfa.get("created"))).isBefore(cutoff);
+            } catch (Exception ignored) {
+                return false;
+            }
+        });
+    }
+
     private List<CronJob> cronJobs() {
         List<CronJob> jobs = new ArrayList<>();
         jobs.add(new CronJob("__pbLogsCleanup__", "0 */6 * * *"));
@@ -3961,8 +4029,11 @@ public final class JsonFileStore {
                 pruneLogs();
                 saveLogs();
             }
-            case "__pbDBOptimize__", "__pbMFACleanup__", "__pbOTPCleanup__" -> {
+            case "__pbDBOptimize__", "__pbOTPCleanup__" -> {
                 // No-op placeholders matching official built-in cron ids for the JSON store runtime.
+            }
+            case "__pbMFACleanup__" -> {
+                pruneMfas();
             }
             case AUTO_BACKUP_JOB_ID -> runAutoBackupCron();
             default -> throw new ApiException(404, "Missing or invalid cron job");

@@ -50,6 +50,7 @@ public class CollectionSchema {
     public static class MfaConfig {
         public boolean enabled;
         public long duration = 1800;
+        public String rule;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
