@@ -311,7 +311,7 @@ function App() {
   const [sqlError, setSqlError] = useState("");
   const [exportDraft, setExportDraft] = useState("");
   const [importDraft, setImportDraft] = useState("");
-  const [deleteMissingCollections, setDeleteMissingCollections] = useState(false);
+  const [deleteMissingCollections, setDeleteMissingCollections] = useState(true);
   const [testEmail, setTestEmail] = useState("");
   const [testEmailTemplate, setTestEmailTemplate] = useState("verification");
   const [testS3Target, setTestS3Target] = useState("storage");
@@ -1138,6 +1138,7 @@ function App() {
               ) : view === "export" ? (
                 <CollectionTransferView
                   mode="export"
+                  collections={collections}
                   draft={exportDraft}
                   deleteMissing={deleteMissingCollections}
                   loading={loading}
@@ -1155,6 +1156,7 @@ function App() {
               ) : view === "import" ? (
                 <CollectionTransferView
                   mode="import"
+                  collections={collections}
                   draft={importDraft}
                   deleteMissing={deleteMissingCollections}
                   loading={loading}
@@ -3084,48 +3086,176 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
 
 type CollectionTransferViewProps = {
   mode: "export" | "import";
+  collections: CollectionSchema[];
   draft: string;
   deleteMissing: boolean;
   loading: boolean;
   onDraft: (value: string) => void;
   onDeleteMissing: (value: boolean) => void;
   onExport: () => void;
-  onImport: () => void;
+  onImport: () => Promise<void> | void;
   onCopy: (value: string) => void;
 };
 
 function CollectionTransferView(props: CollectionTransferViewProps) {
   const importing = props.mode === "import";
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const exportCollections = useMemo(() => sortedCollectionsForTransfer(props.collections), [props.collections]);
+  const selectedExportCollections = useMemo(
+    () => exportCollections.filter((collection) => selectedExportIds.includes(collection.id)),
+    [exportCollections, selectedExportIds]
+  );
+  const importedCollections = useMemo(() => parseCollectionsPayload(props.draft), [props.draft]);
+  const importChanges = useMemo(
+    () => collectionImportChanges(props.collections, importedCollections, props.deleteMissing),
+    [props.collections, importedCollections, props.deleteMissing]
+  );
+  const importInvalid = importing && props.draft.trim() !== "" && importedCollections === null;
+  const importHasChanges = importChanges.added.length > 0 || importChanges.changed.length > 0 || importChanges.deleted.length > 0;
+  const canReview = Boolean(importedCollections?.length) && importHasChanges && !importInvalid;
+  const selectedExportJson = JSON.stringify(selectedExportCollections, null, 2);
+
+  useEffect(() => {
+    if (importing) return;
+    const ids = exportCollections.map((collection) => collection.id);
+    setSelectedExportIds(ids);
+    props.onDraft(JSON.stringify(exportCollections, null, 2));
+  }, [importing, exportCollections]);
+
+  useEffect(() => {
+    if (importing) return;
+    props.onDraft(selectedExportJson);
+  }, [importing, selectedExportJson]);
+
+  function toggleSelectAll() {
+    if (selectedExportIds.length === exportCollections.length) {
+      setSelectedExportIds([]);
+    } else {
+      setSelectedExportIds(exportCollections.map((collection) => collection.id));
+    }
+  }
+
+  function toggleCollection(id: string) {
+    setSelectedExportIds((current) => (current.includes(id) ? current.filter((value) => value !== id) : [...current, id]));
+  }
+
+  function downloadExport() {
+    downloadJsonFile(selectedExportCollections, "pb_schema.json");
+  }
+
+  function loadImportFile(file?: File) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => props.onDraft(String(reader.result ?? ""));
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function clearImport() {
+    props.onDraft("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function confirmImport() {
+    await props.onImport();
+    setReviewOpen(false);
+  }
+
+  if (!importing) {
+    const allSelected = selectedExportIds.length > 0 && selectedExportIds.length === exportCollections.length;
+    return (
+      <section className="settings-page">
+        <SettingsPageHeader section="Export collections" />
+        <p className="settings-intro sync-page-intro">
+          Below you'll find your current collections configuration that you could import in another PocketBase environment.
+        </p>
+        <section className="surface transfer-surface export-transfer-surface">
+          <aside className="export-collection-list">
+            <label className="check-row export-select-all">
+              <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
+              Select all
+            </label>
+            <div className="export-collection-items">
+              {exportCollections.map((collection) => (
+                <label className="export-collection-row" key={collection.id}>
+                  <input type="checkbox" checked={selectedExportIds.includes(collection.id)} onChange={() => toggleCollection(collection.id)} />
+                  <span title={collection.name}>{collection.name}</span>
+                  <code>{collection.type}</code>
+                </label>
+              ))}
+            </div>
+          </aside>
+          <section className="export-preview-panel">
+            <div className="surface-toolbar">
+              <div className="table-meta transfer-meta">
+                <span>{selectedExportCollections.length} selected</span>
+              </div>
+              <div className="top-actions">
+                <button className="subtle" onClick={props.onExport}>
+                  <RefreshCw size={16} />
+                  Refresh
+                </button>
+                <button className="subtle" onClick={() => props.onCopy(selectedExportJson)} disabled={selectedExportCollections.length === 0}>
+                  <Copy size={16} />
+                  Copy JSON
+                </button>
+                <button className="primary" onClick={downloadExport} disabled={selectedExportCollections.length === 0}>
+                  <Download size={16} />
+                  Download as JSON
+                </button>
+              </div>
+            </div>
+            <pre className="export-json-preview">{selectedExportJson}</pre>
+          </section>
+        </section>
+      </section>
+    );
+  }
+
   return (
     <section className="settings-page">
-      <SettingsPageHeader section={importing ? "Import collections" : "Export collections"} />
-      <section className="surface transfer-surface">
-        <div className="surface-toolbar">
-          <div className="table-meta transfer-meta">
-            <span>{importing ? "Paste a collections export" : "Current collection schema snapshot"}</span>
+      <SettingsPageHeader section="Import collections" />
+      <section className="surface transfer-surface import-transfer-surface">
+        <div className="settings-section">
+          <div className="section-heading">
+            <div>
+              <h2>Collections</h2>
+              <p>Paste below the collections configuration you want to import or load it from a JSON file.</p>
+            </div>
+            <Upload size={18} />
           </div>
-          <div className="top-actions">
-            <button className="subtle" onClick={props.onExport}>
-              <RefreshCw size={16} />
-              Refresh export
+          <div className="top-actions import-file-actions">
+            <button type="button" className="subtle" onClick={() => fileInputRef.current?.click()}>
+              <Upload size={16} />
+              Load from JSON file
             </button>
-            {!importing && (
-              <button className="subtle" onClick={() => props.onCopy(props.draft)}>
-                <Copy size={16} />
-                Copy JSON
-              </button>
-            )}
-            {importing && (
-              <button className="primary" onClick={props.onImport} disabled={props.loading || !props.draft.trim()}>
-                <Upload size={16} />
-                Import
-              </button>
-            )}
+            <button type="button" className="subtle" onClick={clearImport} disabled={!props.draft.trim()}>
+              <X size={16} />
+              Clear
+            </button>
+            <input
+              ref={fileInputRef}
+              className="hidden-input"
+              type="file"
+              accept=".json,application/json"
+              onChange={(event) => loadImportFile(event.target.files?.[0])}
+            />
           </div>
-        </div>
-        {importing && (
-          <div className="bulkbar import-options">
-            <label className="check-row">
+          <label className="import-json-field">
+            Collections JSON
+            <textarea
+              id="import-collections-json"
+              name="collectionsJson"
+              value={props.draft}
+              onChange={(event) => props.onDraft(event.target.value)}
+              spellCheck={false}
+            />
+          </label>
+          {importInvalid && <div className="form-error">Invalid collections configuration.</div>}
+          {Boolean(importedCollections?.length) && !importInvalid && (
+            <label className="check-row switch-row">
               <input
                 type="checkbox"
                 name="deleteMissingCollections"
@@ -3134,23 +3264,106 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
               />
               Delete missing collections
             </label>
+          )}
+        </div>
+
+        <div className="settings-section import-review-panel">
+          <div className="section-heading">
+            <div>
+              <h2>Detected changes</h2>
+              <p>{importedCollections?.length ? `${importedCollections.length} imported collections parsed` : "No imported collections parsed yet."}</p>
+            </div>
+            <ListFilter size={18} />
           </div>
-        )}
-        <div className="settings-editor">
-          <label>
-            Collections JSON
-            <textarea
-              id={importing ? "import-collections-json" : "export-collections-json"}
-              name="collectionsJson"
-              value={props.draft}
-              onChange={(event) => props.onDraft(event.target.value)}
-              readOnly={!importing}
-              spellCheck={false}
-            />
-          </label>
+          {importedCollections?.length && !importHasChanges && !importInvalid ? (
+            <div className="settings-alert info">Your collections configuration is already up-to-date.</div>
+          ) : (
+            <div className="import-change-list">
+              {importChanges.deleted.map((collection) => (
+                <TransferChangeRow key={`delete-${collection.id}`} label="Deleted" tone="danger" collection={collection} />
+              ))}
+              {importChanges.changed.map((pair) => (
+                <TransferChangeRow key={`change-${pair.next.id}`} label="Changed" tone="warning" collection={pair.next} previousName={pair.previous.name} />
+              ))}
+              {importChanges.added.map((collection) => (
+                <TransferChangeRow key={`add-${collection.id}`} label="Added" tone="success" collection={collection} />
+              ))}
+              {!importChanges.deleted.length && !importChanges.changed.length && !importChanges.added.length && (
+                <article className="import-change-row empty">
+                  <span>No changes detected</span>
+                </article>
+              )}
+            </div>
+          )}
+          <div className="transfer-actions">
+            <button className="primary" type="button" onClick={() => setReviewOpen(true)} disabled={props.loading || !canReview}>
+              <CheckSquare2 size={16} />
+              Review
+            </button>
+          </div>
         </div>
       </section>
+      {reviewOpen && (
+        <Modal title="Review collections import" onClose={() => setReviewOpen(false)} wide>
+          <div className="modal-grid import-review-modal">
+            <div className="import-review-summary">
+              <span>{importChanges.added.length} added</span>
+              <span>{importChanges.changed.length} changed</span>
+              <span>{importChanges.deleted.length} deleted</span>
+            </div>
+            <div className="import-change-list compact">
+              {importChanges.deleted.map((collection) => (
+                <TransferChangeRow key={`modal-delete-${collection.id}`} label="Deleted" tone="danger" collection={collection} />
+              ))}
+              {importChanges.changed.map((pair) => (
+                <TransferChangeRow key={`modal-change-${pair.next.id}`} label="Changed" tone="warning" collection={pair.next} previousName={pair.previous.name} />
+              ))}
+              {importChanges.added.map((collection) => (
+                <TransferChangeRow key={`modal-add-${collection.id}`} label="Added" tone="success" collection={collection} />
+              ))}
+            </div>
+            <div className="settings-alert">
+              Importing will apply schema changes to the current database. Review destructive changes before continuing.
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="subtle" onClick={() => setReviewOpen(false)}>
+                <X size={16} />
+                Cancel
+              </button>
+              <button type="button" className="primary" onClick={confirmImport} disabled={props.loading}>
+                <Upload size={16} />
+                Import collections
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </section>
+  );
+}
+
+type TransferChangeRowProps = {
+  label: "Added" | "Changed" | "Deleted";
+  tone: "success" | "warning" | "danger";
+  collection: CollectionSchema;
+  previousName?: string;
+};
+
+function TransferChangeRow({ label, tone, collection, previousName }: TransferChangeRowProps) {
+  return (
+    <article className="import-change-row">
+      <span className={`sync-change-label ${tone}`}>{label}</span>
+      <div>
+        {previousName && previousName !== collection.name && (
+          <>
+            <span className="previous-name">{previousName}</span>
+            <ChevronRight size={14} />
+          </>
+        )}
+        <strong>{collection.name}</strong>
+        <code>{collection.id}</code>
+      </div>
+    </article>
   );
 }
 
@@ -4576,6 +4789,84 @@ function viewMeta(view: ViewName, collection: CollectionSchema | null) {
     logs: { title: "Logs", eyebrow: "Observability" }
   };
   return titles[view];
+}
+
+function sortedCollectionsForTransfer(collections: CollectionSchema[]) {
+  return collections
+    .map((collection) => sanitizeCollectionForTransfer(collection))
+    .sort((left, right) => {
+      const typeOrder = collectionTypeOrder(left.type) - collectionTypeOrder(right.type);
+      if (typeOrder !== 0) return typeOrder;
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function collectionTypeOrder(type: string) {
+  if (type === "auth") return 0;
+  if (type === "base") return 1;
+  if (type === "view") return 2;
+  return 3;
+}
+
+function sanitizeCollectionForTransfer(collection: CollectionSchema) {
+  const sanitized = cloneJsonObject(collection) as CollectionSchema;
+  delete sanitized.created;
+  delete sanitized.updated;
+  const oauth2 = sanitized.oauth2 as Record<string, unknown> | undefined;
+  if (isPlainObject(oauth2)) {
+    delete oauth2.providers;
+  }
+  return sanitized;
+}
+
+function parseCollectionsPayload(value: string) {
+  if (!value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    const payload = Array.isArray(parsed) ? parsed : isPlainObject(parsed) && Array.isArray(parsed.collections) ? parsed.collections : null;
+    if (!payload) return null;
+    return payload.filter(isPlainObject).map((collection) => sanitizeCollectionForTransfer(collection as CollectionSchema));
+  } catch {
+    return null;
+  }
+}
+
+function collectionImportChanges(current: CollectionSchema[], imported: CollectionSchema[] | null, deleteMissing: boolean) {
+  if (!imported?.length) return { added: [] as CollectionSchema[], changed: [] as { previous: CollectionSchema; next: CollectionSchema }[], deleted: [] as CollectionSchema[] };
+  const currentCollections = sortedCollectionsForTransfer(current);
+  const importedCollections = imported;
+  const currentById = new Map(currentCollections.map((collection) => [collection.id, collection]));
+  const importedById = new Map(importedCollections.map((collection) => [collection.id, collection]));
+  const added = importedCollections.filter((collection) => !currentById.has(collection.id));
+  const changed = importedCollections
+    .filter((collection) => {
+      const previous = currentById.get(collection.id);
+      return previous && stableJsonStringify(previous) !== stableJsonStringify(collection);
+    })
+    .map((collection) => ({ previous: currentById.get(collection.id) as CollectionSchema, next: collection }));
+  const deleted = deleteMissing ? currentCollections.filter((collection) => !importedById.has(collection.id)) : [];
+  return { added, changed, deleted };
+}
+
+function stableJsonStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJsonStringify(item)).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function downloadJsonFile(value: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function settingsObject(settings: AppSettings | null, section: string) {
