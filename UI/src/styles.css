@@ -1575,6 +1575,93 @@ td.row-actions .icon-button:last-child {
   min-width: 720px;
 }
 
+.crons-surface {
+  overflow: hidden;
+}
+
+.cron-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  padding: 15px;
+}
+
+.cron-list-header > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cron-list-header span,
+.settings-footnote {
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  line-height: var(--smLineHeight);
+}
+
+.crons-list {
+  display: grid;
+}
+
+.cron-list-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) max-content;
+  gap: 10px;
+  align-items: center;
+  min-height: 58px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  padding: 10px 15px;
+}
+
+.cron-list-item:last-child {
+  border-bottom: 0;
+}
+
+.cron-list-item.empty {
+  grid-template-columns: 28px minmax(0, 1fr);
+  color: var(--surfaceTxtHintColor);
+}
+
+.cron-item-content,
+.cron-list-item.empty > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-item-content strong,
+.cron-list-item.empty strong,
+.cron-item-content code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-item-content strong,
+.cron-list-item.empty strong {
+  color: var(--surfaceTxtColor);
+}
+
+.cron-item-content code,
+.cron-list-item.empty span {
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  line-height: var(--smLineHeight);
+}
+
+.cron-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon-button.busy {
+  color: var(--primaryColor);
+  background: var(--surfaceAccentColor);
+}
+
 .backups-surface,
 .backup-options-surface {
   overflow: hidden;
@@ -2732,11 +2819,13 @@ td.row-actions .icon-button:last-child {
   .field-builder-panel > header,
   .field-builder-row,
   .auth-provider-row,
-  .backup-list-item {
+  .backup-list-item,
+  .cron-list-item {
     grid-template-columns: 1fr;
   }
 
-  .backup-row-actions {
+  .backup-row-actions,
+  .cron-row-actions {
     justify-content: flex-start;
   }
 

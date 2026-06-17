@@ -2307,10 +2307,23 @@ type CronsViewProps = {
   crons: CronJob[];
   loading: boolean;
   onRefresh: () => void;
-  onRun: (job: CronJob) => void;
+  onRun: (job: CronJob) => Promise<void> | void;
 };
 
 function CronsView(props: CronsViewProps) {
+  const [runningCronId, setRunningCronId] = useState("");
+  const sortedCrons = useMemo(() => [...props.crons].sort((left, right) => left.id.localeCompare(right.id)), [props.crons]);
+
+  async function runCron(job: CronJob) {
+    if (runningCronId) return;
+    setRunningCronId(job.id);
+    try {
+      await props.onRun(job);
+    } finally {
+      setRunningCronId("");
+    }
+  }
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
@@ -2322,55 +2335,47 @@ function CronsView(props: CronsViewProps) {
         }
       />
       <section className="surface crons-surface">
-        <div className="surface-toolbar">
-          <div className="table-meta crons-meta">
-            <span>{props.crons.length} jobs</span>
+        <div className="cron-list-header">
+          <div>
+            <p className="settings-intro">Registered app cron jobs</p>
+            <span>{sortedCrons.length} jobs</span>
           </div>
         </div>
 
-        <div className="table-wrap">
-          <table className="crons-table">
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>Expression</th>
-                <th className="actions-col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {props.crons.length === 0 ? (
-                <tr>
-                  <td className="empty-row" colSpan={3}>
-                    No crons
-                  </td>
-                </tr>
-              ) : (
-                props.crons.map((cron) => (
-                  <tr key={cron.id}>
-                    <td>
-                      <code>{cron.id}</code>
-                    </td>
-                    <td>
-                      <code>{cron.expression}</code>
-                    </td>
-                    <td className="row-actions">
-                      <button
-                        className="icon-button"
-                        onClick={() => props.onRun(cron)}
-                        title="Run"
-                        aria-label="Run"
-                        disabled={props.loading}
-                      >
-                        <Play size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div className="crons-list" aria-live="polite">
+          {sortedCrons.length === 0 ? (
+            <article className="cron-list-item empty">
+              <Clock3 size={20} />
+              <div>
+                <strong>No registered crons found.</strong>
+                <span>App cron jobs are registered by the runtime or enabled settings.</span>
+              </div>
+            </article>
+          ) : (
+            sortedCrons.map((cron) => (
+              <article className="cron-list-item" key={cron.id}>
+                <Clock3 size={21} />
+                <div className="cron-item-content">
+                  <strong title={cron.id}>{cron.id}</strong>
+                  <code>{cron.expression}</code>
+                </div>
+                <nav className="cron-row-actions" aria-label={`${cron.id} actions`}>
+                  <button
+                    className={runningCronId === cron.id ? "icon-button busy" : "icon-button"}
+                    onClick={() => runCron(cron)}
+                    title="Run"
+                    aria-label="Run"
+                    disabled={props.loading || Boolean(runningCronId)}
+                  >
+                    <Play size={16} />
+                  </button>
+                </nav>
+              </article>
+            ))
+          )}
         </div>
       </section>
+      <p className="settings-footnote">App cron jobs can be registered programmatically; enabled backup schedules are listed here too.</p>
     </section>
   );
 }
