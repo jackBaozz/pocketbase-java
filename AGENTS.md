@@ -18,3 +18,12 @@
   * `JsonFileStore` 内部维护了 `mfas` 列表。
   * 扩展了 AuthResponse 阶段以生成 `mfaId`（在第一阶段）并在传入 `mfaId` 参数时（第二阶段）放行生成完整的 JWT。
   * 启用了 `__pbMFACleanup__` 定期调度任务用于清理过期的 MFA 记录。
+* 已完成 **SDP-010** (Official collection import/export review flow)：在 `App.tsx` 中实现了 `collectionImportChanges` 来计算新旧集合之间的差异并展示 diff，对每个集合（新增/修改/删除）都以不同的颜色高亮。
+* 已完成 **SDP-011** (Field-specific collection editor UI)：重构了 `field-builder-row` 拆解出新的 `FieldEditor.tsx` 组件，在点击编辑按钮时能进入具体的属性编辑表单（并带有 `Type`, `Required`, `Unique` 等选项的勾选）。
+* 已完成 **SDP-002**, **SDP-006**, **SDP-007**, **SDP-008**, **SDP-009**, **SDP-010**, **SDP-011**：
+  * 构建了 `JsSdkSmokeTest`，利用 node.js 和官方 JS SDK 跑通了集成认证和 CRUD 测试。
+  * 补齐了 `normalizeFieldValue` 关于 Field Type Validation Matrix 的功能（约束 `min`, `max`, `pattern`, `onlyHosts` 等支持）。
+  * 在 UI 中补充了 `FieldEditor` 组件满足 `SDP-011` 的界面缺口。
+  * 实现了 CollectionSchema Index 及字段变更删减记录冗余数据的基础 Schema Migration Semantics（`SDP-009`）。
+  * 编写了 `ADR-001` 作为对 SQLite 及 JSONFileStore 的正式定调（`SDP-007`）。
+  * 验证并认可了内置的 Collection Diff/Review 流程 (`SDP-010`) 及现存的 `RuleEvaluator` 评估器作为核心解析器 (`SDP-006`)。
