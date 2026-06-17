@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>pocketbase-java</name>
-    <description>Lightweight Java client SDK for PocketBase HTTP APIs.</description>
+    <description>A complete PocketBase backend server implementation and client SDK in pure Java.</description>
     <url>https://github.com/jackBaozz/pocketbase-java</url>
 
     <licenses>
