@@ -3110,3 +3110,47 @@ td.row-actions .icon-button:last-child {
     display: none;
   }
 }
+.field-builder-row.editing {
+  background: var(--bg-body);
+  border: 1px solid var(--border-color);
+  padding: 16px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.field-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.field-edit-options.check-row-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.field-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.field-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.field-type-specific-options {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}

@@ -27,6 +27,8 @@ public class CollectionSchema {
     public MfaConfig mfa = new MfaConfig();
     public OAuth2Config oauth2 = new OAuth2Config();
 
+    public List<String> indexes = new ArrayList<>();
+
     @JsonAlias("schema")
     public List<FieldSchema> fields = new ArrayList<>();
 

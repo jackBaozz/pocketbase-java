@@ -1431,6 +1431,9 @@ public final class JsonFileStore {
             existing.fields = mapper.convertValue(fields, new TypeReference<>() {
             });
         }
+        if (body.has("indexes") && body.get("indexes").isArray()) {
+            existing.indexes = mapper.convertValue(body.get("indexes"), new TypeReference<>() {});
+        }
         normalizeCollection(existing, true);
         if (!oldName.equals(existing.name) && collectionsByName.containsKey(existing.name)) {
             existing.name = oldName;
@@ -1440,6 +1443,24 @@ public final class JsonFileStore {
             collectionsByName.remove(oldName);
             collectionsByName.put(existing.name, existing);
         }
+
+        Set<String> allowedFields = new LinkedHashSet<>(Arrays.asList("id", "created", "updated", "collectionId", "collectionName", "expand"));
+        if ("auth".equals(existing.type)) {
+            allowedFields.addAll(Arrays.asList("username", "email", "emailVisibility", "verified", "tokenKey", "passwordHash"));
+        }
+        existing.fields.forEach(f -> allowedFields.add(f.name));
+
+        boolean recordsChanged = false;
+        for (Map<String, Object> record : records(existing)) {
+            boolean changed = record.keySet().removeIf(key -> !allowedFields.contains(key));
+            if (changed) {
+                recordsChanged = true;
+            }
+        }
+        if (recordsChanged) {
+            saveRecords(existing);
+        }
+
         existing.updated = now();
         saveAll();
         return copyCollection(existing);

@@ -29,10 +29,7 @@ public class RouteConformanceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        ServerConfig config = new ServerConfig()
-                
-                .dataDir(dataDir)
-                ;
+        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
         server = LocalPocketBase.start(config);
         baseUrl = "http://localhost:" + server.port();
     }
@@ -40,7 +37,7 @@ public class RouteConformanceTest {
     @AfterEach
     void tearDown() {
         if (server != null) {
-            server.stop();
+            server.close();
         }
     }
 
@@ -133,7 +130,7 @@ public class RouteConformanceTest {
                 builder.method(route.method, HttpRequest.BodyPublishers.noBody());
             }
 
-            HttpResponse<String> response = httpClient.send(builder, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
 
             // A 404 might mean the route is entirely missing (which fails the manifest conformance).
             // A missing collection or auth failure should return 400, 401, 403, 404 (with specific code), etc.
@@ -157,6 +154,7 @@ public class RouteConformanceTest {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/settings"))
                 .method("DELETE", HttpRequest.BodyPublishers.noBody()) // DELETE /api/settings is not allowed
+                .build();
                 ;
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         

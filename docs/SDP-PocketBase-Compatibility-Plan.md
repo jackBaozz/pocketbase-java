@@ -208,11 +208,11 @@ Use this checklist as the project board seed.
 - [x] **SDP-004**: `_mfas` internal collection and MFA auth response (Backend/Auth)
 - [x] **SDP-005**: MFA second-factor flow for password/OTP/OAuth2 (Backend/Auth)
 - [ ] **SDP-006**: Rule/filter parser parity (Backend/Core)
-- [ ] **SDP-007**: Storage engine ADR and native proof (Backend/Core)
+- [x] **SDP-007**: Storage engine ADR and native proof (Backend/Core)
 - [x] **SDP-008**: Field type validation matrix (Backend/Collections)
-- [ ] **SDP-009**: Collection indexes and schema migration semantics (Backend/Collections)
-- [/] **SDP-010**: Official collection import/export review flow (Backend/UI)
-- [ ] **SDP-011**: Field-specific collection editor UI (UI)
+- [x] **SDP-009**: Collection indexes and schema migration semantics (Backend/Collections)
+- [x] **SDP-010**: Official collection import/export review flow (Backend/UI)
+- [x] **SDP-011**: Field-specific collection editor UI (UI)
 
 ### P1
 - [ ] **SDP-012**: Field-specific record editor UI (UI)

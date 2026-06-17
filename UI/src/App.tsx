@@ -36,6 +36,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
+import { FieldEditor } from "./components/FieldEditor";
 
 type HealthResponse = {
   data: {
@@ -3785,6 +3786,16 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     updateFields(fieldsPreview.fields.filter((_, currentIndex) => currentIndex !== index));
   }
 
+  function updateFieldAt(index: number, updatedField: FieldSchema) {
+    if (fieldsPreview.error) {
+      setError(fieldsPreview.error);
+      return;
+    }
+    const nextFields = [...fieldsPreview.fields];
+    nextFields[index] = updatedField;
+    updateFields(nextFields);
+  }
+
   return (
     <Modal title={state.mode === "edit" ? `Edit ${collection?.name}` : "New collection"} onClose={onClose} wide>
       <form className="modal-grid collection-upsert-form" onSubmit={submit}>
@@ -3862,27 +3873,13 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                 <p className="sidebar-empty">No fields configured</p>
               ) : (
                 fieldsPreview.fields.map((field, index) => (
-                  <article className="field-builder-row" key={`${field.name}-${index}`}>
-                    <div>
-                      <strong>{field.name || "(unnamed)"}</strong>
-                      <span>{field.type || "unknown"}</span>
-                    </div>
-                    <div className="chips">
-                      {field.required && <span>required</span>}
-                      {field.unique && <span>unique</span>}
-                      {field.hidden && <span>hidden</span>}
-                      {field.system && <span>system</span>}
-                    </div>
-                    <button
-                      className="icon-button danger"
-                      type="button"
-                      onClick={() => removeField(index)}
-                      title="Remove field"
-                      aria-label="Remove field"
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </article>
+                  <FieldEditor
+                    key={`${field.name}-${index}`}
+                    field={field}
+                    index={index}
+                    onUpdate={updateFieldAt}
+                    onRemove={removeField}
+                  />
                 ))
               )}
             </div>
