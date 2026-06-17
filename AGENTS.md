@@ -13,3 +13,8 @@
 * 已完成 **SDP-001** (Route manifest conformance tests)：创建了 `RouteConformanceTest` 针对所有官方路由进行基础连通性校验，确保核心框架与 PocketBase API Surface 一致。
 * 已完成 **SDP-003** (`POST /api/collections/meta/dry-run-view`)：添加了基于纯 Select 查询视图预览功能，复用 `JsonFileStore` 内部的 SQL 分析机制，并限制最大 5000 字符与单次 10 条结果的返回。
 * 下一步重点将转移到 **SDP-004** (`_mfas` internal collection / MFA Auth Response) 及深入规则与过滤器解析器兼容性（**SDP-006**）。
+* 已完成 **SDP-004** (`_mfas` internal collection and MFA auth response) 与 **SDP-005** (MFA second-factor flow for password/OTP/OAuth2)：
+  * 添加了对 `CollectionSchema` 中 `mfa.rule` 的支持。
+  * `JsonFileStore` 内部维护了 `mfas` 列表。
+  * 扩展了 AuthResponse 阶段以生成 `mfaId`（在第一阶段）并在传入 `mfaId` 参数时（第二阶段）放行生成完整的 JWT。
+  * 启用了 `__pbMFACleanup__` 定期调度任务用于清理过期的 MFA 记录。
