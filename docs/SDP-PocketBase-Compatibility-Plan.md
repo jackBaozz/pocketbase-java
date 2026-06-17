@@ -1,10 +1,10 @@
 # SDP: PocketBase Java Compatibility Plan
 
-Updated: 2026-06-15
+Updated: 2026-06-17
 
 Official baseline: `pocketbase/pocketbase` `master` at `507ecb264b6155ad3677d661115ff277a48a5cdd`.
 
-Local baseline: `main` with the current OAuth2 backend flow, OAuth2 Admin UI tester, OTP/auth settings, settings/logs/crons/sql/backups/files/realtime work included.
+Local baseline: `main` with the current OAuth2 backend flow, OAuth2 Admin UI tester, OTP/auth settings, structured settings/logs/crons/sql/backups/import-export/files/realtime work included.
 
 ## 1. Goal
 
@@ -18,7 +18,7 @@ The Admin UI should track the official UI workflows where it matters for operato
 | --- | --- | ---: | --- |
 | Backend route surface | Most official `/api` routes are present | 95% | Missing known official route: `POST /api/collections/meta/dry-run-view`. Extra compatibility routes exist, such as `/api/admins/auth-with-password` and `/api/bootstrap/superuser`. |
 | Backend behavior | Useful local implementation exists, but many semantics are simplified | 50-60% | JSON-file store, simplified query/filter/rule logic, partial auth/MFA semantics, simplified logs/settings/backups. |
-| Admin UI surface | Single React app covers login, records, schema, backups, settings JSON, logs, crons, OAuth2 tester | 30-40% | Official UI has separate full pages for collections, fields, records, logs, application/mail/storage/backups/crons/import/export/sql settings. |
+| Admin UI surface | Single React app covers login, records, schema, structured settings, mail/storage tests, backups, logs, crons, SQL, import/export, and OAuth2 tester | 55-65% | The main pages now exist, but many official details remain simplified: field-specific editors, deep hash routes, auth action pages, provider-specific OAuth2 forms, logs chart details, and exact import dry-run semantics. |
 | Java SDK facade | Covers core collection/auth/file/settings/logs/crons/sql APIs | 45-55% | Needs full official route coverage, typed auth helpers, realtime client, batch client, backup client, and SDK compatibility smoke tests. |
 | Native packaging | GraalVM native image path already works for current feature set | 70% | Reflection config is maintained, but future storage/provider choices must be native-image validated before adoption. |
 
@@ -55,14 +55,14 @@ Official Admin UI routes from `ui/src/router.js`:
 | `#/auth/oauth2-redirect-success` / `failure` | Implemented differently via `/api/oauth2-redirect` popup postMessage |
 | `#/collections` | Present, but simplified |
 | `#/logs` | Present, but simplified |
-| `#/settings` | Present as JSON editor, not official structured page |
-| `#/settings/mail` | Missing structured page |
-| `#/settings/storage` | Missing structured page |
-| `#/settings/backups` | Backup operations present, settings form incomplete |
-| `#/settings/crons` | Cron list/run present, page simplified |
-| `#/settings/export-collections` | Missing |
-| `#/settings/import-collections` | Backend import exists, UI missing review flow |
-| `#/settings/sql` | Backend SQL exists, UI missing SQL console |
+| `#/settings` | Present as structured application settings with advanced JSON fallback |
+| `#/settings/mail` | Present with SMTP/auth fields and test email flow |
+| `#/settings/storage` | Present with file storage S3 settings and S3 test flow |
+| `#/settings/backups` | Present with backup operations, backup settings, S3 target test, and cron keep policy editor |
+| `#/settings/crons` | Present with official-style list/run layout, simplified status metadata |
+| `#/settings/export-collections` | Present with collection selection, JSON preview, copy, and download |
+| `#/settings/import-collections` | Present with JSON/file input, delete-missing option, local diff review modal, and backend import action |
+| `#/settings/sql` | Present with SQL editor, result table, and error display |
 
 ## 4. Backend Gap Map
 
@@ -81,11 +81,11 @@ Official Admin UI routes from `ui/src/router.js`:
 | Realtime | SSE connect and subscription POST exist | Official subscription protocol edge cases, auth refresh behavior, access rule re-checks, disconnect cleanup, client SDK compatibility | P1 |
 | Batch | Record batch transaction support | Official request/response details, full multipart mapping, max request/body timeout settings, rollback tests across files | P1 |
 | Files | Token, download, thumbs, protected file basics | Range/cache headers, exact thumb behavior, S3 storage, download params, filename/content-disposition parity | P1 |
-| Settings | GET/PATCH/test S3/test email/Apple secret | Structured validation, redaction parity, mail/storage/backups/application settings defaults, rate-limit settings enforcement | P1 |
+| Settings | GET/PATCH/test S3/test email/Apple secret plus structured Admin UI pages | Structured validation, redaction parity, exact mail/storage/backups/application defaults, rate-limit settings enforcement | P1 |
 | Logs | Activity logging, list/view/stats | Official stats bucket behavior, full filter support, request metadata parity, log retention scheduler | P2 |
-| Backups | Local zip create/upload/download/delete/restore | S3 backups, restore safety parity, import/export diff UI support, scheduled backups tested end-to-end | P1 |
-| Crons | Built-in IDs listed and manually runnable | Real scheduler loop, exact cron parser behavior, status/last run metadata if needed by UI | P2 |
-| SQL | Lightweight SQL console endpoint | Official SQLite semantics, params, explain errors, safe statement handling, view query dry-run reuse | P1 |
+| Backups | Local zip create/upload/download/delete/restore plus Admin UI settings controls | S3 backups, restore safety parity, scheduled backups tested end-to-end | P1 |
+| Crons | Built-in IDs listed and manually runnable with Admin UI page | Real scheduler loop, exact cron parser behavior, status/last run metadata if needed by UI | P2 |
+| SQL | Lightweight SQL endpoint and Admin UI console | Official SQLite semantics, params, explain errors, safe statement handling, view query dry-run reuse | P1 |
 | Middleware/security | CORS, OPTIONS, body reads, activity log | Official rate limit, body limit, security headers, trusted proxy, superuser IP whitelist, panic recovery shape | P0 |
 | Persistence engine | JSON-file store with backups | Official parity ultimately needs SQLite-style constraints/indexes/query planner; JSON store should become test/dev backend or compatibility layer only | P0 |
 
@@ -93,20 +93,20 @@ Official Admin UI routes from `ui/src/router.js`:
 
 | UI area | Done now | Main gaps | Priority |
 | --- | --- | --- | --- |
-| Shell/navigation | Sidebar, collection list, records/schema/settings/logs/crons/backups views | Hash routes, official settings sidebar, deep links, record modal URLs, install/reset flows | P1 |
+| Shell/navigation | Sidebar, collection list, records/schema/settings/logs/crons/backups/import/export/sql views | Hash routes, deep links, record modal URLs, install/reset flows | P1 |
 | Login/auth pages | Superuser login panel | Request password reset, confirm reset/verification/email-change pages, installer page | P1 |
 | Collections | Create/edit/delete collection modal, schema JSON, auth options, OAuth2 config/tester | Official tabs: Fields, Rules, Auth options, View query; field-specific editors; indexes; change confirmation | P0 |
 | Field editors | JSON schema editing and basic record form | Dedicated editors for text/email/url/number/bool/date/autodate/select/json/editor/file/relation/password/geoPoint | P0 |
 | Records | List, create/update/delete, simple editor, relation expand basics | Searchbar parity, file picker/thumbs, relation picker, preview/duplicate, impersonate modal, field-specific renderers | P1 |
 | OAuth2 tester | Popup/login tester with callback postMessage and result modal | Provider-specific forms matching official `collections/oauth2/*Options.js`, failure/success pages, persisted provider health indicators | P1 |
-| Logs | List and details enough for troubleshooting | Chart/stats visualization, filter presets, request data viewer parity | P2 |
-| Settings application | Raw JSON editor | Structured app URL/meta/batch/rate-limit/trusted-proxy/superuser sections | P1 |
-| Settings mail | Backend test email exists | Structured SMTP/mail settings form and test modal | P1 |
-| Settings storage | Backend S3 test exists | Local/S3 file storage form, backups S3 form, validation status | P1 |
-| Backups | Create/upload/download/restore/delete | Official backup settings page, restore confirmation details, S3 target, cron keep policy editor | P1 |
-| Crons | List/run | Official crons page styling and status details | P2 |
-| Import/export | Backend import exists | Export collections page, import diff/review modal, dry-run integration | P0 |
-| SQL console | Backend exists | SQL editor, result table, error panel, keyboard submit | P1 |
+| Logs | List, details, stats-backed chart strip, and search controls | Official stats bucket parity, filter presets, request data viewer parity | P2 |
+| Settings application | Structured app URL/meta/batch/rate-limit/trusted-proxy/superuser sections plus advanced JSON fallback | Exact official validation/defaults and complete rate-limit enforcement | P1 |
+| Settings mail | Structured SMTP/mail settings form and test email action | Official templates, delivery status details, and validation copy parity | P1 |
+| Settings storage | File storage S3 form, backup S3 form, and S3 test action | Real S3 file/backups implementation and exact validation status parity | P1 |
+| Backups | Create/upload/download/restore/delete plus settings and cron keep controls | Restore confirmation details, real S3 backup execution, scheduled backup coverage | P1 |
+| Crons | Official-style list/run page | Real scheduler loop, exact status/last-run metadata, cron parser parity | P2 |
+| Import/export | Export selection/JSON/copy/download and import JSON/file diff review modal | Official dry-run integration, exact schema diff semantics, destructive change warnings | P0 |
+| SQL console | SQL editor, result table, and error panel | Official SQLite response/error parity, params, keyboard submit, view dry-run reuse | P1 |
 
 ## 6. Development Plan
 
@@ -152,13 +152,12 @@ Official Admin UI routes from `ui/src/router.js`:
    - Implement field-specific validation for all official field types.
    - Add index definitions and validation.
    - Add view collection query editing and dry-run integration.
-   - Add collection import/export review semantics.
+   - Replace local collection import/export diffing with official-compatible dry-run/review semantics.
 
-3. Complete settings backend and pages.
-   - Structured application settings: meta, app URL, batch, rate limits, trusted proxy, superuser options.
-   - Mail settings with test modal.
-   - Storage settings with file S3 and backup S3 tests.
-   - Backup settings with cron/max keep.
+3. Harden settings backend and pages.
+   - Align structured application settings validation and default values with official behavior.
+   - Align mail test, storage S3 test, and backup S3 test response shapes.
+   - Exercise backup cron/max keep settings end-to-end.
 
 4. Complete record editor parity.
    - Add field-specific record inputs and table renderers.
@@ -183,7 +182,6 @@ Official Admin UI routes from `ui/src/router.js`:
    - Add thumbnail failure parity and protected-file regression tests.
 
 3. Improve SQL console.
-   - Add UI SQL editor/result table.
    - Align SQL response columns/rows/errors with official behavior.
    - Reuse SQL validation for view dry-run.
 
@@ -214,18 +212,18 @@ Use this checklist as the project board seed.
 | SDP-007 | Storage engine ADR and native proof | Backend/Core | P0 | Todo |
 | SDP-008 | Field type validation matrix | Backend/Collections | P0 | Todo |
 | SDP-009 | Collection indexes and schema migration semantics | Backend/Collections | P0 | Todo |
-| SDP-010 | Official collection import/export review flow | Backend/UI | P0 | Todo |
+| SDP-010 | Official collection import/export review flow | Backend/UI | P0 | In progress |
 | SDP-011 | Field-specific collection editor UI | UI | P0 | Todo |
 | SDP-012 | Field-specific record editor UI | UI | P1 | Todo |
 | SDP-013 | OAuth2 provider-specific config parity | Backend/UI | P1 | Todo |
-| SDP-014 | Structured application settings page | UI/Backend | P1 | Todo |
-| SDP-015 | Mail settings page and test modal | UI/Backend | P1 | Todo |
-| SDP-016 | Storage settings page and S3 tests | UI/Backend | P1 | Todo |
-| SDP-017 | Backup settings page and S3 backups | UI/Backend | P1 | Todo |
+| SDP-014 | Structured application settings page | UI/Backend | P1 | In progress |
+| SDP-015 | Mail settings page and test modal | UI/Backend | P1 | In progress |
+| SDP-016 | Storage settings page and S3 tests | UI/Backend | P1 | In progress |
+| SDP-017 | Backup settings page and S3 backups | UI/Backend | P1 | In progress |
 | SDP-018 | Realtime SDK compatibility smoke | Backend/SDK | P1 | Todo |
 | SDP-019 | Batch service SDK and multipart rollback tests | Backend/SDK | P1 | Todo |
-| SDP-020 | SQL console UI | UI | P1 | Todo |
-| SDP-021 | Logs chart/stats parity | UI/Backend | P2 | Todo |
+| SDP-020 | SQL console UI | UI | P1 | Done |
+| SDP-021 | Logs chart/stats parity | UI/Backend | P2 | In progress |
 | SDP-022 | File range/cache/S3 parity | Backend | P2 | Todo |
 | SDP-023 | Installer and auth action pages | UI | P2 | Todo |
 | SDP-024 | Native CI release gate | Build | P2 | Todo |

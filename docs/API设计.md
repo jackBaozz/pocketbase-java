@@ -423,7 +423,7 @@ GET    /api/collections/meta/oauth2-providers
 
 `GET /api/collections/meta/scaffolds` 返回 `base`、`auth`、`view` 三类集合模板，供 Admin UI 创建集合前填充默认结构。
 
-`GET /api/collections/meta/oauth2-providers` 返回官方常见 OAuth2 provider metadata（`name`、`displayName`、`logo`）。当前仅提供 provider 列表元数据，不代表 OAuth2 登录和回调流程已经实现。
+`GET /api/collections/meta/oauth2-providers` 返回官方常见 OAuth2 provider metadata（`name`、`displayName`、`logo`）。该 metadata 会被 Admin UI 的 auth collection OAuth2 配置和登录测试器使用；当前 generic OAuth2/OIDC code exchange 与 popup callback 已实现，但 provider-specific 细节仍需继续补齐。
 
 集合列表和单条查询支持常用查询参数：
 
@@ -899,8 +899,10 @@ UI 源码位于 `UI/`，使用 React + Vite + TypeScript；执行 `cd UI && npm 
 当前 UI 覆盖：
 
 - superuser 初始化和登录。
-- collection 创建、schema/rules 编辑、删除。
-- record 列表、filter/sort/perPage 查询、JSON 编辑、删除。
+- collection 创建、schema/rules/auth options 编辑、OAuth2 provider 配置与登录测试、删除。
+- record 列表、filter/sort/perPage 查询、JSON 编辑、file 字段上传、删除。
 - file 字段上传和带 file token 的文件打开。
 - backup 创建、上传、下载、恢复和删除。
-- settings JSON 编辑和 logs 表格查看。
+- structured application/mail/storage/backups settings 页面，包含 SMTP/S3 测试动作和 advanced JSON fallback。
+- crons 列表/手动执行、SQL console、logs 列表/详情/stats chart。
+- collections export 选择/JSON 预览/复制/下载，以及 import JSON/file 载入、本地 diff review 和导入动作。
