@@ -201,32 +201,35 @@ Official Admin UI routes from `ui/src/router.js`:
 
 Use this checklist as the project board seed.
 
-| ID | Item | Area | Priority | Status |
-| --- | --- | --- | --- | --- |
-| SDP-001 | Route manifest conformance tests | Backend | P0 | Todo |
-| SDP-002 | Official JS SDK smoke suite | Backend/SDK | P0 | Todo |
-| SDP-003 | `POST /api/collections/meta/dry-run-view` | Backend | P0 | Todo |
-| SDP-004 | `_mfas` internal collection and MFA auth response | Backend/Auth | P0 | Todo |
-| SDP-005 | MFA second-factor flow for password/OTP/OAuth2 | Backend/Auth | P0 | Todo |
-| SDP-006 | Rule/filter parser parity | Backend/Core | P0 | Todo |
-| SDP-007 | Storage engine ADR and native proof | Backend/Core | P0 | Todo |
-| SDP-008 | Field type validation matrix | Backend/Collections | P0 | Todo |
-| SDP-009 | Collection indexes and schema migration semantics | Backend/Collections | P0 | Todo |
-| SDP-010 | Official collection import/export review flow | Backend/UI | P0 | In progress |
-| SDP-011 | Field-specific collection editor UI | UI | P0 | Todo |
-| SDP-012 | Field-specific record editor UI | UI | P1 | Todo |
-| SDP-013 | OAuth2 provider-specific config parity | Backend/UI | P1 | Todo |
-| SDP-014 | Structured application settings page | UI/Backend | P1 | In progress |
-| SDP-015 | Mail settings page and test modal | UI/Backend | P1 | In progress |
-| SDP-016 | Storage settings page and S3 tests | UI/Backend | P1 | In progress |
-| SDP-017 | Backup settings page and S3 backups | UI/Backend | P1 | In progress |
-| SDP-018 | Realtime SDK compatibility smoke | Backend/SDK | P1 | Todo |
-| SDP-019 | Batch service SDK and multipart rollback tests | Backend/SDK | P1 | Todo |
-| SDP-020 | SQL console UI | UI | P1 | Done |
-| SDP-021 | Logs chart/stats parity | UI/Backend | P2 | In progress |
-| SDP-022 | File range/cache/S3 parity | Backend | P2 | Todo |
-| SDP-023 | Installer and auth action pages | UI | P2 | Todo |
-| SDP-024 | Native CI release gate | Build | P2 | Todo |
+### P0
+- [x] **SDP-001**: Route manifest conformance tests (Backend)
+- [ ] **SDP-002**: Official JS SDK smoke suite (Backend/SDK)
+- [x] **SDP-003**: `POST /api/collections/meta/dry-run-view` (Backend)
+- [ ] **SDP-004**: `_mfas` internal collection and MFA auth response (Backend/Auth)
+- [ ] **SDP-005**: MFA second-factor flow for password/OTP/OAuth2 (Backend/Auth)
+- [ ] **SDP-006**: Rule/filter parser parity (Backend/Core)
+- [ ] **SDP-007**: Storage engine ADR and native proof (Backend/Core)
+- [ ] **SDP-008**: Field type validation matrix (Backend/Collections)
+- [ ] **SDP-009**: Collection indexes and schema migration semantics (Backend/Collections)
+- [/] **SDP-010**: Official collection import/export review flow (Backend/UI)
+- [ ] **SDP-011**: Field-specific collection editor UI (UI)
+
+### P1
+- [ ] **SDP-012**: Field-specific record editor UI (UI)
+- [ ] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
+- [/] **SDP-014**: Structured application settings page (UI/Backend)
+- [/] **SDP-015**: Mail settings page and test modal (UI/Backend)
+- [/] **SDP-016**: Storage settings page and S3 tests (UI/Backend)
+- [/] **SDP-017**: Backup settings page and S3 backups (UI/Backend)
+- [ ] **SDP-018**: Realtime SDK compatibility smoke (Backend/SDK)
+- [ ] **SDP-019**: Batch service SDK and multipart rollback tests (Backend/SDK)
+- [x] **SDP-020**: SQL console UI (UI)
+
+### P2
+- [/] **SDP-021**: Logs chart/stats parity (UI/Backend)
+- [ ] **SDP-022**: File range/cache/S3 parity (Backend)
+- [ ] **SDP-023**: Installer and auth action pages (UI)
+- [ ] **SDP-024**: Native CI release gate (Build)
 
 ## 8. Acceptance Gates
 

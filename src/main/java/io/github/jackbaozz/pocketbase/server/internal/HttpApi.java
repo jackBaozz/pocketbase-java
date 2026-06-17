@@ -248,6 +248,11 @@ public final class HttpApi implements HttpHandler {
             requireSuperuser(principal);
             return store.collectionScaffolds();
         }
+        if (segments.size() == 4 && "meta".equals(segments.get(2)) && "dry-run-view".equals(segments.get(3))
+                && "POST".equals(method)) {
+            requireSuperuser(principal);
+            return store.dryRunView(readJson(exchange));
+        }
         if (segments.size() == 4 && "meta".equals(segments.get(2)) && "oauth2-providers".equals(segments.get(3))
                 && "GET".equals(method)) {
             requireSuperuser(principal);

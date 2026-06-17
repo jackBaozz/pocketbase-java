@@ -374,6 +374,63 @@ public final class JsonFileStore {
         );
     }
 
+    public synchronized Map<String, Object> dryRunView(JsonNode body) {
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "An error occurred while loading the submitted data.");
+        }
+        JsonNode queryNode = body.get("query");
+        if (queryNode == null || queryNode.isNull() || queryNode.asText().isBlank()) {
+            throw new ApiException(
+                    400,
+                    "An error occurred while validating the submitted data.",
+                    fieldError("query", "validation_required", "query is required.")
+            );
+        }
+        String query = queryNode.asText();
+        if (query.length() > 5000) {
+            throw new ApiException(
+                    400,
+                    "An error occurred while validating the submitted data.",
+                    fieldError("query", "validation_length_out_of_range", "query must be at most 5000 characters.")
+            );
+        }
+
+        SqlResult result;
+        try {
+            List<String> statements = splitSqlStatements(query).stream()
+                    .map(String::trim)
+                    .filter(statement -> !statement.isBlank())
+                    .collect(Collectors.toCollection(ArrayList::new));
+            if (statements.isEmpty()) {
+                throw new IllegalArgumentException("empty query");
+            }
+            String upper = statements.get(0).toUpperCase(Locale.ROOT);
+            boolean writeMode = SQL_WRITE_PREFIXES.stream().anyMatch(upper::startsWith);
+            if (writeMode) {
+                throw new IllegalArgumentException("write statements are not allowed");
+            }
+            result = new SqlResult(0, List.of(), List.of());
+            for (String statement : statements) {
+                result = executeSqlSelect(statement);
+            }
+        } catch (RuntimeException e) {
+            throw new ApiException(
+                    400,
+                    "Invalid view query. Raw error:\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+            );
+        }
+
+        List<Map<String, Object>> limitRows = result.rows();
+        if (limitRows.size() > 10) {
+            limitRows = limitRows.subList(0, 10);
+        }
+
+        return orderedMap(
+                "columns", result.columns(),
+                "rows", limitRows
+        );
+    }
+
     private SqlResult executeSql(String query) {
         List<String> statements = splitSqlStatements(query).stream()
                 .map(String::trim)
