@@ -1,11 +1,13 @@
 package io.github.jackbaozz.pocketbase.server;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -23,6 +25,7 @@ public class RouteConformanceTest {
     private LocalPocketBase server;
     private String baseUrl;
     private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @TempDir
     Path dataDir;
@@ -130,6 +133,14 @@ public class RouteConformanceTest {
                 builder.method(route.method, HttpRequest.BodyPublishers.noBody());
             }
 
+            if ("GET".equals(route.method) && "/api/realtime".equals(route.path)) {
+                HttpResponse<InputStream> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+                try (InputStream ignored = response.body()) {
+                    assertNotEquals(404, response.statusCode(), "Route is missing: " + route.method + " " + route.path);
+                }
+                continue;
+            }
+
             HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
 
             // A 404 might mean the route is entirely missing (which fails the manifest conformance).
@@ -151,8 +162,10 @@ public class RouteConformanceTest {
 
     @Test
     void testUnknownMethodReturns405Or404() throws Exception {
+        String token = superuserToken();
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/settings"))
+                .header("Authorization", "Bearer " + token)
                 .method("DELETE", HttpRequest.BodyPublishers.noBody()) // DELETE /api/settings is not allowed
                 .build();
                 ;
@@ -162,5 +175,22 @@ public class RouteConformanceTest {
         // HttpApi throws ApiException(405, "Method not allowed.")
         assertEquals(405, response.statusCode());
         assertEquals(true, response.body().contains("Method not allowed."));
+    }
+
+    private String superuserToken() throws Exception {
+        HttpRequest bootstrap = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/bootstrap/superuser"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"email\":\"route@example.com\",\"password\":\"password123\"}"))
+                .build();
+        httpClient.send(bootstrap, HttpResponse.BodyHandlers.ofString());
+
+        HttpRequest login = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/_superusers/auth-with-password"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"identity\":\"route@example.com\",\"password\":\"password123\"}"))
+                .build();
+        HttpResponse<String> response = httpClient.send(login, HttpResponse.BodyHandlers.ofString());
+        return mapper.readTree(response.body()).get("token").asText();
     }
 }

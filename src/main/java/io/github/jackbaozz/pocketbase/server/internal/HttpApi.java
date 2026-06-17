@@ -66,6 +66,11 @@ public final class HttpApi implements HttpHandler {
                 realtimeHub.connect(exchange);
                 return;
             }
+            if (path.equals("/ping") && "GET".equals(method)) {
+                status = 200;
+                sendBytes(exchange, 200, "pong".getBytes(StandardCharsets.UTF_8), "text/plain; charset=utf-8");
+                return;
+            }
             if (path.startsWith("/api/")) {
                 Object response = routeApi(exchange, path);
                 if (response == NoContent.INSTANCE) {
@@ -694,10 +699,16 @@ public final class HttpApi implements HttpHandler {
 
     private Optional<RequestPrincipal> principal(HttpExchange exchange) {
         String header = exchange.getRequestHeaders().getFirst("Authorization");
-        if (header == null || !header.startsWith("Bearer ")) {
+        if (header == null || header.isBlank()) {
             return Optional.empty();
         }
-        return store.verifyToken(header.substring("Bearer ".length()))
+        String token = header.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())
+                ? header.substring("Bearer ".length()).trim()
+                : header.trim();
+        if (token.isBlank()) {
+            return Optional.empty();
+        }
+        return store.verifyToken(token)
                 .map(RequestPrincipal::fromClaims);
     }
 

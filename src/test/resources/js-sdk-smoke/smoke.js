@@ -33,8 +33,15 @@ async function run() {
 
         // 2. Auth with password
         console.log("Authenticating...");
-        const authData = await pb.admins.authWithPassword('smoke@example.com', 'password123');
-        console.log(`Authenticated as: ${authData.admin.email}`);
+        const authData = await pb.collection('_superusers').authWithPassword('smoke@example.com', 'password123');
+        console.log(`Authenticated as: ${authData.record.email}`);
+
+        if (!pb.authStore.isValid) {
+            throw new Error("SDK auth store rejected the returned auth token");
+        }
+        if (!pb.authStore.isSuperuser) {
+            throw new Error("SDK auth store did not recognize the login as a superuser");
+        }
 
         // 3. Create a collection
         console.log("Creating collection...");

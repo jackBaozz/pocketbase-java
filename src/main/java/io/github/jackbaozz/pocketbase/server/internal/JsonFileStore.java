@@ -2415,7 +2415,7 @@ public final class JsonFileStore {
         claims.put("sub", record.get("id"));
         claims.put("collectionId", collection.id);
         claims.put("collectionName", collection.name);
-        claims.put("type", SUPERUSERS.equals(collection.name) ? "superuser" : "authRecord");
+        claims.put("type", "auth");
         claims.put("email", record.get("email"));
         claims.put("tokenType", tokenType);
         claims.put("tokenKey", record.get("tokenKey"));
@@ -2445,7 +2445,7 @@ public final class JsonFileStore {
 
     private boolean authTokenClaimsValid(Map<String, Object> claims) {
         String type = String.valueOf(claims.getOrDefault("type", ""));
-        if (!"authRecord".equals(type) && !"superuser".equals(type)) {
+        if (!"auth".equals(type) && !"authRecord".equals(type) && !"superuser".equals(type)) {
             return false;
         }
         CollectionSchema collection = findCollectionOrNull(String.valueOf(claims.getOrDefault("collectionId", "")));
@@ -2492,7 +2492,7 @@ public final class JsonFileStore {
         claims.put("sub", record.get("id"));
         claims.put("collectionId", collection.id);
         claims.put("collectionName", collection.name);
-        claims.put("type", SUPERUSERS.equals(collection.name) ? "superuser" : "authRecord");
+        claims.put("type", "auth");
         claims.put("email", record.get("email"));
         claims.put("tokenType", tokenType);
         claims.put("tokenKey", record.get("tokenKey"));

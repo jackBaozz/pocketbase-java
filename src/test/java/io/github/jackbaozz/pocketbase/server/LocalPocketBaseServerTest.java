@@ -99,6 +99,24 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void acceptsOfficialSdkAuthorizationHeaderWithoutBearerPrefix() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> response = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/settings"))
+                        .header("Accept", "application/json")
+                        .header("Authorization", token)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        );
+
+        assertEquals(200, response.statusCode());
+    }
+
+    @Test
     void collectionListSupportsFilterSortAndFields() throws Exception {
         start();
         bootstrapSuperuser();

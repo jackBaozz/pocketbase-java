@@ -6,6 +6,24 @@
     "system" : true,
     "created" : "2026-06-14T08:53:31.793460Z",
     "updated" : "2026-06-14T08:53:31.793460Z",
+    "passwordAuth" : {
+      "enabled" : true,
+      "identityFields" : [ "email" ]
+    },
+    "otp" : {
+      "enabled" : false,
+      "duration" : 300,
+      "length" : 6
+    },
+    "mfa" : {
+      "enabled" : false,
+      "duration" : 1800
+    },
+    "oauth2" : {
+      "enabled" : false,
+      "providers" : [ ]
+    },
+    "indexes" : [ ],
     "fields" : [ {
       "id" : "field_email",
       "name" : "email",

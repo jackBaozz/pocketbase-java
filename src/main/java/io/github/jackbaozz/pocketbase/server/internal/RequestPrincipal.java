@@ -25,7 +25,9 @@ public record RequestPrincipal(
                 text(safeClaims.get("collectionId")),
                 text(safeClaims.get("collectionName")),
                 text(safeClaims.get("email")),
-                "superuser".equals(safeClaims.get("type")),
+                "superuser".equals(safeClaims.get("type"))
+                        || "_superusers".equals(text(safeClaims.get("collectionName")))
+                        || "pbc_superusers".equals(text(safeClaims.get("collectionId"))),
                 safeClaims
         );
     }
