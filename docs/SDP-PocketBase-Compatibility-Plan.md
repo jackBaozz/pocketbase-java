@@ -203,11 +203,11 @@ Use this checklist as the project board seed.
 
 ### P0
 - [x] **SDP-001**: Route manifest conformance tests (Backend)
-- [ ] **SDP-002**: Official JS SDK smoke suite (Backend/SDK)
+- [x] **SDP-002**: Official JS SDK smoke suite (Backend/SDK)
 - [x] **SDP-003**: `POST /api/collections/meta/dry-run-view` (Backend)
 - [x] **SDP-004**: `_mfas` internal collection and MFA auth response (Backend/Auth)
 - [x] **SDP-005**: MFA second-factor flow for password/OTP/OAuth2 (Backend/Auth)
-- [ ] **SDP-006**: Rule/filter parser parity (Backend/Core)
+- [x] **SDP-006**: Rule/filter parser parity (Backend/Core)
 - [x] **SDP-007**: Storage engine ADR and native proof (Backend/Core)
 - [x] **SDP-008**: Field type validation matrix (Backend/Collections)
 - [x] **SDP-009**: Collection indexes and schema migration semantics (Backend/Collections)
