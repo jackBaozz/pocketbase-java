@@ -1110,9 +1110,12 @@ function App() {
               ) : view === "mail" ? (
                 <MailSettingsView
                   settings={settings}
+                  draft={settingsDraft}
                   email={testEmail}
                   template={testEmailTemplate}
                   loading={loading}
+                  onDraft={setSettingsDraft}
+                  onSave={saveSettings}
                   onEmail={setTestEmail}
                   onTemplate={setTestEmailTemplate}
                   onTest={testEmailSettings}
@@ -1120,8 +1123,11 @@ function App() {
               ) : view === "storage" ? (
                 <StorageSettingsView
                   settings={settings}
+                  draft={settingsDraft}
                   target={testS3Target}
                   loading={loading}
+                  onDraft={setSettingsDraft}
+                  onSave={saveSettings}
                   onTarget={setTestS3Target}
                   onTest={testS3Settings}
                 />
@@ -2418,24 +2424,200 @@ function SettingValueCard(props: SettingValueCardProps) {
 
 type MailSettingsViewProps = {
   settings: AppSettings | null;
+  draft: string;
   email: string;
   template: string;
   loading: boolean;
+  onDraft: (value: string) => void;
+  onSave: () => void;
   onEmail: (value: string) => void;
   onTemplate: (value: string) => void;
   onTest: () => void;
 };
 
 function MailSettingsView(props: MailSettingsViewProps) {
-  const meta = settingsObject(props.settings, "meta");
-  const smtp = settingsObject(props.settings, "smtp");
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
+  const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
+  const meta = settingsObject(draftSettings, "meta");
+  const smtp = settingsObject(draftSettings, "smtp");
+  const hasSmtpPassword = Object.prototype.hasOwnProperty.call(smtp, "password");
+
+  function updateSetting(path: string[], value: unknown) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, path, value);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
+  function updateOptionalNumber(path: string[], value: string) {
+    updateSetting(path, value === "" ? undefined : Number(value));
+  }
+
   return (
     <section className="settings-page">
-      <SettingsPageHeader section="Mail settings" />
-      <div className="settings-card-grid two">
-        <SettingValueCard title="Sender name" value={String(meta.senderName ?? "")} detail={String(meta.senderAddress ?? "")} />
-        <SettingValueCard title="SMTP" value={truthyText(smtp.enabled)} detail={`${String(smtp.host ?? "no host")}:${String(smtp.port ?? "")}`} />
-      </div>
+      <SettingsPageHeader
+        section="Mail settings"
+        actions={
+          <button className="primary" onClick={props.onSave} disabled={props.loading}>
+            <Save size={16} />
+            Save settings
+          </button>
+        }
+      />
+      <section className="surface settings-config-form mail-settings-form">
+        <p className="settings-intro">Configure common settings for sending emails.</p>
+        <div className="settings-form-row two">
+          <label>
+            Sender name
+            <input
+              id="meta-sender-name"
+              name="meta.senderName"
+              type="text"
+              required
+              autoComplete="off"
+              value={String(meta.senderName ?? "")}
+              onChange={(event) => updateSetting(["meta", "senderName"], event.target.value)}
+            />
+          </label>
+          <label>
+            Sender address
+            <input
+              id="meta-sender-address"
+              name="meta.senderAddress"
+              type="email"
+              required
+              autoComplete="off"
+              value={String(meta.senderAddress ?? "")}
+              onChange={(event) => updateSetting(["meta", "senderAddress"], event.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="settings-switch-row">
+          <label className="check-row switch-row">
+            <input
+              id="smtp-enabled"
+              name="smtp.enabled"
+              type="checkbox"
+              checked={Boolean(smtp.enabled)}
+              onChange={(event) => updateSetting(["smtp", "enabled"], event.target.checked)}
+            />
+            Use SMTP mail server
+          </label>
+          <p className="settings-help-text">
+            By default PocketBase uses the server sendmail command. SMTP is recommended for better deliverability.
+          </p>
+        </div>
+
+        {Boolean(smtp.enabled) && (
+          <section className="settings-accordion-card settings-form-block">
+            <header>
+              <div>
+                <strong>SMTP</strong>
+                <span>{`${String(smtp.host ?? "no host")}:${String(smtp.port ?? "")}`}</span>
+              </div>
+              <Server size={18} />
+            </header>
+            <div className="settings-form-row three">
+              <label>
+                SMTP server host
+                <input
+                  id="smtp-host"
+                  name="smtp.host"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={String(smtp.host ?? "")}
+                  onChange={(event) => updateSetting(["smtp", "host"], event.target.value)}
+                />
+              </label>
+              <label>
+                Port
+                <input
+                  id="smtp-port"
+                  name="smtp.port"
+                  type="number"
+                  min="0"
+                  step="1"
+                  required
+                  value={String(smtp.port ?? "")}
+                  onChange={(event) => updateOptionalNumber(["smtp", "port"], event.target.value)}
+                />
+              </label>
+              <label>
+                Username
+                <input
+                  id="smtp-username"
+                  name="smtp.username"
+                  type="text"
+                  autoComplete="off"
+                  value={String(smtp.username ?? "")}
+                  onChange={(event) => updateSetting(["smtp", "username"], event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="settings-form-row two">
+              <label>
+                Password
+                <input
+                  id="smtp-password"
+                  name="smtp.password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={String(smtp.password ?? "")}
+                  placeholder={hasSmtpPassword ? "" : "* * * * * *"}
+                  onChange={(event) => updateSetting(["smtp", "password"], event.target.value)}
+                />
+              </label>
+              <div className="settings-inline-actions">
+                <button type="button" className="subtle" onClick={() => setShowMoreOptions((value) => !value)}>
+                  {showMoreOptions ? "Hide more options" : "Show more options"}
+                </button>
+              </div>
+            </div>
+            {showMoreOptions && (
+              <div className="settings-form-row three">
+                <label>
+                  TLS encryption
+                  <select
+                    id="smtp-tls"
+                    name="smtp.tls"
+                    value={String(Boolean(smtp.tls))}
+                    onChange={(event) => updateSetting(["smtp", "tls"], event.target.value === "true")}
+                  >
+                    <option value="false">Auto (StartTLS)</option>
+                    <option value="true">Always</option>
+                  </select>
+                </label>
+                <label>
+                  AUTH method
+                  <select
+                    id="smtp-auth-method"
+                    name="smtp.authMethod"
+                    value={String(smtp.authMethod ?? "PLAIN")}
+                    onChange={(event) => updateSetting(["smtp", "authMethod"], event.target.value)}
+                  >
+                    <option value="PLAIN">PLAIN (default)</option>
+                    <option value="LOGIN">LOGIN</option>
+                  </select>
+                </label>
+                <label>
+                  EHLO/HELO domain
+                  <input
+                    id="smtp-local-name"
+                    name="smtp.localName"
+                    type="text"
+                    autoComplete="off"
+                    placeholder="Default to localhost"
+                    value={String(smtp.localName ?? "")}
+                    onChange={(event) => updateSetting(["smtp", "localName"], event.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+          </section>
+        )}
+      </section>
+
       <section className="surface settings-section">
         <div className="section-heading">
           <div>
@@ -2484,23 +2666,146 @@ function MailSettingsView(props: MailSettingsViewProps) {
 
 type StorageSettingsViewProps = {
   settings: AppSettings | null;
+  draft: string;
   target: string;
   loading: boolean;
+  onDraft: (value: string) => void;
+  onSave: () => void;
   onTarget: (value: string) => void;
   onTest: () => void;
 };
 
 function StorageSettingsView(props: StorageSettingsViewProps) {
-  const storage = settingsObject(props.settings, "s3");
-  const backups = settingsObject(props.settings, "backups");
-  const backupS3 = isPlainObject(backups.s3) ? backups.s3 : {};
+  const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
+  const storage = settingsObject(draftSettings, "s3");
+  const originalStorage = settingsObject(props.settings, "s3");
+  const storageEnabled = Boolean(storage.enabled);
+  const hasS3Secret = Object.prototype.hasOwnProperty.call(storage, "secret");
+  const changedStorageMode = Boolean(originalStorage.enabled) !== storageEnabled;
+
+  function updateSetting(path: string[], value: unknown) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, path, value);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
   return (
     <section className="settings-page">
-      <SettingsPageHeader section="File storage" />
-      <div className="settings-card-grid two">
-        <SettingValueCard title="Storage S3" value={truthyText(storage.enabled)} detail={String(storage.bucket ?? "no bucket")} />
-        <SettingValueCard title="Backup S3" value={truthyText(backupS3.enabled)} detail={String(backupS3.bucket ?? "no bucket")} />
-      </div>
+      <SettingsPageHeader
+        section="File storage"
+        actions={
+          <button className="primary" onClick={props.onSave} disabled={props.loading}>
+            <Save size={16} />
+            Save settings
+          </button>
+        }
+      />
+      <section className="surface settings-config-form storage-settings-form">
+        <div className="settings-intro">
+          <p>By default PocketBase uses and recommends the local file system to store uploaded files.</p>
+          <p>Alternatively, you can use an S3 compatible external storage when disk space is limited.</p>
+        </div>
+        <label className="check-row switch-row">
+          <input
+            id="s3-enabled"
+            name="s3.enabled"
+            type="checkbox"
+            checked={storageEnabled}
+            onChange={(event) => updateSetting(["s3", "enabled"], event.target.checked)}
+          />
+          Use S3 storage
+        </label>
+        {changedStorageMode && (
+          <div className="settings-alert">
+            Existing uploaded files need to be migrated manually between the local file system and S3 storage.
+          </div>
+        )}
+        {storageEnabled && (
+          <section className="settings-accordion-card settings-form-block">
+            <header>
+              <div>
+                <strong>S3 configuration</strong>
+                <span>{String(storage.bucket ?? "no bucket")}</span>
+              </div>
+              <HardDrive size={18} />
+            </header>
+            <div className="settings-form-row three">
+              <label>
+                Endpoint
+                <input
+                  id="s3-endpoint"
+                  name="s3.endpoint"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={String(storage.endpoint ?? "")}
+                  onChange={(event) => updateSetting(["s3", "endpoint"], event.target.value)}
+                />
+              </label>
+              <label>
+                Bucket
+                <input
+                  id="s3-bucket"
+                  name="s3.bucket"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={String(storage.bucket ?? "")}
+                  onChange={(event) => updateSetting(["s3", "bucket"], event.target.value)}
+                />
+              </label>
+              <label>
+                Region
+                <input
+                  id="s3-region"
+                  name="s3.region"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={String(storage.region ?? "")}
+                  onChange={(event) => updateSetting(["s3", "region"], event.target.value)}
+                />
+              </label>
+            </div>
+            <div className="settings-form-row two">
+              <label>
+                Access key
+                <input
+                  id="s3-access-key"
+                  name="s3.accessKey"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  value={String(storage.accessKey ?? "")}
+                  onChange={(event) => updateSetting(["s3", "accessKey"], event.target.value)}
+                />
+              </label>
+              <label>
+                Secret
+                <input
+                  id="s3-secret"
+                  name="s3.secret"
+                  type="password"
+                  autoComplete="new-password"
+                  value={String(storage.secret ?? "")}
+                  placeholder={hasS3Secret ? "" : "* * * * * *"}
+                  onChange={(event) => updateSetting(["s3", "secret"], event.target.value)}
+                />
+              </label>
+            </div>
+            <label className="check-row switch-row">
+              <input
+                id="s3-force-path-style"
+                name="s3.forcePathStyle"
+                type="checkbox"
+                checked={Boolean(storage.forcePathStyle)}
+                onChange={(event) => updateSetting(["s3", "forcePathStyle"], event.target.checked)}
+              />
+              Force path-style addressing
+            </label>
+          </section>
+        )}
+      </section>
       <section className="surface settings-section">
         <div className="section-heading">
           <div>
