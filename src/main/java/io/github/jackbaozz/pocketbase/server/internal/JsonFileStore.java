@@ -384,7 +384,7 @@ public final class JsonFileStore {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_required", "query is required.")
+                    fieldError("query", "query is required.")
             );
         }
         String query = queryNode.asText();
@@ -392,7 +392,7 @@ public final class JsonFileStore {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_length_out_of_range", "query must be at most 5000 characters.")
+                    fieldError("query", "query must be at most 5000 characters.")
             );
         }
 
@@ -421,7 +421,7 @@ public final class JsonFileStore {
             );
         }
 
-        List<Map<String, Object>> limitRows = result.rows();
+        List<List<Object>> limitRows = result.rows();
         if (limitRows.size() > 10) {
             limitRows = limitRows.subList(0, 10);
         }
@@ -2343,10 +2343,10 @@ public final class JsonFileStore {
         if (!requireMfa) {
             return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
         }
-        String newMfaId = IdGenerator.generate();
+        String newMfaId = IdGenerator.id();
         Map<String, Object> mfaRecord = new LinkedHashMap<>();
         mfaRecord.put("id", newMfaId);
-        mfaRecord.put("created", RuntimeJson.now());
+        mfaRecord.put("created", now());
         mfaRecord.put("collectionId", collection.id);
         mfaRecord.put("recordId", record.get("id"));
         mfas.add(mfaRecord);
@@ -2875,17 +2875,14 @@ public final class JsonFileStore {
 
         try {
             return switch (type) {
-                case "email" -> {
-                    String email = value.asText().trim().toLowerCase(Locale.ROOT);
-                    if (!email.contains("@") || email.startsWith("@") || email.endsWith("@")) {
-                        errors.put(field.name, validationError("Invalid email address."));
-                    }
-                    yield email;
-                }
-                case "password" -> PasswordHasher.hash(value.asText());
+                case "email" -> normalizeEmail(field, value, errors);
+                case "password" -> normalizePassword(field, value, errors);
                 case "bool", "boolean" -> normalizeBoolean(field, value, errors);
                 case "number" -> normalizeNumber(field, value, errors);
                 case "select" -> normalizeSelect(field, value, errors);
+                case "url" -> normalizeUrl(field, value, errors);
+                case "text", "editor" -> normalizeText(field, value, errors);
+                case "date", "autodate" -> normalizeDate(field, value, errors);
                 case "json", "relation", "file" -> mapper.convertValue(value, Object.class);
                 default -> value.asText();
             };
@@ -2893,6 +2890,171 @@ public final class JsonFileStore {
             errors.put(field.name, validationError(e.getMessage()));
             return null;
         }
+    }
+
+    private Object normalizeEmail(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        String email = value.asText().trim().toLowerCase(Locale.ROOT);
+        if (!email.contains("@") || email.startsWith("@") || email.endsWith("@")) {
+            errors.put(field.name, validationError("Invalid email address."));
+        }
+        
+        if (field.options != null) {
+            if (field.options.containsKey("exceptDomains") && field.options.get("exceptDomains").isArray()) {
+                for (JsonNode domainNode : field.options.get("exceptDomains")) {
+                    String domain = domainNode.asText();
+                    if (email.endsWith("@" + domain) || email.endsWith("." + domain)) {
+                        errors.put(field.name, validationError("Email domain is not allowed."));
+                        break;
+                    }
+                }
+            }
+            if (field.options.containsKey("onlyDomains") && field.options.get("onlyDomains").isArray() && !field.options.get("onlyDomains").isEmpty()) {
+                boolean matched = false;
+                for (JsonNode domainNode : field.options.get("onlyDomains")) {
+                    String domain = domainNode.asText();
+                    if (email.endsWith("@" + domain) || email.endsWith("." + domain)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    errors.put(field.name, validationError("Email domain is not allowed."));
+                }
+            }
+        }
+        return email;
+    }
+
+    private Object normalizePassword(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        String pwd = value.asText();
+        if (field.options != null) {
+            if (field.options.containsKey("min")) {
+                int min = field.options.get("min").asInt();
+                if (pwd.length() < min) {
+                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
+                }
+            }
+            if (field.options.containsKey("max")) {
+                int max = field.options.get("max").asInt();
+                if (pwd.length() > max) {
+                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
+                }
+            }
+            if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
+                String pattern = field.options.get("pattern").asText();
+                try {
+                    if (!Pattern.compile(pattern).matcher(pwd).matches()) {
+                        errors.put(field.name, validationError("Invalid password format."));
+                    }
+                } catch (Exception e) {
+                    // ignore invalid regex in schema
+                }
+            }
+        }
+        return PasswordHasher.hash(pwd);
+    }
+
+    private Object normalizeText(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        String text = value.asText();
+        if (field.options != null) {
+            if (field.options.containsKey("min")) {
+                int min = field.options.get("min").asInt();
+                if (text.length() < min) {
+                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
+                }
+            }
+            if (field.options.containsKey("max")) {
+                int max = field.options.get("max").asInt();
+                if (text.length() > max) {
+                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
+                }
+            }
+            if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
+                String pattern = field.options.get("pattern").asText();
+                try {
+                    if (!Pattern.compile(pattern).matcher(text).matches()) {
+                        errors.put(field.name, validationError("Invalid format."));
+                    }
+                } catch (Exception e) {
+                    // Ignore invalid pattern
+                }
+            }
+        }
+        return text;
+    }
+
+    private Object normalizeUrl(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        String urlText = value.asText().trim();
+        try {
+            java.net.URI uri = new java.net.URI(urlText);
+            if (uri.getScheme() == null || (!uri.getScheme().equalsIgnoreCase("http") && !uri.getScheme().equalsIgnoreCase("https"))) {
+                errors.put(field.name, validationError("Must be a valid HTTP/HTTPS URL."));
+                return urlText;
+            }
+            if (field.options != null) {
+                // Check both onlyHosts and onlyDomains for compatibility
+                JsonNode allowedHosts = field.options.containsKey("onlyHosts") ? field.options.get("onlyHosts") : field.options.get("onlyDomains");
+                if (allowedHosts != null && allowedHosts.isArray() && !allowedHosts.isEmpty()) {
+                    boolean matched = false;
+                    String host = uri.getHost();
+                    if (host != null) {
+                        for (JsonNode hostNode : allowedHosts) {
+                            if (host.equalsIgnoreCase(hostNode.asText())) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!matched) {
+                        errors.put(field.name, validationError("URL host is not allowed."));
+                    }
+                }
+                JsonNode exceptHosts = field.options.containsKey("exceptHosts") ? field.options.get("exceptHosts") : field.options.get("exceptDomains");
+                if (exceptHosts != null && exceptHosts.isArray()) {
+                    String host = uri.getHost();
+                    if (host != null) {
+                        for (JsonNode hostNode : exceptHosts) {
+                            if (host.equalsIgnoreCase(hostNode.asText())) {
+                                errors.put(field.name, validationError("URL host is not allowed."));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (java.net.URISyntaxException e) {
+            errors.put(field.name, validationError("Must be a valid URL."));
+        }
+        return urlText;
+    }
+
+    private Object normalizeDate(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        String dateText = value.asText().trim();
+        try {
+            String isoStr = dateText.replace(" ", "T");
+            if (!isoStr.endsWith("Z") && !isoStr.contains("+") && isoStr.indexOf("-", 10) == -1) {
+                isoStr += "Z";
+            }
+            Instant.parse(isoStr);
+            
+            if (field.options != null) {
+                if (field.options.containsKey("min") && !field.options.get("min").asText().isEmpty()) {
+                    String minDate = field.options.get("min").asText();
+                    if (dateText.compareTo(minDate) < 0) {
+                        errors.put(field.name, validationError("Cannot be before " + minDate + "."));
+                    }
+                }
+                if (field.options.containsKey("max") && !field.options.get("max").asText().isEmpty()) {
+                    String maxDate = field.options.get("max").asText();
+                    if (dateText.compareTo(maxDate) > 0) {
+                        errors.put(field.name, validationError("Cannot be after " + maxDate + "."));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            errors.put(field.name, validationError("Invalid date format."));
+        }
+        return dateText;
     }
 
     private Object normalizeBoolean(FieldSchema field, JsonNode value, Map<String, Object> errors) {
@@ -2907,19 +3069,36 @@ public final class JsonFileStore {
     }
 
     private Object normalizeNumber(FieldSchema field, JsonNode value, Map<String, Object> errors) {
+        Double numVal = null;
         if (value.isNumber()) {
-            return value.numberValue();
-        }
-        if (value.isTextual()) {
+            numVal = value.numberValue().doubleValue();
+        } else if (value.isTextual()) {
             try {
-                return Double.parseDouble(value.asText());
+                numVal = Double.parseDouble(value.asText());
             } catch (NumberFormatException ignored) {
                 errors.put(field.name, validationError("Expected numeric value."));
                 return null;
             }
+        } else {
+            errors.put(field.name, validationError("Expected numeric value."));
+            return null;
         }
-        errors.put(field.name, validationError("Expected numeric value."));
-        return null;
+
+        if (field.options != null) {
+            if (field.options.containsKey("min")) {
+                double min = field.options.get("min").asDouble();
+                if (numVal < min) {
+                    errors.put(field.name, validationError("Cannot be less than " + min + "."));
+                }
+            }
+            if (field.options.containsKey("max")) {
+                double max = field.options.get("max").asDouble();
+                if (numVal > max) {
+                    errors.put(field.name, validationError("Cannot be more than " + max + "."));
+                }
+            }
+        }
+        return value.isNumber() ? value.numberValue() : numVal;
     }
 
     private Object normalizeSelect(FieldSchema field, JsonNode value, Map<String, Object> errors) {
@@ -2933,6 +3112,10 @@ public final class JsonFileStore {
                     if (!allowed.contains(item.asText())) {
                         errors.put(field.name, validationError("Value is not in the allowed list."));
                     }
+                }
+                int maxSelect = field.options.containsKey("maxSelect") ? field.options.get("maxSelect").asInt(1) : 1;
+                if (value.size() > maxSelect && maxSelect > 0) {
+                    errors.put(field.name, validationError("Too many values selected."));
                 }
             } else if (!allowed.contains(value.asText())) {
                 errors.put(field.name, validationError("Value is not in the allowed list."));
@@ -3994,7 +4177,7 @@ public final class JsonFileStore {
     private void pruneMfas() {
         mfas.removeIf(mfa -> {
             try {
-                CollectionSchema collection = collections.stream()
+                CollectionSchema collection = collectionsByName.values().stream()
                         .filter(c -> Objects.equals(c.id, mfa.get("collectionId")))
                         .findFirst()
                         .orElse(null);
