@@ -517,7 +517,7 @@ function App() {
   }, [authenticated, notify, refreshBackups, view]);
 
   useEffect(() => {
-    if (authenticated && (view === "settings" || view === "mail" || view === "storage")) {
+    if (authenticated && (view === "settings" || view === "mail" || view === "storage" || view === "backups")) {
       refreshSettings().catch((error) => notify(errorMessage(error), "error"));
     }
   }, [authenticated, notify, refreshSettings, view]);
@@ -1086,11 +1086,15 @@ function App() {
               {view === "backups" ? (
                 <BackupView
                   backups={backups}
+                  settings={settings}
+                  draft={settingsDraft}
                   backupName={backupName}
                   canBackup={Boolean(health?.canBackup)}
                   loading={loading}
                   uploadRef={backupUploadRef}
                   onBackupName={setBackupName}
+                  onDraft={setSettingsDraft}
+                  onSave={saveSettings}
                   onCreate={createBackup}
                   onRefresh={refreshBackups}
                   onUpload={uploadBackup}
@@ -1924,11 +1928,15 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
 
 type BackupViewProps = {
   backups: BackupInfo[];
+  settings: AppSettings | null;
+  draft: string;
   backupName: string;
   canBackup: boolean;
   loading: boolean;
   uploadRef: RefObject<HTMLInputElement | null>;
   onBackupName: (value: string) => void;
+  onDraft: (value: string) => void;
+  onSave: () => void;
   onCreate: () => void;
   onRefresh: () => void;
   onUpload: (file: File) => void;
@@ -1950,37 +1958,74 @@ function SettingsPageHeader({ section, actions }: { section: string; actions?: R
 }
 
 function BackupView(props: BackupViewProps) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
+  const backupsSettings = settingsObject(draftSettings, "backups");
+  const backupS3 = isPlainObject(backupsSettings.s3) ? (backupsSettings.s3 as Record<string, unknown>) : {};
+  const sortedBackups = useMemo(
+    () => [...props.backups].sort((left, right) => String(right.modified ?? "").localeCompare(String(left.modified ?? ""))),
+    [props.backups]
+  );
+  const totalSize = sortedBackups.reduce((sum, backup) => sum + Number(backup.size || 0), 0);
+  const latestBackup = sortedBackups[0];
+  const autoBackupsEnabled = Boolean(backupsSettings.cron);
+  const backupS3Enabled = Boolean(backupS3.enabled);
+  const hasBackupS3Secret = Object.prototype.hasOwnProperty.call(backupS3, "secret");
+  const cronPresets = [
+    { cron: "0 0 * * *", label: "Every day at 00:00h" },
+    { cron: "0 0 * * 0", label: "Every sunday at 00:00h" },
+    { cron: "0 0 * * 1,3", label: "Every Mon and Wed at 00:00h" },
+    { cron: "0 0 1 * *", label: "Every first day of the month" }
+  ];
+
+  function updateSetting(path: string[], value: unknown) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, path, value);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
+  function updateNumber(path: string[], value: string) {
+    updateSetting(path, value === "" ? 0 : Number(value));
+  }
+
+  function toggleAutoBackups(enabled: boolean) {
+    updateSetting(["backups", "cron"], enabled ? String(backupsSettings.cron || cronPresets[0].cron) : "");
+  }
+
+  function confirmUpload(file?: File) {
+    if (!file) return;
+    const confirmed = window.confirm(
+      `Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload "${file.name}"?`
+    );
+    if (confirmed) {
+      props.onUpload(file);
+    } else if (props.uploadRef.current) {
+      props.uploadRef.current.value = "";
+    }
+  }
+
+  function closeCreateModal() {
+    props.onBackupName("");
+    setCreateOpen(false);
+  }
+
+  function startBackup() {
+    props.onCreate();
+    setCreateOpen(false);
+  }
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
         section="Backups"
         actions={
-          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh backups" aria-label="Refresh backups">
-            <RefreshCw size={17} />
-          </button>
-        }
-      />
-      <section className="surface">
-        <div className="surface-toolbar">
-          <div className="query-grid backup-controls">
-            <label>
-              Name
-              <input
-                id="backup-name"
-                name="backupName"
-                autoComplete="off"
-                value={props.backupName}
-                onChange={(event) => props.onBackupName(event.target.value)}
-                placeholder="backup.zip"
-              />
-            </label>
-            <button className="primary apply-button" onClick={props.onCreate} disabled={!props.canBackup || props.loading}>
-              <Archive size={16} />
-              Create
+          <>
+            <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh backups" aria-label="Refresh backups">
+              <RefreshCw size={17} />
             </button>
-            <button className="subtle apply-button" onClick={() => props.uploadRef.current?.click()}>
-              <Upload size={16} />
-              Upload
+            <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} title="Upload backup" aria-label="Upload backup">
+              <Upload size={17} />
             </button>
             <input
               ref={props.uploadRef}
@@ -1988,72 +2033,272 @@ function BackupView(props: BackupViewProps) {
               name="backupFile"
               type="file"
               accept=".zip,application/zip"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) props.onUpload(file);
-              }}
+              onChange={(event) => confirmUpload(event.target.files?.[0])}
             />
+          </>
+        }
+      />
+
+      <section className="surface backups-surface">
+        <div className="backup-list-header">
+          <div>
+            <p className="settings-intro">Backup and restore your PocketBase data</p>
+            <div className="backup-metrics">
+              <span>{sortedBackups.length} backups</span>
+              <span>{formatBytes(totalSize)} total</span>
+              <span>Latest {latestBackup ? formatDate(latestBackup.modified) : "none"}</span>
+            </div>
           </div>
+          <button className="primary" onClick={() => setCreateOpen(true)} disabled={!props.canBackup || props.loading}>
+            <Archive size={16} />
+            Initialize new backup
+          </button>
         </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Size</th>
-                <th>Modified</th>
-                <th className="actions-col">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {props.backups.length === 0 ? (
-                <tr>
-                  <td className="empty-row" colSpan={4}>
-                    No backups
-                  </td>
-                </tr>
-              ) : (
-                props.backups.map((backup) => (
-                  <tr key={backup.key}>
-                    <td>
-                      <code>{backup.name}</code>
-                    </td>
-                    <td>{formatBytes(backup.size)}</td>
-                    <td>{formatDate(backup.modified)}</td>
-                    <td className="row-actions">
-                      <button
-                        className="icon-button"
-                        onClick={() => props.onDownload(backup)}
-                        title="Download"
-                        aria-label="Download"
-                      >
-                        <Download size={16} />
-                      </button>
-                      <button
-                        className="icon-button"
-                        onClick={() => props.onRestore(backup)}
-                        title="Restore"
-                        aria-label="Restore"
-                      >
-                        <FileUp size={16} />
-                      </button>
-                      <button
-                        className="icon-button danger"
-                        onClick={() => props.onDelete(backup)}
-                        title="Delete"
-                        aria-label="Delete"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div className="backups-list" aria-live="polite">
+          {sortedBackups.length === 0 ? (
+            <article className="backup-list-item empty">
+              <FileArchive size={20} />
+              <div>
+                <strong>No backups found.</strong>
+                <span>Create a new backup or upload an existing ZIP archive.</span>
+              </div>
+            </article>
+          ) : (
+            sortedBackups.map((backup) => (
+              <article className="backup-list-item" key={backup.key}>
+                <FileArchive size={21} />
+                <div className="backup-item-content">
+                  <strong title={backup.key}>{backup.name || backup.key}</strong>
+                  <span>{formatBytes(backup.size)} · {formatDate(backup.modified)}</span>
+                </div>
+                <nav className="backup-row-actions" aria-label={`${backup.name || backup.key} actions`}>
+                  <button className="icon-button" onClick={() => props.onDownload(backup)} title="Download" aria-label="Download">
+                    <Download size={16} />
+                  </button>
+                  <button className="icon-button" onClick={() => props.onRestore(backup)} title="Restore" aria-label="Restore">
+                    <FileUp size={16} />
+                  </button>
+                  <button className="icon-button danger" onClick={() => props.onDelete(backup)} title="Delete" aria-label="Delete">
+                    <Trash2 size={16} />
+                  </button>
+                </nav>
+              </article>
+            ))
+          )}
         </div>
       </section>
+
+      <section className="surface backup-options-surface">
+        <button className="backup-options-toggle" type="button" onClick={() => setOptionsOpen((value) => !value)}>
+          <span>Backup options</span>
+          <ChevronRight className={optionsOpen ? "expanded" : ""} size={18} />
+        </button>
+        {optionsOpen && (
+          <div className="settings-config-form backup-options-form">
+            <label className="check-row switch-row">
+              <input
+                id="enable-auto-backups"
+                name="enableAutoBackups"
+                type="checkbox"
+                checked={autoBackupsEnabled}
+                onChange={(event) => toggleAutoBackups(event.target.checked)}
+              />
+              Enable auto backups
+            </label>
+            {autoBackupsEnabled && (
+              <div className="settings-accordion-card settings-form-block">
+                <header>
+                  <div>
+                    <strong>Schedule</strong>
+                    <span>By default the timezone is UTC.</span>
+                  </div>
+                  <Clock3 size={18} />
+                </header>
+                <div className="settings-form-row two">
+                  <label>
+                    Cron expression
+                    <input
+                      id="backups-cron"
+                      name="backups.cron"
+                      className="code-input"
+                      type="text"
+                      required
+                      autoComplete="off"
+                      value={String(backupsSettings.cron ?? "")}
+                      placeholder="e.g. 0 0 * * *"
+                      onChange={(event) => updateSetting(["backups", "cron"], event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Max @auto backups to keep
+                    <input
+                      id="backups-cron-max-keep"
+                      name="backups.cronMaxKeep"
+                      type="number"
+                      min="1"
+                      required
+                      value={String(backupsSettings.cronMaxKeep ?? 3)}
+                      onChange={(event) => updateNumber(["backups", "cronMaxKeep"], event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="cron-preset-row">
+                  {cronPresets.map((preset) => (
+                    <button
+                      type="button"
+                      className={String(backupsSettings.cron ?? "") === preset.cron ? "active" : ""}
+                      key={preset.cron}
+                      onClick={() => updateSetting(["backups", "cron"], preset.cron)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <section className="settings-accordion-card settings-form-block">
+              <header>
+                <div>
+                  <strong>Backup S3 storage</strong>
+                  <span>{backupS3Enabled ? String(backupS3.bucket ?? "no bucket") : "local backups filesystem"}</span>
+                </div>
+                <HardDrive size={18} />
+              </header>
+              <label className="check-row switch-row">
+                <input
+                  id="backups-s3-enabled"
+                  name="backups.s3.enabled"
+                  type="checkbox"
+                  checked={backupS3Enabled}
+                  onChange={(event) => updateSetting(["backups", "s3", "enabled"], event.target.checked)}
+                />
+                Store backups in S3 storage
+              </label>
+              {backupS3Enabled && (
+                <>
+                  <div className="settings-form-row three">
+                    <label>
+                      Endpoint
+                      <input
+                        id="backups-s3-endpoint"
+                        name="backups.s3.endpoint"
+                        type="text"
+                        required
+                        autoComplete="off"
+                        value={String(backupS3.endpoint ?? "")}
+                        onChange={(event) => updateSetting(["backups", "s3", "endpoint"], event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Bucket
+                      <input
+                        id="backups-s3-bucket"
+                        name="backups.s3.bucket"
+                        type="text"
+                        required
+                        autoComplete="off"
+                        value={String(backupS3.bucket ?? "")}
+                        onChange={(event) => updateSetting(["backups", "s3", "bucket"], event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Region
+                      <input
+                        id="backups-s3-region"
+                        name="backups.s3.region"
+                        type="text"
+                        required
+                        autoComplete="off"
+                        value={String(backupS3.region ?? "")}
+                        onChange={(event) => updateSetting(["backups", "s3", "region"], event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-form-row two">
+                    <label>
+                      Access key
+                      <input
+                        id="backups-s3-access-key"
+                        name="backups.s3.accessKey"
+                        type="text"
+                        required
+                        autoComplete="off"
+                        value={String(backupS3.accessKey ?? "")}
+                        onChange={(event) => updateSetting(["backups", "s3", "accessKey"], event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Secret
+                      <input
+                        id="backups-s3-secret"
+                        name="backups.s3.secret"
+                        type="password"
+                        autoComplete="new-password"
+                        value={String(backupS3.secret ?? "")}
+                        placeholder={hasBackupS3Secret ? "" : "* * * * * *"}
+                        onChange={(event) => updateSetting(["backups", "s3", "secret"], event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <label className="check-row switch-row">
+                    <input
+                      id="backups-s3-force-path-style"
+                      name="backups.s3.forcePathStyle"
+                      type="checkbox"
+                      checked={Boolean(backupS3.forcePathStyle)}
+                      onChange={(event) => updateSetting(["backups", "s3", "forcePathStyle"], event.target.checked)}
+                    />
+                    Force path-style addressing
+                  </label>
+                </>
+              )}
+            </section>
+
+            <div className="backup-options-actions">
+              <button className="primary" type="button" onClick={props.onSave} disabled={props.loading}>
+                <Save size={16} />
+                Save changes
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {createOpen && (
+        <Modal title="Initialize new backup" onClose={closeCreateModal}>
+          <div className="modal-grid backup-create-modal">
+            <div className="settings-alert">
+              During backup generation the database can be temporarily locked and concurrent write requests may fail.
+              Files stored in S3 are not included in the generated local ZIP backup.
+            </div>
+            <label>
+              Backup name
+              <input
+                id="backup-name"
+                name="backupName"
+                autoComplete="off"
+                pattern="^[a-z0-9_-]+\\.zip$"
+                value={props.backupName}
+                onChange={(event) => props.onBackupName(event.target.value)}
+                placeholder="Leave empty to autogenerate"
+              />
+            </label>
+            <p className="settings-help-text">Must be in the format [a-z0-9_-].zip</p>
+            <div className="modal-actions">
+              <button type="button" className="subtle" onClick={closeCreateModal} disabled={props.loading}>
+                <X size={16} />
+                Cancel
+              </button>
+              <button type="button" className="primary" onClick={startBackup} disabled={!props.canBackup || props.loading}>
+                <Archive size={16} />
+                Start backup
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }
