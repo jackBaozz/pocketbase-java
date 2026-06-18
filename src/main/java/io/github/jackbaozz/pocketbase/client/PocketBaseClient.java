@@ -58,6 +58,14 @@ public final class PocketBaseClient {
         return new LogsService(this);
     }
 
+    public RealtimeService realtime() {
+        return new RealtimeService(this);
+    }
+
+    public BatchService batch() {
+        return new BatchService(this);
+    }
+
     public CronsService crons() {
         return new CronsService(this);
     }
