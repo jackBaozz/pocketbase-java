@@ -223,8 +223,8 @@ Use this checklist as the project board seed.
 - [x] **SDP-015**: Mail settings page and test modal (UI/Backend)
 - [x] **SDP-016**: Storage settings page and S3 tests (UI/Backend)
 - [x] **SDP-017**: Backup settings page and S3 backups (UI/Backend)
-- [x] **SDP-018**: Realtime SDK compatibility smoke (Backend/SDK)
-- [x] **SDP-019**: Batch service SDK and multipart rollback tests (Backend/SDK)
+- [ ] **SDP-018**: Realtime SDK compatibility smoke (Backend/SDK)
+- [ ] **SDP-019**: Batch service SDK and multipart rollback tests (Backend/SDK)
 - [x] **SDP-020**: SQL console UI (UI)
 
 ### P2
