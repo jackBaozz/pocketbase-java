@@ -1,6 +1,5 @@
 package io.github.jackbaozz.pocketbase.client;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
@@ -13,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BatchServiceTest {
@@ -41,7 +41,15 @@ class BatchServiceTest {
 
     @Test
     void testBatchService() {
-        // TODO: test batch request structure
+        BatchService batch = client.batch();
+        batch.addRequest(java.util.Map.of("method", "POST", "url", "/api/collections/posts/records", "body", java.util.Map.of("title", "hello")));
+        java.util.List<Object> response = batch.send();
+
+        assertNotNull(response);
+        assertEquals("POST", lastMethod);
+        assertEquals("/api/batch", lastPath);
+        assertNotNull(lastBody);
+        assertTrue(lastBody.contains("/api/collections/posts/records"));
     }
 
     private void handleBatch(HttpExchange exchange) throws IOException {

@@ -1,8 +1,5 @@
 package io.github.jackbaozz.pocketbase.client;
 
-import java.net.URI;
-import java.net.http.HttpRequest;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -23,12 +20,13 @@ public final class BatchService {
         return this;
     }
 
+    @SuppressWarnings("unchecked")
     public List<Object> send() {
         if (requests.isEmpty()) {
             return List.of();
         }
         Object body = java.util.Map.of("requests", requests);
         // Using generic List.class is enough for a smoke/stub, normally would be TypeReference
-        return client.send("POST", "batch", null, body, List.class);
+        return client.send("POST", client.apiPath("batch"), null, body, List.class);
     }
 }

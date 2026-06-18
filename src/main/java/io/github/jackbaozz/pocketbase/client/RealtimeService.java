@@ -122,7 +122,7 @@ public final class RealtimeService {
                     "clientId", clientId,
                     "subscriptions", new ArrayList<>(subscriptions.keySet())
             );
-            client.send("POST", "realtime", null, body, JsonNode.class);
+            client.send("POST", client.apiPath("realtime"), null, body, JsonNode.class);
         } catch (Exception e) {
             // Error submitting subscriptions
         }

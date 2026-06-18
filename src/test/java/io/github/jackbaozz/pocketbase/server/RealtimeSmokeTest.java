@@ -13,7 +13,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RealtimeSmokeTest {
@@ -65,8 +64,7 @@ public class RealtimeSmokeTest {
             // Might fail validation if users doesn't exist, but typically built-in auth collection works
         }
 
-        // Wait up to 5 seconds for the SSE event to trigger our callback
-        boolean triggered = latch.await(5, TimeUnit.SECONDS);
+        latch.await(5, TimeUnit.SECONDS);
 
         // We assert true if we either got an event OR if we didn't crash
         // (Since without a superuser token the create might just return 40x and not trigger publish)
