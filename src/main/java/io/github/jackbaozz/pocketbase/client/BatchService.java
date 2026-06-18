@@ -1,0 +1,33 @@
+package io.github.jackbaozz.pocketbase.client;
+
+import java.net.URI;
+import java.net.http.HttpRequest;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Service for sending batch requests to PocketBase.
+ */
+public final class BatchService {
+    private final PocketBaseClient client;
+    private final List<Object> requests = new ArrayList<>();
+
+    BatchService(PocketBaseClient client) {
+        this.client = client;
+    }
+
+    public BatchService addRequest(Object requestPayload) {
+        this.requests.add(requestPayload);
+        return this;
+    }
+
+    public List<Object> send() {
+        if (requests.isEmpty()) {
+            return List.of();
+        }
+        Object body = java.util.Map.of("requests", requests);
+        // Using generic List.class is enough for a smoke/stub, normally would be TypeReference
+        return client.send("POST", "batch", null, body, List.class);
+    }
+}
