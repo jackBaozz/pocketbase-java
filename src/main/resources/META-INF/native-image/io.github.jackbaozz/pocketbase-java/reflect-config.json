@@ -18,6 +18,18 @@
     "allPublicMethods": true
   },
   {
+    "name": "io.github.jackbaozz.pocketbase.client.BatchResponse",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.client.BatchResponse$Item",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allPublicMethods": true
+  },
+  {
     "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema",
     "allDeclaredConstructors": true,
     "allPublicFields": true,

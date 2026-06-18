@@ -20,13 +20,11 @@ public final class BatchService {
         return this;
     }
 
-    @SuppressWarnings("unchecked")
-    public List<Object> send() {
+    public BatchResponse send() {
         if (requests.isEmpty()) {
-            return List.of();
+            return new BatchResponse(List.of());
         }
         Object body = java.util.Map.of("requests", requests);
-        // Using generic List.class is enough for a smoke/stub, normally would be TypeReference
-        return client.send("POST", client.apiPath("batch"), null, body, List.class);
+        return client.send("POST", client.apiPath("batch"), null, body, BatchResponse.class);
     }
 }

@@ -55,7 +55,7 @@ final class OAuth2Support {
             throw new ApiException(400, "OAuth2 provider tokenURL is required.");
         }
         Map<String, Object> token = fetchToken(mapper, config, code, redirectURL, codeVerifier);
-        Map<String, Object> userInfo = fetchUserInfo(mapper, config, token);
+        Map<String, Object> userInfo = OAuth2ProviderManager.parseUserInfo(config, fetchUserInfo(mapper, config, token));
         String providerId = text(userInfo.get("sub"));
         if (providerId.isBlank()) {
             providerId = text(userInfo.get("id"));
@@ -193,6 +193,8 @@ final class OAuth2Support {
             parts.add(pair("code_challenge", codeChallenge));
             parts.add(pair("code_challenge_method", codeChallengeMethod));
         }
+        OAuth2ProviderManager.authUrlParameters(config)
+                .forEach((key, value) -> parts.add(pair(key, value)));
         parts.add("redirect_uri=");
         return appendQuery(config.authURL, String.join("&", parts));
     }

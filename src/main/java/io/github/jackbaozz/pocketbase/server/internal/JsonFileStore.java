@@ -4622,6 +4622,7 @@ public final class JsonFileStore {
                         .map(String::trim)
                         .filter(scope -> !scope.isBlank())
                         .collect(Collectors.toCollection(ArrayList::new));
+                OAuth2ProviderManager.validateConfig(normalized);
                 providers.add(normalized);
             }
             collection.oauth2.providers = providers;

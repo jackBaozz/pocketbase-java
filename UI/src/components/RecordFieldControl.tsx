@@ -39,6 +39,12 @@ function splitCsv(value: string) {
     .filter(Boolean);
 }
 
+function selectFieldOptions(field: FieldSchema) {
+  const optionValues = field.options?.values;
+  const values = Array.isArray(field.values) ? field.values : optionValues;
+  return Array.isArray(values) ? values.map(String) : [];
+}
+
 type RecordFieldControlProps = {
   field: FieldSchema;
   value: unknown;
@@ -125,7 +131,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
       </label>
     );
   }
-  
+
   if (field.type === "date" || field.type === "autodate") {
     const dateValue = typeof value === "string" ? value.substring(0, 16) : ""; // YYYY-MM-DDTHH:mm
     return (
@@ -143,7 +149,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
             if (event.target.value) {
               const date = new Date(event.target.value);
               // PocketBase uses string formats for dates. Using ISO string.
-              onChange(date.toISOString().replace('T', ' ')); 
+              onChange(date.toISOString().replace('T', ' '));
             } else {
               onChange(null);
             }
@@ -154,9 +160,9 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
   }
 
   if (field.type === "select") {
-    const isMultiple = field.maxSelect && field.maxSelect > 1;
-    const options = field.values || [];
-    
+    const isMultiple = maxFiles(field) > 1;
+    const options = selectFieldOptions(field);
+
     if (isMultiple) {
        const selectedValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
        return (
@@ -168,8 +174,8 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
             <div className="select-multiple-grid">
                {options.map((opt) => (
                  <label key={opt} className="check-row">
-                   <input 
-                     type="checkbox" 
+                   <input
+                     type="checkbox"
                      checked={selectedValues.includes(opt)}
                      onChange={(e) => {
                        if (e.target.checked) {
@@ -193,8 +199,8 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
           <strong>{field.name}</strong>
           {commonMeta}
         </span>
-        <select 
-          name={field.name} 
+        <select
+          name={field.name}
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         >

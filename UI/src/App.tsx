@@ -4902,6 +4902,12 @@ function splitCsv(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function selectFieldOptions(field: FieldSchema) {
+  const legacyValues = (field as FieldSchema & { values?: unknown }).values;
+  const values = Array.isArray(legacyValues) ? legacyValues : field.options?.values;
+  return Array.isArray(values) ? values.map(String) : [];
+}
+
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -5021,10 +5027,9 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
   }
 
   if (field.type === "select") {
-    const isMultiple = field.maxSelect && field.maxSelect > 1;
-    // We assume options (or values) is an array of strings in the 'values' property for select
-    const options = (field as any).values || [];
-    
+    const isMultiple = maxFiles(field) > 1;
+    const options = selectFieldOptions(field);
+
     if (isMultiple) {
        const selectedValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
        return (
@@ -5036,8 +5041,8 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
             <div className="select-multiple-grid" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '4px 0' }}>
                {options.length > 0 ? options.map((opt: string) => (
                  <label key={opt} className="check-row" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                   <input 
-                     type="checkbox" 
+                   <input
+                     type="checkbox"
                      checked={selectedValues.includes(opt)}
                      onChange={(e) => {
                        if (e.target.checked) {
@@ -5061,8 +5066,8 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
           <strong>{field.name}</strong>
           {commonMeta}
         </span>
-        <select 
-          name={field.name} 
+        <select
+          name={field.name}
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         >

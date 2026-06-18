@@ -43,9 +43,12 @@ class BatchServiceTest {
     void testBatchService() {
         BatchService batch = client.batch();
         batch.addRequest(java.util.Map.of("method", "POST", "url", "/api/collections/posts/records", "body", java.util.Map.of("title", "hello")));
-        java.util.List<Object> response = batch.send();
+        BatchResponse response = batch.send();
 
         assertNotNull(response);
+        assertEquals(1, response.responses().size());
+        assertEquals(200, response.responses().get(0).status());
+        assertEquals("created-id", response.responses().get(0).body().get("id").asText());
         assertEquals("POST", lastMethod);
         assertEquals("/api/batch", lastPath);
         assertNotNull(lastBody);
@@ -55,12 +58,18 @@ class BatchServiceTest {
     private void handleBatch(HttpExchange exchange) throws IOException {
         lastMethod = exchange.getRequestMethod();
         lastPath = exchange.getRequestURI().getPath();
-        
+
         try (InputStream input = exchange.getRequestBody()) {
             lastBody = new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
 
-        byte[] bytes = "[]".getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = """
+                {
+                  "responses": [
+                    {"status": 200, "body": {"id": "created-id", "title": "hello"}}
+                  ]
+                }
+                """.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
         exchange.getResponseBody().write(bytes);

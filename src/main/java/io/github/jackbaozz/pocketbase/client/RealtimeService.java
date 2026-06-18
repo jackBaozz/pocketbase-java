@@ -13,7 +13,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
@@ -24,6 +28,7 @@ public final class RealtimeService {
     private final Map<String, List<Consumer<JsonNode>>> subscriptions = new ConcurrentHashMap<>();
     private Thread listenerThread;
     private String clientId;
+    private CompletableFuture<Void> connectFuture;
 
     RealtimeService(PocketBaseClient client) {
         this.client = Objects.requireNonNull(client, "client");
@@ -35,7 +40,9 @@ public final class RealtimeService {
      * To subscribe to a specific record, use "collectionName/recordId".
      */
     public synchronized void subscribe(String topic, Consumer<JsonNode> callback) {
-        subscriptions.computeIfAbsent(topic, k -> new ArrayList<>()).add(callback);
+        Objects.requireNonNull(callback, "callback");
+        String normalizedTopic = normalizeTopic(topic);
+        subscriptions.computeIfAbsent(normalizedTopic, k -> new ArrayList<>()).add(callback);
         if (clientId != null && !clientId.isBlank()) {
             submitSubscriptions();
         } else if (listenerThread == null) {
@@ -44,7 +51,7 @@ public final class RealtimeService {
     }
 
     public synchronized void unsubscribe(String topic) {
-        subscriptions.remove(topic);
+        subscriptions.remove(normalizeTopic(topic));
         if (subscriptions.isEmpty()) {
             disconnect();
         } else if (clientId != null) {
@@ -57,14 +64,20 @@ public final class RealtimeService {
             listenerThread.interrupt();
             listenerThread = null;
         }
+        if (connectFuture != null && !connectFuture.isDone()) {
+            connectFuture.complete(null);
+        }
         clientId = null;
         subscriptions.clear();
     }
 
     private void connect() {
+        CompletableFuture<Void> initialConnect = new CompletableFuture<>();
+        connectFuture = initialConnect;
         listenerThread = new Thread(() -> {
             try {
-                HttpRequest request = HttpRequest.newBuilder(URI.create(client.baseUri().toString() + "/api/realtime"))
+                URI realtimeUri = client.baseUri().resolve("api/realtime");
+                HttpRequest request = HttpRequest.newBuilder(realtimeUri)
                         .GET()
                         .header("Accept", "text/event-stream")
                         .build();
@@ -85,7 +98,13 @@ public final class RealtimeService {
                         }
                         if (line.startsWith("id:")) {
                             clientId = line.substring(3).trim();
-                            submitSubscriptions();
+                            try {
+                                submitSubscriptions();
+                                initialConnect.complete(null);
+                            } catch (RuntimeException e) {
+                                initialConnect.completeExceptionally(e);
+                                return;
+                            }
                         } else if (line.startsWith("event:")) {
                             currentEvent = line.substring(6).trim();
                         } else if (line.startsWith("data:")) {
@@ -103,29 +122,27 @@ public final class RealtimeService {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                initialConnect.completeExceptionally(new PocketBaseException("GET", URI.create("/api/realtime"), e));
             } catch (Exception e) {
-                // Reconnect or handle failure logic can be added here
+                initialConnect.completeExceptionally(toRealtimeException(e));
             } finally {
                 clientId = null;
             }
         });
         listenerThread.setDaemon(true);
         listenerThread.start();
+        awaitInitialSubscription(initialConnect);
     }
 
     private void submitSubscriptions() {
         if (clientId == null || clientId.isBlank() || subscriptions.isEmpty()) {
             return;
         }
-        try {
-            Map<String, Object> body = Map.of(
-                    "clientId", clientId,
-                    "subscriptions", new ArrayList<>(subscriptions.keySet())
-            );
-            client.send("POST", client.apiPath("realtime"), null, body, JsonNode.class);
-        } catch (Exception e) {
-            // Error submitting subscriptions
-        }
+        Map<String, Object> body = Map.of(
+                "clientId", clientId,
+                "subscriptions", new ArrayList<>(subscriptions.keySet())
+        );
+        client.send("POST", client.apiPath("realtime"), null, body, JsonNode.class);
     }
 
     private void dispatch(String event, JsonNode data) {
@@ -155,5 +172,40 @@ public final class RealtimeService {
                  callbacks.forEach(cb -> cb.accept(data));
             }
         });
+    }
+
+    private static String normalizeTopic(String topic) {
+        if (topic == null || topic.isBlank()) {
+            throw new IllegalArgumentException("topic must not be blank");
+        }
+        String trimmed = topic.trim();
+        if (trimmed.startsWith("@") || trimmed.contains("/")) {
+            return trimmed;
+        }
+        return trimmed + "/*";
+    }
+
+    private static void awaitInitialSubscription(CompletableFuture<Void> future) {
+        try {
+            future.get(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PocketBaseException("GET", URI.create("/api/realtime"), e);
+        } catch (TimeoutException e) {
+            throw new PocketBaseException("GET", URI.create("/api/realtime"), e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new PocketBaseException("GET", URI.create("/api/realtime"), cause);
+        }
+    }
+
+    private static RuntimeException toRealtimeException(Exception e) {
+        if (e instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        return new PocketBaseException("GET", URI.create("/api/realtime"), e);
     }
 }
