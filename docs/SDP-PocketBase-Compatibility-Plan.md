@@ -218,13 +218,13 @@ Use this checklist as the project board seed.
 ### P1
 
 - [x] **SDP-012**: Field-specific record editor UI (UI)
-- [ ] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
+- [x] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
 - [x] **SDP-014**: Structured application settings page (UI/Backend)
 - [x] **SDP-015**: Mail settings page and test modal (UI/Backend)
 - [x] **SDP-016**: Storage settings page and S3 tests (UI/Backend)
 - [x] **SDP-017**: Backup settings page and S3 backups (UI/Backend)
-- [ ] **SDP-018**: Realtime SDK compatibility smoke (Backend/SDK)
-- [ ] **SDP-019**: Batch service SDK and multipart rollback tests (Backend/SDK)
+- [x] **SDP-018**: Realtime SDK compatibility smoke (Backend/SDK)
+- [x] **SDP-019**: Batch service SDK and multipart rollback tests (Backend/SDK)
 - [x] **SDP-020**: SQL console UI (UI)
 
 ### P2

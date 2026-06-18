@@ -27,3 +27,10 @@
   * 实现了 CollectionSchema Index 及字段变更删减记录冗余数据的基础 Schema Migration Semantics（`SDP-009`）。
   * 编写了 `ADR-001` 作为对 SQLite 及 JSONFileStore 的正式定调（`SDP-007`）。
   * 验证并认可了内置的 Collection Diff/Review 流程 (`SDP-010`) 及现存的 `RuleEvaluator` 评估器作为核心解析器 (`SDP-006`)。
+
+## 🚀 P1 里程碑完成 (2026-06-18)
+
+- 全面完成 `P1` 层级的 PocketBase 兼容性功能开发。
+- 补齐了 `SDP-013` (OAuth2 specific validation parity)，引入了失效测试并补充提供商校验机制。
+- 确保 `SDP-018` (Realtime Smoke) 与 `SDP-019` (Batch Service Rollback) 测试框架覆盖完毕，为下一步 SDK 功能优化奠基。
+- 确立 `SDP-012` 以及 `SDP-014` ~ `SDP-017` UI 的实装。
