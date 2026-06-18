@@ -217,8 +217,8 @@ Use this checklist as the project board seed.
 
 ### P1
 
-- [ ] **SDP-012**: Field-specific record editor UI (UI)
-- [ ] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
+- [x] **SDP-012**: Field-specific record editor UI (UI)
+- [x] **SDP-013**: OAuth2 provider-specific config parity (Backend/UI)
 - [x] **SDP-014**: Structured application settings page (UI/Backend)
 - [x] **SDP-015**: Mail settings page and test modal (UI/Backend)
 - [x] **SDP-016**: Storage settings page and S3 tests (UI/Backend)
