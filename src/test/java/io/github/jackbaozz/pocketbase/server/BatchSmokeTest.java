@@ -12,7 +12,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class BatchSmokeTest {
-    private PocketBaseServer server;
+    private LocalPocketBase server;
     private PocketBaseClient client;
 
     @TempDir
@@ -20,20 +20,15 @@ public class BatchSmokeTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        ServerConfig config = ServerConfig.builder()
-                .port(0)
-                .dataDir(dataDir)
-                .build();
+        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
         server = LocalPocketBase.start(config);
-        client = PocketBaseClient.builder()
-                .baseUrl("http://localhost:" + server.port())
-                .build();
+        client = PocketBaseClient.builder("http://localhost:" + server.port()).build();
     }
 
     @AfterEach
     void tearDown() {
         if (server != null) {
-            server.stop();
+            server.close();
         }
     }
 

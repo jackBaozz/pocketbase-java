@@ -5,6 +5,7 @@ import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Service for sending batch requests to PocketBase.
@@ -14,7 +15,7 @@ public final class BatchService {
     private final List<Object> requests = new ArrayList<>();
 
     BatchService(PocketBaseClient client) {
-        this.client = client;
+        this.client = Objects.requireNonNull(client, "client");
     }
 
     public BatchService addRequest(Object requestPayload) {

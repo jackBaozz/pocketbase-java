@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -25,7 +26,7 @@ public final class RealtimeService {
     private String clientId;
 
     RealtimeService(PocketBaseClient client) {
-        this.client = client;
+        this.client = Objects.requireNonNull(client, "client");
     }
 
     /**
@@ -148,7 +149,7 @@ public final class RealtimeService {
                      if (topic.equals(cName) || topic.equals(cName + "/" + rId) || topic.equals("*")) {
                          matches = true;
                      }
-                 }
+                  }
             }
             if (matches) {
                  callbacks.forEach(cb -> cb.accept(data));

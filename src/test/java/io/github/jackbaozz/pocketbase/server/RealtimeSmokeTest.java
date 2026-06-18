@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RealtimeSmokeTest {
-    private PocketBaseServer server;
+    private LocalPocketBase server;
     private PocketBaseClient client;
 
     @TempDir
@@ -25,14 +25,9 @@ public class RealtimeSmokeTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        ServerConfig config = ServerConfig.builder()
-                .port(0)
-                .dataDir(dataDir)
-                .build();
+        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
         server = LocalPocketBase.start(config);
-        client = PocketBaseClient.builder()
-                .baseUrl("http://localhost:" + server.port())
-                .build();
+        client = PocketBaseClient.builder("http://localhost:" + server.port()).build();
     }
 
     @AfterEach
@@ -41,7 +36,7 @@ public class RealtimeSmokeTest {
             client.realtime().disconnect();
         }
         if (server != null) {
-            server.stop();
+            server.close();
         }
     }
 
@@ -65,7 +60,7 @@ public class RealtimeSmokeTest {
             "passwordConfirm", "1234567890"
         );
         try {
-            client.collections().records("users").create(body);
+            client.collection("users").create(body);
         } catch (Exception ignore) {
             // Might fail validation if users doesn't exist, but typically built-in auth collection works
         }
