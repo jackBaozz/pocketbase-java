@@ -1516,14 +1516,47 @@ class LocalPocketBaseServerTest {
         assertTrue(filename.startsWith("hello_world_"));
         assertTrue(filename.endsWith(".txt"));
 
+        String filePath = "/api/files/assets/" + created.get("id").asText() + "/" + filename;
         HttpResponse<String> file = http.send(
-                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/files/assets/"
-                        + created.get("id").asText() + "/" + filename)).GET().build(),
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + filePath)).GET().build(),
                 HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
         );
         assertEquals(200, file.statusCode());
         assertEquals("text/plain; charset=utf-8", file.headers().firstValue("Content-Type").orElse(""));
         assertEquals("hello from multipart", file.body());
+
+        HttpResponse<String> clampedRange = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + filePath))
+                        .header("Range", "bytes=0-999999")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        );
+        assertEquals(206, clampedRange.statusCode());
+        assertEquals("bytes 0-19/20", clampedRange.headers().firstValue("Content-Range").orElse(""));
+        assertEquals("20", clampedRange.headers().firstValue("Content-Length").orElse(""));
+        assertEquals("hello from multipart", clampedRange.body());
+
+        HttpResponse<String> suffixRange = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + filePath))
+                        .header("Range", "bytes=-9")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        );
+        assertEquals(206, suffixRange.statusCode());
+        assertEquals("bytes 11-19/20", suffixRange.headers().firstValue("Content-Range").orElse(""));
+        assertEquals("multipart", suffixRange.body());
+
+        HttpResponse<String> unsatisfiableRange = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + filePath))
+                        .header("Range", "bytes=20-25")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        );
+        assertEquals(416, unsatisfiableRange.statusCode());
+        assertEquals("bytes */20", unsatisfiableRange.headers().firstValue("Content-Range").orElse(""));
     }
 
     @Test

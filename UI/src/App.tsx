@@ -36,6 +36,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
+import { AuthActionPages } from "./AuthActionPages";
 import { FieldEditor } from "./components/FieldEditor";
 
 type HealthResponse = {
@@ -272,6 +273,13 @@ const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
 function App() {
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const handler = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
+  }, []);
+
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
   const [collections, setCollections] = useState<CollectionSchema[]>([]);
@@ -976,6 +984,10 @@ function App() {
   );
   const pageMeta = viewMeta(view, selected);
   const showWorkspaceTopbar = !authenticated || (!collectionView && !settingsView && view !== "logs");
+
+  if (hash.startsWith('#/pbinstall/') || hash.startsWith('#/request-password-reset') || hash.startsWith('#/auth/confirm-')) {
+    return <AuthActionPages />;
+  }
 
   return (
     <div className="app-shell">

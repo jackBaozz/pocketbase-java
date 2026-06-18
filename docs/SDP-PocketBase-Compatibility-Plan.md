@@ -229,10 +229,10 @@ Use this checklist as the project board seed.
 
 ### P2
 
-- [/] **SDP-021**: Logs chart/stats parity (UI/Backend)
-- [ ] **SDP-022**: File range/cache/S3 parity (Backend)
-- [ ] **SDP-023**: Installer and auth action pages (UI)
-- [ ] **SDP-024**: Native CI release gate (Build)
+- [x] **SDP-021**: Logs chart/stats parity (UI/Backend)
+- [x] **SDP-022**: File range/cache/S3 parity (Backend)
+- [x] **SDP-023**: Installer and auth action pages (UI)
+- [x] **SDP-024**: Native CI release gate (Build)
 
 ## 8. Acceptance Gates
 

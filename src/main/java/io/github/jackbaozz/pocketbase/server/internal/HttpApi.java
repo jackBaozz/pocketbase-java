@@ -805,19 +805,7 @@ public final class HttpApi implements HttpHandler {
             throw new ApiException(404, "File not found.");
         }
         ServedFile served = servedFile(file, collection, recordId, filename, query.get("thumb"));
-        long size = Files.size(served.path());
-        exchange.getResponseHeaders().set("Content-Type", served.contentType());
-        exchange.getResponseHeaders().set("Content-Length", String.valueOf(size));
-        if (truthy(query.get("download"))) {
-            exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + headerFilename(filename) + "\"");
-        }
-        exchange.sendResponseHeaders(200, "HEAD".equals(exchange.getRequestMethod()) ? -1 : size);
-        if ("HEAD".equals(exchange.getRequestMethod())) {
-            return;
-        }
-        try (OutputStream output = exchange.getResponseBody()) {
-            Files.copy(served.path(), output);
-        }
+        HttpFileSupport.serve(exchange, served.path(), served.contentType(), truthy(query.get("download")), headerFilename(filename));
     }
 
     private ServedFile servedFile(Path file, String collection, String recordId, String filename, String thumb) throws IOException {
@@ -839,15 +827,8 @@ public final class HttpApi implements HttpHandler {
         if (backup == null || !Files.exists(backup) || !Files.isRegularFile(backup)) {
             throw new ApiException(404, "Backup not found.");
         }
-        long size = Files.size(backup);
         String filename = backup.getFileName().toString();
-        exchange.getResponseHeaders().set("Content-Type", "application/zip");
-        exchange.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-        exchange.getResponseHeaders().set("Content-Length", String.valueOf(size));
-        exchange.sendResponseHeaders(200, size);
-        try (OutputStream output = exchange.getResponseBody()) {
-            Files.copy(backup, output);
-        }
+        HttpFileSupport.serve(exchange, backup, "application/zip", true, filename);
     }
 
     private Optional<RequestPrincipal> filePrincipal(HttpExchange exchange) {
