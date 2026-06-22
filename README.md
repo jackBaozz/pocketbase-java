@@ -197,8 +197,8 @@ pocketbase-java/
 | Domain | Supported API Endpoint & HTTP Methods |
 | --- | --- |
 | **System** | `GET /api/health` |
-| **Superusers** | `POST /api/bootstrap/superuser`<br>`POST /api/collections/_superusers/auth-with-password` |
-| **Collections** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers` |
+| **Superusers** | `POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password`<br>`POST /api/collections/_superusers/auth-with-password` |
+| **Collections** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers`<br>`POST /api/collections/meta/dry-run-view` |
 | **Records CRUD** | `GET/POST /api/collections/{collection}/records`<br>`GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
 | **Files** | `GET /api/files/{collection}/{recordId}/{filename}`<br>`POST /api/files/token` |
 | **Batch** | `POST /api/batch` |

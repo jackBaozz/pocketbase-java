@@ -105,9 +105,9 @@ public class App {
 `pocketbase-java` 内置了对接服务端（无论是 Java 版还是 Go 原版 PocketBase）的 Java SDK：
 
 ```java
-import io.github.jackbaozz.pocketbase.PocketBaseClient;
-import io.github.jackbaozz.pocketbase.RecordList;
-import io.github.jackbaozz.pocketbase.ListOptions;
+import io.github.jackbaozz.pocketbase.client.PocketBaseClient;
+import io.github.jackbaozz.pocketbase.client.RecordList;
+import io.github.jackbaozz.pocketbase.client.ListOptions;
 import java.util.Map;
 
 // 1. 初始化客户端
@@ -197,8 +197,8 @@ pocketbase-java/
 | 分类 | 支持的 API 路径与 HTTP 方法 |
 | --- | --- |
 | **系统** | `GET /api/health` |
-| **超级管理员** | `POST /api/bootstrap/superuser`<br>`POST /api/collections/_superusers/auth-with-password` |
-| **集合管理** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers` |
+| **超级管理员** | `POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password`<br>`POST /api/collections/_superusers/auth-with-password` |
+| **集合管理** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers`<br>`POST /api/collections/meta/dry-run-view` |
 | **记录 CRUD** | `GET/POST /api/collections/{collection}/records`<br>`GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
 | **文件接口** | `GET /api/files/{collection}/{recordId}/{filename}`<br>`POST /api/files/token` |
 | **批处理** | `POST /api/batch` |
@@ -208,7 +208,7 @@ pocketbase-java/
 | **系统日志** | `GET /api/logs`<br>`GET /api/logs/{id}`<br>`GET /api/logs/stats` |
 | **定时任务** | `GET /api/crons`<br>`POST /api/crons/{id}` |
 | **SQL API** | `POST /api/sql` *(仅 Superuser 权限)* |
-| **Auth 详情** | `GET /api/collections/{collection}/auth-methods`<br>`POST /api/collections/{collection}/auth-with-password`<br>`POST /api/collections/{collection}/auth-with-otp`<br>`POST /api/collections/{collection}/auth-refresh`<br>`POST /api/collections/{collection}/request-otp`<br>`POST /api/collections/{collection}/request-password-reset`<br>`POST /api/collections/{collection}/confirm-password-reset`<br>`POST /api/collections/{collection}/request-verification`<br>`POST /api/collections/{collection}/confirm-verification`<br>`POST /api/collections/{collection}/request-email-change`<br>`POST /api/collections/{collection}/confirm-email-change`<br>`POST /api/collections/{collection}/impersonate/{id}` |
+| **Auth 详情** | `GET /api/collections/{collection}/auth-methods`<br>`POST /api/collections/{collection}/auth-with-password`<br>`POST /api/collections/{collection}/auth-with-otp`<br>`POST /api/collections/{collection}/auth-with-oauth2`<br>`POST /api/collections/{collection}/auth-refresh`<br>`POST /api/collections/{collection}/request-otp`<br>`POST /api/collections/{collection}/request-password-reset`<br>`POST /api/collections/{collection}/confirm-password-reset`<br>`POST /api/collections/{collection}/request-verification`<br>`POST /api/collections/{collection}/confirm-verification`<br>`POST /api/collections/{collection}/request-email-change`<br>`POST /api/collections/{collection}/confirm-email-change`<br>`POST /api/collections/{collection}/impersonate/{id}`<br>`GET/POST /api/oauth2-redirect` |
 
 ---
 
