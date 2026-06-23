@@ -24,10 +24,76 @@ import java.util.Optional;
  * HTTP surface that mirrors the most common PocketBase API and serves the admin UI.
  */
 public final class HttpApi implements HttpHandler {
-    private final JsonFileStore store;
+    public record Route(String method, String path) {}
+
+    public static final List<Route> REGISTERED_ROUTES = List.of(
+            new Route("GET", "/api/settings"),
+            new Route("PATCH", "/api/settings"),
+            new Route("POST", "/api/settings/test/s3"),
+            new Route("POST", "/api/settings/test/email"),
+            new Route("POST", "/api/settings/apple/generate-client-secret"),
+
+            new Route("GET", "/api/collections"),
+            new Route("POST", "/api/collections"),
+            new Route("GET", "/api/collections/{collection}"),
+            new Route("PATCH", "/api/collections/{collection}"),
+            new Route("DELETE", "/api/collections/{collection}"),
+            new Route("DELETE", "/api/collections/{collection}/truncate"),
+            new Route("PUT", "/api/collections/import"),
+            new Route("GET", "/api/collections/meta/scaffolds"),
+            new Route("GET", "/api/collections/meta/oauth2-providers"),
+            new Route("POST", "/api/collections/meta/dry-run-view"),
+
+            new Route("GET", "/api/collections/{collection}/records"),
+            new Route("POST", "/api/collections/{collection}/records"),
+            new Route("GET", "/api/collections/{collection}/records/{id}"),
+            new Route("PATCH", "/api/collections/{collection}/records/{id}"),
+            new Route("DELETE", "/api/collections/{collection}/records/{id}"),
+
+            new Route("GET", "/api/oauth2-redirect"),
+            new Route("POST", "/api/oauth2-redirect"),
+            new Route("GET", "/api/collections/{collection}/auth-methods"),
+            new Route("POST", "/api/collections/{collection}/auth-refresh"),
+            new Route("POST", "/api/collections/{collection}/auth-with-password"),
+            new Route("POST", "/api/collections/{collection}/auth-with-oauth2"),
+            new Route("POST", "/api/collections/{collection}/request-otp"),
+            new Route("POST", "/api/collections/{collection}/auth-with-otp"),
+            new Route("POST", "/api/collections/{collection}/request-password-reset"),
+            new Route("POST", "/api/collections/{collection}/confirm-password-reset"),
+            new Route("POST", "/api/collections/{collection}/request-verification"),
+            new Route("POST", "/api/collections/{collection}/confirm-verification"),
+            new Route("POST", "/api/collections/{collection}/request-email-change"),
+            new Route("POST", "/api/collections/{collection}/confirm-email-change"),
+            new Route("POST", "/api/collections/{collection}/impersonate/{id}"),
+
+            new Route("GET", "/api/logs"),
+            new Route("GET", "/api/logs/stats"),
+            new Route("GET", "/api/logs/{id}"),
+
+            new Route("GET", "/api/backups"),
+            new Route("POST", "/api/backups"),
+            new Route("POST", "/api/backups/upload"),
+            new Route("GET", "/api/backups/{key}"),
+            new Route("DELETE", "/api/backups/{key}"),
+            new Route("POST", "/api/backups/{key}/restore"),
+
+            new Route("GET", "/api/crons"),
+            new Route("POST", "/api/crons/{id}"),
+
+            new Route("POST", "/api/files/token"),
+            new Route("GET", "/api/files/{collection}/{recordId}/{filename}"),
+
+            new Route("POST", "/api/batch"),
+            new Route("GET", "/api/realtime"),
+            new Route("POST", "/api/realtime"),
+            new Route("GET", "/api/health"),
+            new Route("POST", "/api/sql")
+    );
+
+    private final StorageEngine store;
     private final RealtimeHub realtimeHub;
 
-    public HttpApi(JsonFileStore store, RealtimeHub realtimeHub) {
+    public HttpApi(StorageEngine store, RealtimeHub realtimeHub) {
         this.store = store;
         this.realtimeHub = realtimeHub;
     }
@@ -244,7 +310,9 @@ public final class HttpApi implements HttpHandler {
 
         if (segments.size() == 3 && "import".equals(segments.get(2)) && "PUT".equals(method)) {
             requireSuperuser(principal);
-            store.importCollections(readJson(exchange));
+            boolean dryRun = "true".equalsIgnoreCase(query.get("dryRun"));
+            Object res = store.importCollections(readJson(exchange), dryRun);
+            if (dryRun) return res;
             return NoContent.INSTANCE;
         }
         if (segments.size() == 4 && "meta".equals(segments.get(2)) && "scaffolds".equals(segments.get(3))

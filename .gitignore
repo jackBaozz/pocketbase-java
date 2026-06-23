@@ -26,3 +26,6 @@ UI/node_modules/
 UI/.vite/
 UI/dist/
 UI/*.tsbuildinfo
+
+# ==================== Test dependencies ====================
+src/test/resources/js-sdk-smoke/node_modules/

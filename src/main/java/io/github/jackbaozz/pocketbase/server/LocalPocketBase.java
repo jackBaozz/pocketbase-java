@@ -3,7 +3,10 @@ package io.github.jackbaozz.pocketbase.server;
 import com.sun.net.httpserver.HttpServer;
 import io.github.jackbaozz.pocketbase.server.internal.HttpApi;
 import io.github.jackbaozz.pocketbase.server.internal.JsonFileStore;
+import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
+import io.github.jackbaozz.pocketbase.server.internal.StorageEngine;
+import io.github.jackbaozz.pocketbase.server.internal.SqliteStorageEngine;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -15,10 +18,10 @@ import java.util.concurrent.Executors;
 public final class LocalPocketBase implements AutoCloseable {
     private final ServerConfig config;
     private final HttpServer httpServer;
-    private final JsonFileStore store;
+    private final StorageEngine store;
     private final ExecutorService executor;
 
-    private LocalPocketBase(ServerConfig config, HttpServer httpServer, JsonFileStore store, ExecutorService executor) {
+    private LocalPocketBase(ServerConfig config, HttpServer httpServer, StorageEngine store, ExecutorService executor) {
         this.config = config;
         this.httpServer = httpServer;
         this.store = store;
@@ -26,11 +29,26 @@ public final class LocalPocketBase implements AutoCloseable {
     }
 
     public static LocalPocketBase start(ServerConfig config) throws IOException {
-        JsonFileStore store = JsonFileStore.open(
-                config.dataDir(),
-                config.bootstrapSuperuserEmail(),
-                config.bootstrapSuperuserPassword()
-        );
+        StorageEngine store;
+        String storageType = System.getProperty("storage");
+        if ("sqlite".equalsIgnoreCase(storageType)
+                || "mysql".equalsIgnoreCase(storageType)
+                || "mariadb".equalsIgnoreCase(storageType)
+                || "postgres".equalsIgnoreCase(storageType)
+                || "postgresql".equalsIgnoreCase(storageType)) {
+            store = SqliteStorageEngine.open(
+                    config.dataDir(),
+                    config.bootstrapSuperuserEmail(),
+                    config.bootstrapSuperuserPassword(),
+                    JooqDatabase.Engine.fromStorageType(storageType)
+            );
+        } else {
+            store = JsonFileStore.open(
+                    config.dataDir(),
+                    config.bootstrapSuperuserEmail(),
+                    config.bootstrapSuperuserPassword()
+            );
+        }
         RealtimeHub realtimeHub = new RealtimeHub(store.mapper());
         store.realtimeHub(realtimeHub);
         HttpServer server = HttpServer.create(config.bindAddress(), 0);
@@ -49,7 +67,7 @@ public final class LocalPocketBase implements AutoCloseable {
         return config.displayUrl(port());
     }
 
-    public JsonFileStore store() {
+    public StorageEngine store() {
         return store;
     }
 
@@ -57,5 +75,6 @@ public final class LocalPocketBase implements AutoCloseable {
     public void close() {
         httpServer.stop(0);
         executor.shutdownNow();
+        store.close();
     }
 }

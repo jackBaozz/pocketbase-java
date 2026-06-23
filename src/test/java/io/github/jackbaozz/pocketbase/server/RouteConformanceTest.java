@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.jackbaozz.pocketbase.server.internal.HttpApi;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,9 +15,12 @@ import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RouteConformanceTest {
 
@@ -42,98 +46,61 @@ public class RouteConformanceTest {
         }
     }
 
-    private static class RouteInfo {
-        String method;
-        String path;
-
-        RouteInfo(String method, String path) {
-            this.method = method;
-            this.path = path;
+    private List<HttpApi.Route> loadOfficialManifest() throws Exception {
+        try (InputStream is = RouteConformanceTest.class.getResourceAsStream("/official-route-manifest.json")) {
+            if (is == null) {
+                throw new IllegalStateException("Missing official-route-manifest.json");
+            }
+            List<Map<String, String>> list = mapper.readValue(is, List.class);
+            List<HttpApi.Route> routes = new ArrayList<>();
+            for (Map<String, String> m : list) {
+                routes.add(new HttpApi.Route(m.get("method"), m.get("path")));
+            }
+            return routes;
         }
     }
 
-    // List of official routes from docs/SDP-PocketBase-Compatibility-Plan.md
-    private final List<RouteInfo> officialRoutes = Arrays.asList(
-            new RouteInfo("GET", "/api/settings"),
-            new RouteInfo("PATCH", "/api/settings"),
-            new RouteInfo("POST", "/api/settings/test/s3"),
-            new RouteInfo("POST", "/api/settings/test/email"),
-            new RouteInfo("POST", "/api/settings/apple/generate-client-secret"),
+    private String resolveMockPath(String path) {
+        return path.replace("{collection}", "mock_collection")
+                   .replace("{id}", "mock_id")
+                   .replace("{key}", "mock_key")
+                   .replace("{filename}", "mock_filename")
+                   .replace("{recordId}", "mock_recordId");
+    }
 
-            new RouteInfo("GET", "/api/collections"),
-            new RouteInfo("POST", "/api/collections"),
-            new RouteInfo("GET", "/api/collections/mock_collection"),
-            new RouteInfo("PATCH", "/api/collections/mock_collection"),
-            new RouteInfo("DELETE", "/api/collections/mock_collection"),
-            new RouteInfo("DELETE", "/api/collections/mock_collection/truncate"),
-            new RouteInfo("PUT", "/api/collections/import"),
-            new RouteInfo("GET", "/api/collections/meta/scaffolds"),
-            new RouteInfo("GET", "/api/collections/meta/oauth2-providers"),
-            new RouteInfo("POST", "/api/collections/meta/dry-run-view"),
+    @Test
+    void testAllOfficialRoutesAreRegisteredLocally() throws Exception {
+        List<HttpApi.Route> official = loadOfficialManifest();
+        List<HttpApi.Route> local = HttpApi.REGISTERED_ROUTES;
 
-            new RouteInfo("GET", "/api/collections/mock_collection/records"),
-            new RouteInfo("POST", "/api/collections/mock_collection/records"),
-            new RouteInfo("GET", "/api/collections/mock_collection/records/mock_id"),
-            new RouteInfo("PATCH", "/api/collections/mock_collection/records/mock_id"),
-            new RouteInfo("DELETE", "/api/collections/mock_collection/records/mock_id"),
-
-            new RouteInfo("GET", "/api/oauth2-redirect"),
-            new RouteInfo("POST", "/api/oauth2-redirect"),
-            new RouteInfo("GET", "/api/collections/mock_collection/auth-methods"),
-            new RouteInfo("POST", "/api/collections/mock_collection/auth-refresh"),
-            new RouteInfo("POST", "/api/collections/mock_collection/auth-with-password"),
-            new RouteInfo("POST", "/api/collections/mock_collection/auth-with-oauth2"),
-            new RouteInfo("POST", "/api/collections/mock_collection/request-otp"),
-            new RouteInfo("POST", "/api/collections/mock_collection/auth-with-otp"),
-            new RouteInfo("POST", "/api/collections/mock_collection/request-password-reset"),
-            new RouteInfo("POST", "/api/collections/mock_collection/confirm-password-reset"),
-            new RouteInfo("POST", "/api/collections/mock_collection/request-verification"),
-            new RouteInfo("POST", "/api/collections/mock_collection/confirm-verification"),
-            new RouteInfo("POST", "/api/collections/mock_collection/request-email-change"),
-            new RouteInfo("POST", "/api/collections/mock_collection/confirm-email-change"),
-            new RouteInfo("POST", "/api/collections/mock_collection/impersonate/mock_id"),
-
-            new RouteInfo("GET", "/api/logs"),
-            new RouteInfo("GET", "/api/logs/stats"),
-            new RouteInfo("GET", "/api/logs/mock_id"),
-
-            new RouteInfo("GET", "/api/backups"),
-            new RouteInfo("POST", "/api/backups"),
-            new RouteInfo("POST", "/api/backups/upload"),
-            new RouteInfo("GET", "/api/backups/mock_key"),
-            new RouteInfo("DELETE", "/api/backups/mock_key"),
-            new RouteInfo("POST", "/api/backups/mock_key/restore"),
-
-            new RouteInfo("GET", "/api/crons"),
-            new RouteInfo("POST", "/api/crons/mock_id"),
-
-            new RouteInfo("POST", "/api/files/token"),
-            new RouteInfo("GET", "/api/files/mock_collection/mock_recordId/mock_filename"),
-
-            new RouteInfo("POST", "/api/batch"),
-            new RouteInfo("GET", "/api/realtime"),
-            new RouteInfo("POST", "/api/realtime"),
-            new RouteInfo("GET", "/api/health"),
-            new RouteInfo("POST", "/api/sql")
-    );
+        for (HttpApi.Route offRoute : official) {
+            boolean found = local.stream().anyMatch(locRoute ->
+                    locRoute.method().equalsIgnoreCase(offRoute.method()) &&
+                    locRoute.path().equals(offRoute.path())
+            );
+            assertTrue(found, "Official route is not registered locally: " + offRoute.method() + " " + offRoute.path());
+        }
+    }
 
     @Test
     void testOfficialRoutesShouldNotReturn404() throws Exception {
-        for (RouteInfo route : officialRoutes) {
+        List<HttpApi.Route> officialRoutes = loadOfficialManifest();
+        for (HttpApi.Route route : officialRoutes) {
+            String resolvedPath = resolveMockPath(route.path());
             HttpRequest.Builder builder = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + route.path));
-            
-            if (route.method.equals("POST") || route.method.equals("PATCH") || route.method.equals("PUT")) {
-                builder.method(route.method, HttpRequest.BodyPublishers.ofString("{}"));
+                    .uri(URI.create(baseUrl + resolvedPath));
+
+            if (route.method().equals("POST") || route.method().equals("PATCH") || route.method().equals("PUT")) {
+                builder.method(route.method(), HttpRequest.BodyPublishers.ofString("{}"));
                 builder.header("Content-Type", "application/json");
             } else {
-                builder.method(route.method, HttpRequest.BodyPublishers.noBody());
+                builder.method(route.method(), HttpRequest.BodyPublishers.noBody());
             }
 
-            if ("GET".equals(route.method) && "/api/realtime".equals(route.path)) {
+            if ("GET".equals(route.method()) && "/api/realtime".equals(route.path())) {
                 HttpResponse<InputStream> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
                 try (InputStream ignored = response.body()) {
-                    assertNotEquals(404, response.statusCode(), "Route is missing: " + route.method + " " + route.path);
+                    assertNotEquals(404, response.statusCode(), "Route is missing: " + route.method() + " " + route.path());
                 }
                 continue;
             }
@@ -148,12 +115,12 @@ public class RouteConformanceTest {
             // But we can check that it doesn't just fall through to the root 404 handler.
             // Actually, if we hit a known route with an unknown collection, we might get a 404 "Collection not found."
             // So we can differentiate by checking the exact message or response format.
-            
-            // To be precise, let's just make sure it doesn't return exactly "Not found." 
+
+            // To be precise, let's just make sure it doesn't return exactly "Not found."
             // which is the fallback for unmapped routes in HttpApi.java
             boolean isGlobal404 = response.statusCode() == 404 && response.body().contains("\"message\":\"Not found.\"");
-            
-            assertNotEquals(true, isGlobal404, "Route is missing: " + route.method + " " + route.path);
+
+            assertNotEquals(true, isGlobal404, "Route is missing: " + route.method() + " " + route.path());
         }
     }
 

@@ -34,3 +34,17 @@
 - 补齐了 `SDP-013` (OAuth2 specific validation parity)，引入了失效测试并补充提供商校验机制。
 - 确保 `SDP-018` (Realtime Smoke) 与 `SDP-019` (Batch Service Rollback) 测试框架覆盖完毕，为下一步 SDK 功能优化奠基。
 - 确立 `SDP-012` 以及 `SDP-014` ~ `SDP-017` UI 的实装。
+
+## 🚧 Phase 2 阶段性进展 (2026-06-22)
+
+- `SDP2-A01` ~ `SDP2-A05` 已开始落地一致性测试基准：
+  * 已新增官方路由 manifest、`RouteConformanceTest`、`BehaviorFixturesTest` 和 `AdminUiSmokeTest`。
+  * JS SDK smoke 已扩展到 auth refresh、文件、batch 和 realtime 场景，但仍必须以官方 SDK 无补丁运行结果作为最终验收。
+  * `-Dstorage=sqlite` 参数已接入 Maven Surefire，后续仍需补齐完整 DB matrix。
+- `SDP2-B01` ~ `SDP2-B05` 已开始落地 SQLite Runtime MVP：
+  * 已引入 `StorageEngine` SPI、`SqliteStorageEngine`、`sqlite-jdbc` 和 `HikariCP`。
+  * SQLite 当前覆盖 `_superusers`、`_collections`、基础记录 CRUD、日志表、基础索引和部分 SQL/filter 能力。
+  * SQLite 仍处于 MVP/partial 状态，文件、备份、OTP、scaffolds、dry-run view、OAuth metadata、完整规则/事务语义仍需继续补齐。
+- `SDP2-C01` ~ `SDP2-C06` 已开始抽离共享语义：
+  * 已新增 `FieldValidator`、`FilterToSqlCompiler` 和 `RecordProcessor`。
+  * 字段验证、关系校验、filter SQL 编译、expand/fields 仍需要更多官方 fixture 覆盖后才能标记完成。

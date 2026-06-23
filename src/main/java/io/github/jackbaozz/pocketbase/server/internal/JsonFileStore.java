@@ -42,7 +42,7 @@ import java.util.zip.ZipOutputStream;
 /**
  * Small persistent store used by the native-friendly embedded server.
  */
-public final class JsonFileStore {
+public final class JsonFileStore implements StorageEngine, RecordProcessor.StoreContext {
     public static final String SUPERUSERS = "_superusers";
 
     private static final TypeReference<List<CollectionSchema>> COLLECTION_LIST = new TypeReference<>() {
@@ -1492,7 +1492,9 @@ public final class JsonFileStore {
         deleteRecursively(collectionStorageDir(collection));
     }
 
-    public synchronized void importCollections(JsonNode body) {
+
+    @Override
+    public synchronized Map<String, Object> importCollections(JsonNode body, boolean dryRun) {
         if (body == null || !body.isObject()) {
             throw new ApiException(400, "Collections import payload must be a JSON object.");
         }
@@ -1516,66 +1518,75 @@ public final class JsonFileStore {
                     .forEach(collection -> nextCollections.put(collection.name, collection));
         }
 
-        try {
-            Set<String> seenIds = new LinkedHashSet<>();
-            Set<String> seenNames = new LinkedHashSet<>();
-            for (JsonNode item : collectionsNode) {
-                if (item == null || !item.isObject()) {
-                    throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Each collection must be a JSON object."));
-                }
-                CollectionSchema imported = mapper.convertValue(item, CollectionSchema.class);
-                CollectionSchema existing = existingCollectionForImport(imported);
-                if (existing != null) {
-                    if (imported.id == null || imported.id.isBlank()) {
-                        imported.id = existing.id;
-                    }
-                    if (imported.created == null || imported.created.isBlank()) {
-                        imported.created = existing.created;
-                    }
-                    if (existing.system) {
-                        imported.system = true;
-                    }
-                }
-                normalizeCollection(imported, existing != null);
-                imported.updated = now();
-                if (!seenIds.add(imported.id)) {
-                    throw new ApiException(400, "Failed to import collections.", fieldError(
-                            "collections",
-                            "Duplicate collection id: " + imported.id
-                    ));
-                }
-                if (!seenNames.add(imported.name)) {
-                    throw new ApiException(400, "Failed to import collections.", fieldError(
-                            "collections",
-                            "Duplicate collection name: " + imported.name
-                    ));
-                }
-                putImportedCollection(nextCollections, imported, existing);
+        List<CollectionSchema> newOrUpdated = new ArrayList<>();
+        Set<String> seenIds = new LinkedHashSet<>();
+        Set<String> seenNames = new LinkedHashSet<>();
+        for (JsonNode item : collectionsNode) {
+            if (item == null || !item.isObject()) {
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Each collection must be a JSON object."));
             }
+            CollectionSchema imported = mapper.convertValue(item, CollectionSchema.class);
+            CollectionSchema existing = existingCollectionForImport(imported);
+            if (existing != null) {
+                if (imported.id == null || imported.id.isBlank()) {
+                    imported.id = existing.id;
+                }
+                if (imported.created == null || imported.created.isBlank()) {
+                    imported.created = existing.created;
+                }
+                if (existing.system) {
+                    imported.system = true;
+                }
+            } else {
+                if (imported.id == null || imported.id.isBlank()) {
+                    imported.id = "pbc_" + IdGenerator.id();
+                }
+                imported.created = now();
+            }
+            normalizeCollection(imported, existing != null);
+            imported.updated = now();
+            if (!seenIds.add(imported.id)) {
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Duplicate collection id: " + imported.id));
+            }
+            if (!seenNames.add(imported.name)) {
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Duplicate collection name: " + imported.name));
+            }
+            putImportedCollection(nextCollections, imported, existing);
+            newOrUpdated.add(imported);
+        }
 
-            Set<String> nextIds = nextCollections.values().stream()
-                    .map(collection -> collection.id)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<String> deleted = new ArrayList<>();
+        if (deleteMissing) {
+            Set<String> nextIds = nextCollections.values().stream().map(c -> c.id).collect(Collectors.toSet());
+            for (CollectionSchema existing : collectionsByName.values()) {
+                if (!existing.system && !nextIds.contains(existing.id)) {
+                    deleted.add(existing.id);
+                }
+            }
+        }
+
+        if (dryRun) {
+            return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
+        }
+
+        try {
+            Set<String> nextIds = nextCollections.values().stream().map(c -> c.id).collect(Collectors.toSet());
             Map<String, List<Map<String, Object>>> nextRecords = new LinkedHashMap<>();
             for (CollectionSchema collection : nextCollections.values()) {
                 List<Map<String, Object>> records = oldRecords.get(collection.id);
                 nextRecords.put(collection.id, records == null ? new ArrayList<>() : records);
             }
-
             collectionsByName.clear();
             collectionsByName.putAll(nextCollections);
             recordsByCollectionId.clear();
             recordsByCollectionId.putAll(nextRecords);
             saveAll();
             cleanupRemovedCollectionData(nextIds);
-        } catch (ApiException e) {
-            throw e;
         } catch (RuntimeException e) {
-            throw new ApiException(400, "Failed to import collections.", fieldError(
-                    "collections",
-                    "Failed to import the collections configuration. Raw error:\n" + e.getMessage()
-            ));
+            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Raw error:\n" + e.getMessage()));
         }
+
+        return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
     }
 
     public synchronized Map<String, Object> listRecords(String collectionName, Map<String, String> query, RequestPrincipal principal) {
@@ -1589,7 +1600,7 @@ public final class JsonFileStore {
         List<Map<String, Object>> source = records(collection).stream()
                 .filter(record -> isSuperuser(principal) || matchesRule(collection.listRule, record, null, query, "GET", principal))
                 .filter(record -> matchesFilter(record, query.get("filter"), query, principal))
-                .map(record -> responseRecord(collection, record, includeHidden, query, principal))
+                .map(record -> RecordProcessor.process(this, collection, record, includeHidden, query, principal))
                 .collect(Collectors.toCollection(ArrayList::new));
         sort(source, query.get("sort"));
         int total = source.size();
@@ -1603,7 +1614,7 @@ public final class JsonFileStore {
         Map<String, Object> record = findRecord(collection, id);
         Map<String, String> safeQuery = query == null ? Map.of() : query;
         requireRecordRule(collection, collection.viewRule, record, null, safeQuery, "GET", principal, "view");
-        return responseRecord(collection, record, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, record, isSuperuser(principal), safeQuery, principal);
     }
 
     public synchronized Map<String, Object> createRecord(String collectionName, JsonNode body, RequestPrincipal principal) {
@@ -1644,7 +1655,7 @@ public final class JsonFileStore {
         records(collection).add(record);
         saveRecords(collection);
         publishRealtime(collection, "create", record);
-        return responseRecord(collection, record, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, record, isSuperuser(principal), safeQuery, principal);
     }
 
     public synchronized Map<String, Object> updateRecord(String collectionName, String id, JsonNode body, RequestPrincipal principal) {
@@ -1718,7 +1729,7 @@ public final class JsonFileStore {
         writeFileChanges(collection, existing, fileChanges);
         saveRecords(collection);
         publishRealtime(collection, "update", existing);
-        return responseRecord(collection, existing, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, existing, isSuperuser(principal), safeQuery, principal);
     }
 
     public synchronized void deleteRecord(String collectionName, String id, RequestPrincipal principal) {
@@ -2425,7 +2436,7 @@ public final class JsonFileStore {
         recordQuery.remove("fields");
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("token", tokenService.create(claims, ttl == null ? Duration.ofDays(7) : ttl));
-        response.put("record", responseRecord(collection, record, false, recordQuery, authPrincipal));
+        response.put("record", RecordProcessor.process(this, collection, record, false, recordQuery, authPrincipal));
         response.put("meta", meta == null ? Map.of() : meta);
         return selectFields(response, safeQuery.get("fields"));
     }
@@ -2860,8 +2871,15 @@ public final class JsonFileStore {
                 }
                 continue;
             }
-            Object normalized = normalizeFieldValue(field, value, update, errors);
-            if (normalized != Unchanged.INSTANCE) {
+            Object normalized = FieldValidator.normalizeFieldValue(mapper, field, value, update, errors, (col, id) -> {
+                try {
+                    getRecord(col, id, Map.of(), null);
+                    return true;
+                } catch (ApiException e) {
+                    return false;
+                }
+            });
+            if (normalized != FieldValidator.Unchanged.INSTANCE) {
                 values.put(field.name, normalized);
             }
         }
@@ -2883,266 +2901,6 @@ public final class JsonFileStore {
             }
         }
         return values;
-    }
-
-    private Object normalizeFieldValue(FieldSchema field, JsonNode value, boolean update, Map<String, Object> errors) {
-        String type = normalizeType(field.type);
-        if (value.isNull() || isBlankText(value)) {
-            if (field.required && !(update && "password".equals(type))) {
-                errors.put(field.name, validationError(field.name + " is required."));
-            }
-            return update && "password".equals(type) ? Unchanged.INSTANCE : null;
-        }
-
-        try {
-            return switch (type) {
-                case "email" -> normalizeEmail(field, value, errors);
-                case "password" -> normalizePassword(field, value, errors);
-                case "bool", "boolean" -> normalizeBoolean(field, value, errors);
-                case "number" -> normalizeNumber(field, value, errors);
-                case "select" -> normalizeSelect(field, value, errors);
-                case "url" -> normalizeUrl(field, value, errors);
-                case "text", "editor" -> normalizeText(field, value, errors);
-                case "date", "autodate" -> normalizeDate(field, value, errors);
-                case "json", "relation", "file" -> mapper.convertValue(value, Object.class);
-                default -> value.asText();
-            };
-        } catch (IllegalArgumentException e) {
-            errors.put(field.name, validationError(e.getMessage()));
-            return null;
-        }
-    }
-
-    private Object normalizeEmail(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        String email = value.asText().trim().toLowerCase(Locale.ROOT);
-        if (!email.contains("@") || email.startsWith("@") || email.endsWith("@")) {
-            errors.put(field.name, validationError("Invalid email address."));
-        }
-        
-        if (field.options != null) {
-            if (field.options.containsKey("exceptDomains") && field.options.get("exceptDomains").isArray()) {
-                for (JsonNode domainNode : field.options.get("exceptDomains")) {
-                    String domain = domainNode.asText();
-                    if (email.endsWith("@" + domain) || email.endsWith("." + domain)) {
-                        errors.put(field.name, validationError("Email domain is not allowed."));
-                        break;
-                    }
-                }
-            }
-            if (field.options.containsKey("onlyDomains") && field.options.get("onlyDomains").isArray() && !field.options.get("onlyDomains").isEmpty()) {
-                boolean matched = false;
-                for (JsonNode domainNode : field.options.get("onlyDomains")) {
-                    String domain = domainNode.asText();
-                    if (email.endsWith("@" + domain) || email.endsWith("." + domain)) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (!matched) {
-                    errors.put(field.name, validationError("Email domain is not allowed."));
-                }
-            }
-        }
-        return email;
-    }
-
-    private Object normalizePassword(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        String pwd = value.asText();
-        if (field.options != null) {
-            if (field.options.containsKey("min")) {
-                int min = field.options.get("min").asInt();
-                if (pwd.length() < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
-                }
-            }
-            if (field.options.containsKey("max")) {
-                int max = field.options.get("max").asInt();
-                if (pwd.length() > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
-                }
-            }
-            if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
-                String pattern = field.options.get("pattern").asText();
-                try {
-                    if (!Pattern.compile(pattern).matcher(pwd).matches()) {
-                        errors.put(field.name, validationError("Invalid password format."));
-                    }
-                } catch (Exception e) {
-                    // ignore invalid regex in schema
-                }
-            }
-        }
-        return PasswordHasher.hash(pwd);
-    }
-
-    private Object normalizeText(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        String text = value.asText();
-        if (field.options != null) {
-            if (field.options.containsKey("min")) {
-                int min = field.options.get("min").asInt();
-                if (text.length() < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
-                }
-            }
-            if (field.options.containsKey("max")) {
-                int max = field.options.get("max").asInt();
-                if (text.length() > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
-                }
-            }
-            if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
-                String pattern = field.options.get("pattern").asText();
-                try {
-                    if (!Pattern.compile(pattern).matcher(text).matches()) {
-                        errors.put(field.name, validationError("Invalid format."));
-                    }
-                } catch (Exception e) {
-                    // Ignore invalid pattern
-                }
-            }
-        }
-        return text;
-    }
-
-    private Object normalizeUrl(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        String urlText = value.asText().trim();
-        try {
-            java.net.URI uri = new java.net.URI(urlText);
-            if (uri.getScheme() == null || (!uri.getScheme().equalsIgnoreCase("http") && !uri.getScheme().equalsIgnoreCase("https"))) {
-                errors.put(field.name, validationError("Must be a valid HTTP/HTTPS URL."));
-                return urlText;
-            }
-            if (field.options != null) {
-                // Check both onlyHosts and onlyDomains for compatibility
-                JsonNode allowedHosts = field.options.containsKey("onlyHosts") ? field.options.get("onlyHosts") : field.options.get("onlyDomains");
-                if (allowedHosts != null && allowedHosts.isArray() && !allowedHosts.isEmpty()) {
-                    boolean matched = false;
-                    String host = uri.getHost();
-                    if (host != null) {
-                        for (JsonNode hostNode : allowedHosts) {
-                            if (host.equalsIgnoreCase(hostNode.asText())) {
-                                matched = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!matched) {
-                        errors.put(field.name, validationError("URL host is not allowed."));
-                    }
-                }
-                JsonNode exceptHosts = field.options.containsKey("exceptHosts") ? field.options.get("exceptHosts") : field.options.get("exceptDomains");
-                if (exceptHosts != null && exceptHosts.isArray()) {
-                    String host = uri.getHost();
-                    if (host != null) {
-                        for (JsonNode hostNode : exceptHosts) {
-                            if (host.equalsIgnoreCase(hostNode.asText())) {
-                                errors.put(field.name, validationError("URL host is not allowed."));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (java.net.URISyntaxException e) {
-            errors.put(field.name, validationError("Must be a valid URL."));
-        }
-        return urlText;
-    }
-
-    private Object normalizeDate(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        String dateText = value.asText().trim();
-        try {
-            String isoStr = dateText.replace(" ", "T");
-            if (!isoStr.endsWith("Z") && !isoStr.contains("+") && isoStr.indexOf("-", 10) == -1) {
-                isoStr += "Z";
-            }
-            Instant.parse(isoStr);
-            
-            if (field.options != null) {
-                if (field.options.containsKey("min") && !field.options.get("min").asText().isEmpty()) {
-                    String minDate = field.options.get("min").asText();
-                    if (dateText.compareTo(minDate) < 0) {
-                        errors.put(field.name, validationError("Cannot be before " + minDate + "."));
-                    }
-                }
-                if (field.options.containsKey("max") && !field.options.get("max").asText().isEmpty()) {
-                    String maxDate = field.options.get("max").asText();
-                    if (dateText.compareTo(maxDate) > 0) {
-                        errors.put(field.name, validationError("Cannot be after " + maxDate + "."));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            errors.put(field.name, validationError("Invalid date format."));
-        }
-        return dateText;
-    }
-
-    private Object normalizeBoolean(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        if (value.isBoolean()) {
-            return value.booleanValue();
-        }
-        if (value.isTextual() && ("true".equalsIgnoreCase(value.asText()) || "false".equalsIgnoreCase(value.asText()))) {
-            return Boolean.parseBoolean(value.asText());
-        }
-        errors.put(field.name, validationError("Expected boolean value."));
-        return null;
-    }
-
-    private Object normalizeNumber(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        Double numVal = null;
-        if (value.isNumber()) {
-            numVal = value.numberValue().doubleValue();
-        } else if (value.isTextual()) {
-            try {
-                numVal = Double.parseDouble(value.asText());
-            } catch (NumberFormatException ignored) {
-                errors.put(field.name, validationError("Expected numeric value."));
-                return null;
-            }
-        } else {
-            errors.put(field.name, validationError("Expected numeric value."));
-            return null;
-        }
-
-        if (field.options != null) {
-            if (field.options.containsKey("min")) {
-                double min = field.options.get("min").asDouble();
-                if (numVal < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + "."));
-                }
-            }
-            if (field.options.containsKey("max")) {
-                double max = field.options.get("max").asDouble();
-                if (numVal > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + "."));
-                }
-            }
-        }
-        return value.isNumber() ? value.numberValue() : numVal;
-    }
-
-    private Object normalizeSelect(FieldSchema field, JsonNode value, Map<String, Object> errors) {
-        Object converted = mapper.convertValue(value, Object.class);
-        JsonNode values = field.options == null ? null : field.options.get("values");
-        if (values != null && values.isArray()) {
-            Set<String> allowed = new LinkedHashSet<>();
-            values.forEach(item -> allowed.add(item.asText()));
-            if (value.isArray()) {
-                for (JsonNode item : value) {
-                    if (!allowed.contains(item.asText())) {
-                        errors.put(field.name, validationError("Value is not in the allowed list."));
-                    }
-                }
-                int maxSelect = field.options.containsKey("maxSelect") ? field.options.get("maxSelect").asInt(1) : 1;
-                if (value.size() > maxSelect && maxSelect > 0) {
-                    errors.put(field.name, validationError("Too many values selected."));
-                }
-            } else if (!allowed.contains(value.asText())) {
-                errors.put(field.name, validationError("Value is not in the allowed list."));
-            }
-        }
-        return converted;
     }
 
     private void enforceUnique(CollectionSchema collection, Map<String, Object> values, String currentId, Map<String, Object> errors) {
@@ -3500,7 +3258,7 @@ public final class JsonFileStore {
             if (!canReceiveRealtime(collection, record, subscription, principal)) {
                 return null;
             }
-            return responseRecord(collection, record, isSuperuser(principal), subscription.query(), principal);
+            return RecordProcessor.process(this, collection, record, isSuperuser(principal), subscription.query(), principal);
         });
     }
 
@@ -4644,6 +4402,21 @@ public final class JsonFileStore {
         superusers.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
         normalizeCollection(superusers, false);
         collectionsByName.put(superusers.name, superusers);
+    }
+
+    @Override
+    public CollectionSchema getCollection(String nameOrId) {
+        return findCollectionOrNull(nameOrId);
+    }
+
+    @Override
+    public Map<String, Object> getRecord(CollectionSchema collection, String id) {
+        return findRecordOrNull(collection, id);
+    }
+
+    @Override
+    public boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal) {
+        return canViewExpandedRecord(collection, record, query, principal);
     }
 
     private CollectionSchema findCollection(String idOrName) {

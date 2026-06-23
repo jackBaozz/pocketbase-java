@@ -1,0 +1,63 @@
+[
+  { "method": "GET", "path": "/api/settings", "auth": "superuser" },
+  { "method": "PATCH", "path": "/api/settings", "auth": "superuser" },
+  { "method": "POST", "path": "/api/settings/test/s3", "auth": "superuser" },
+  { "method": "POST", "path": "/api/settings/test/email", "auth": "superuser" },
+  { "method": "POST", "path": "/api/settings/apple/generate-client-secret", "auth": "superuser" },
+
+  { "method": "GET", "path": "/api/collections", "auth": "superuser" },
+  { "method": "POST", "path": "/api/collections", "auth": "superuser" },
+  { "method": "GET", "path": "/api/collections/{collection}", "auth": "superuser" },
+  { "method": "PATCH", "path": "/api/collections/{collection}", "auth": "superuser" },
+  { "method": "DELETE", "path": "/api/collections/{collection}", "auth": "superuser" },
+  { "method": "DELETE", "path": "/api/collections/{collection}/truncate", "auth": "superuser" },
+  { "method": "PUT", "path": "/api/collections/import", "auth": "superuser" },
+  { "method": "GET", "path": "/api/collections/meta/scaffolds", "auth": "superuser" },
+  { "method": "GET", "path": "/api/collections/meta/oauth2-providers", "auth": "superuser" },
+  { "method": "POST", "path": "/api/collections/meta/dry-run-view", "auth": "superuser" },
+
+  { "method": "GET", "path": "/api/collections/{collection}/records", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/records", "auth": "guest" },
+  { "method": "GET", "path": "/api/collections/{collection}/records/{id}", "auth": "guest" },
+  { "method": "PATCH", "path": "/api/collections/{collection}/records/{id}", "auth": "guest" },
+  { "method": "DELETE", "path": "/api/collections/{collection}/records/{id}", "auth": "guest" },
+
+  { "method": "GET", "path": "/api/oauth2-redirect", "auth": "guest" },
+  { "method": "POST", "path": "/api/oauth2-redirect", "auth": "guest" },
+  { "method": "GET", "path": "/api/collections/{collection}/auth-methods", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/auth-refresh", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/auth-with-password", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/auth-with-oauth2", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/request-otp", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/auth-with-otp", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/request-password-reset", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/confirm-password-reset", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/request-verification", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/confirm-verification", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/request-email-change", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/confirm-email-change", "auth": "guest" },
+  { "method": "POST", "path": "/api/collections/{collection}/impersonate/{id}", "auth": "superuser" },
+
+  { "method": "GET", "path": "/api/logs", "auth": "superuser" },
+  { "method": "GET", "path": "/api/logs/stats", "auth": "superuser" },
+  { "method": "GET", "path": "/api/logs/{id}", "auth": "superuser" },
+
+  { "method": "GET", "path": "/api/backups", "auth": "superuser" },
+  { "method": "POST", "path": "/api/backups", "auth": "superuser" },
+  { "method": "POST", "path": "/api/backups/upload", "auth": "superuser" },
+  { "method": "GET", "path": "/api/backups/{key}", "auth": "superuser" },
+  { "method": "DELETE", "path": "/api/backups/{key}", "auth": "superuser" },
+  { "method": "POST", "path": "/api/backups/{key}/restore", "auth": "superuser" },
+
+  { "method": "GET", "path": "/api/crons", "auth": "superuser" },
+  { "method": "POST", "path": "/api/crons/{id}", "auth": "superuser" },
+
+  { "method": "POST", "path": "/api/files/token", "auth": "auth" },
+  { "method": "GET", "path": "/api/files/{collection}/{recordId}/{filename}", "auth": "guest" },
+
+  { "method": "POST", "path": "/api/batch", "auth": "guest" },
+  { "method": "GET", "path": "/api/realtime", "auth": "guest" },
+  { "method": "POST", "path": "/api/realtime", "auth": "guest" },
+  { "method": "GET", "path": "/api/health", "auth": "guest" },
+  { "method": "POST", "path": "/api/sql", "auth": "superuser" }
+]
