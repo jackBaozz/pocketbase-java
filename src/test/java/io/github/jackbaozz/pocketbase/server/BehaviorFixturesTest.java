@@ -8,12 +8,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.Map;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -206,7 +206,37 @@ public class BehaviorFixturesTest {
         assertEquals("Updated Title", updatedRecord.get("title").asText());
         assertEquals(100, updatedRecord.get("views").asInt()); // preserved
 
-        // 6. Delete the record
+        // 6. Filter records using a quoted string literal
+        String quotedTitleJson = "{\"title\":\"Bob's Post\",\"views\":7}";
+        HttpRequest createQuotedRecordReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(quotedTitleJson))
+                .build();
+        HttpResponse<String> createQuotedRes = httpClient.send(createQuotedRecordReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, createQuotedRes.statusCode());
+        String quotedFilter = URLEncoder.encode("title = 'Bob\\'s Post'", StandardCharsets.UTF_8);
+        HttpRequest filteredListReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records?filter=" + quotedFilter))
+                .GET()
+                .build();
+        HttpResponse<String> filteredListRes = httpClient.send(filteredListReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, filteredListRes.statusCode());
+        JsonNode filteredList = mapper.readTree(filteredListRes.body());
+        assertEquals(1, filteredList.get("totalItems").asInt());
+        assertEquals("Bob's Post", filteredList.get("items").get(0).get("title").asText());
+        String containsFilter = URLEncoder.encode("title ~ 'Bob'", StandardCharsets.UTF_8);
+        HttpRequest containsListReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records?filter=" + containsFilter))
+                .GET()
+                .build();
+        HttpResponse<String> containsListRes = httpClient.send(containsListReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, containsListRes.statusCode());
+        JsonNode containsList = mapper.readTree(containsListRes.body());
+        assertEquals(1, containsList.get("totalItems").asInt());
+        assertEquals("Bob's Post", containsList.get("items").get(0).get("title").asText());
+
+        // 7. Delete the record
         HttpRequest deleteReq = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/collections/posts/records/" + recordId))
                 .method("DELETE", HttpRequest.BodyPublishers.noBody())

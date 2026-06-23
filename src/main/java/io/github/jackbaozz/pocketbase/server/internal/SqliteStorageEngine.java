@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Table;
@@ -39,14 +40,11 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
     private static final String SUPERUSERS = "_superusers";
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,62}$");
     private static final Pattern SQL_IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
-    private final Path dataDir;
     private final JooqDatabase database;
     private final ObjectMapper mapper;
     private final TokenService tokenService;
-    private RealtimeHub realtimeHub;
 
     private SqliteStorageEngine(Path dataDir, ObjectMapper mapper, TokenService tokenService, JooqDatabase.Engine engine) {
-        this.dataDir = dataDir;
         this.mapper = mapper;
         this.tokenService = tokenService;
 
@@ -135,10 +133,34 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
     }
 
     private String qi(String identifier) {
+        validateSqlIdentifier(identifier);
+        return database.quoteIdentifier(identifier);
+    }
+
+    private Table<?> qt(String identifier) {
+        validateSqlIdentifier(identifier);
+        return DSL.table(DSL.name(identifier));
+    }
+
+    private Field<Object> qf(String identifier) {
+        validateSqlIdentifier(identifier);
+        return DSL.field(DSL.name(identifier));
+    }
+
+    private Field<String> qfs(String identifier) {
+        validateSqlIdentifier(identifier);
+        return DSL.field(DSL.name(identifier), String.class);
+    }
+
+    private Field<Integer> qfi(String identifier) {
+        validateSqlIdentifier(identifier);
+        return DSL.field(DSL.name(identifier), Integer.class);
+    }
+
+    private void validateSqlIdentifier(String identifier) {
         if (identifier == null || !SQL_IDENTIFIER_PATTERN.matcher(identifier).matches()) {
             throw new ApiException(400, "Invalid identifier.");
         }
-        return "\"" + identifier + "\"";
     }
 
     private void bootstrapSystemTables() {
@@ -282,11 +304,21 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
         }
     }
 
-    private void handleSqlConstraintException(SQLException e) {
+    private void handleSqlConstraintException(Throwable e) {
         if (e == null) {
             return;
         }
-        String msg = e.getMessage();
+        String msg = null;
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof SQLException || current instanceof DataAccessException) {
+                msg = current.getMessage();
+                if (msg != null && msg.contains("UNIQUE constraint failed")) {
+                    break;
+                }
+            }
+            current = current.getCause();
+        }
         if (msg != null && msg.contains("UNIQUE constraint failed")) {
             String field = "unknown";
             String[] parts = msg.split(":");
@@ -302,9 +334,71 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
         }
     }
 
+    private Object toStoredValue(Object value) {
+        if (value instanceof Boolean b) {
+            return b ? 1 : 0;
+        }
+        if (value instanceof Number) {
+            return value;
+        }
+        return value == null ? null : value.toString();
+    }
+
+    private record BoundSql(String sql, List<Object> bindings) {
+    }
+
+    private BoundSql bindFilterContext(FilterToSqlCompiler.CompiledFilter compiled,
+                                       Object requestAuth,
+                                       Object requestQuery,
+                                       Object requestMethod,
+                                       Object requestBody) {
+        Map<String, Object> placeholders = new LinkedHashMap<>();
+        placeholders.put(":request_auth", requestAuth);
+        placeholders.put(":request_query", requestQuery);
+        placeholders.put(":request_method", requestMethod);
+        placeholders.put(":request_body", requestBody);
+        String sql = compiled.sql();
+        StringBuilder rendered = new StringBuilder();
+        List<Object> bindings = new ArrayList<>();
+        int literalIndex = 0;
+        int i = 0;
+        while (i < sql.length()) {
+            String matchedPlaceholder = null;
+            for (String placeholder : placeholders.keySet()) {
+                if (sql.startsWith(placeholder, i)) {
+                    matchedPlaceholder = placeholder;
+                    break;
+                }
+            }
+            if (matchedPlaceholder != null) {
+                rendered.append('?');
+                bindings.add(placeholders.get(matchedPlaceholder));
+                i += matchedPlaceholder.length();
+                continue;
+            }
+            char c = sql.charAt(i);
+            rendered.append(c);
+            if (c == '?') {
+                if (literalIndex >= compiled.bindings().size()) {
+                    throw new ApiException(400, "Invalid filter binding state.");
+                }
+                bindings.add(compiled.bindings().get(literalIndex++));
+            }
+            i++;
+        }
+        if (literalIndex != compiled.bindings().size()) {
+            throw new ApiException(400, "Invalid filter binding state.");
+        }
+        return new BoundSql(rendered.toString(), bindings);
+    }
+
     private void rebuildIndexes(Connection conn, CollectionSchema schema, String physicalName) throws SQLException {
         if ("view".equals(schema.type)) return;
         validateIdentifier(physicalName, "name");
+        if (database.engine() != JooqDatabase.Engine.SQLITE) {
+            rebuildIndexesWithJooq(conn, schema, physicalName);
+            return;
+        }
         try (Statement stmt = conn.createStatement()) {
             try (ResultSet rs = stmt.executeQuery("PRAGMA index_list(" + quoteSqlString(physicalName) + ")")) {
                 List<String> indexesToDrop = new ArrayList<>();
@@ -332,6 +426,43 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
                         stmt.execute(idxSql);
                     } catch (SQLException ignored) {
                     }
+                }
+            }
+        }
+    }
+
+    private void rebuildIndexesWithJooq(Connection conn, CollectionSchema schema, String physicalName) throws SQLException {
+        List<String> indexesToDrop = new ArrayList<>();
+        try (ResultSet rs = conn.getMetaData().getIndexInfo(null, null, physicalName, false, false)) {
+            while (rs.next()) {
+                String idxName = rs.getString("INDEX_NAME");
+                if (idxName != null && idxName.startsWith("idx_u_")) {
+                    indexesToDrop.add(idxName);
+                }
+            }
+        }
+        for (String idxName : indexesToDrop) {
+            database.dsl(conn)
+                    .dropIndexIfExists(DSL.name(idxName))
+                    .on(qt(physicalName))
+                    .execute();
+        }
+
+        for (FieldSchema field : schema.fields) {
+            if (field.unique) {
+                String indexName = "idx_u_" + physicalName + "_" + field.name;
+                database.dsl(conn)
+                        .createUniqueIndexIfNotExists(DSL.name(indexName))
+                        .on(qt(physicalName), qf(field.name))
+                        .execute();
+            }
+        }
+
+        if (schema.indexes != null) {
+            for (String idxSql : schema.indexes) {
+                try {
+                    database.dsl(conn).execute(idxSql);
+                } catch (DataAccessException ignored) {
                 }
             }
         }
@@ -848,23 +979,20 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
                     stmt.execute("CREATE VIEW " + qi(colSchema.name) + " AS " + viewQuery);
                 }
             } else {
-                StringBuilder ddl = new StringBuilder("CREATE TABLE ");
-                ddl.append(qi(colSchema.name)).append(" (");
-                ddl.append(qi("id")).append(" TEXT PRIMARY KEY,");
-                ddl.append(qi("created")).append(" TEXT,");
-                ddl.append(qi("updated")).append(" TEXT");
+                var createTable = database.dsl(conn)
+                        .createTable(DSL.name(colSchema.name))
+                        .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
+                        .column(DSL.name("created"), SQLDataType.VARCHAR(64))
+                        .column(DSL.name("updated"), SQLDataType.VARCHAR(64));
                 for (FieldSchema field : colSchema.fields) {
-                    ddl.append(", ").append(qi(field.name)).append(" TEXT");
+                    createTable = createTable.column(DSL.name(field.name), SQLDataType.CLOB);
                 }
-                ddl.append(")");
-
-                try (Statement stmt = conn.createStatement()) {
-                    stmt.execute(ddl.toString());
-                }
+                createTable.constraints(DSL.constraint(DSL.name("pk_" + colSchema.name)).primaryKey(DSL.name("id")))
+                        .execute();
                 rebuildIndexes(conn, colSchema, colSchema.name);
             }
-        } catch (SQLException | IOException e) {
-            handleSqlConstraintException(e instanceof SQLException ? (SQLException) e : null);
+        } catch (SQLException | IOException | DataAccessException e) {
+            handleSqlConstraintException(e);
             throw new ApiException(400, "Failed to create collection: " + e.getMessage());
         } finally {
             if (conn != null) {
@@ -888,7 +1016,6 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
             throw new ApiException(400, "Failed to import collections.", Map.of("collections", Map.of("code", "validation_failed", "message", "collections is required.")));
         }
 
-        boolean deleteMissing = body.path("deleteMissing").asBoolean(false);
         List<CollectionSchema> newOrUpdated = new ArrayList<>();
         for (JsonNode item : collectionsNode) {
             try {
@@ -1001,41 +1128,42 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
                 List<String> oldNames = oldFields.stream().map(f -> f.name).toList();
                 List<String> newNames = newSchema.fields.stream().map(f -> f.name).toList();
 
-                try (Statement stmt = conn.createStatement()) {
-                    for (FieldSchema nf : newSchema.fields) {
-                        if (!oldNames.contains(nf.name)) {
-                            stmt.execute("ALTER TABLE " + qi(physicalName) + " ADD COLUMN " + qi(nf.name) + " TEXT");
-                        }
+                DSLContext dsl = database.dsl(conn);
+                for (FieldSchema nf : newSchema.fields) {
+                    if (!oldNames.contains(nf.name)) {
+                        dsl.alterTable(DSL.name(physicalName))
+                                .add(DSL.name(nf.name), SQLDataType.CLOB)
+                                .execute();
                     }
-                    for (FieldSchema of : oldFields) {
-                        if (!newNames.contains(of.name)) {
-                            stmt.execute("ALTER TABLE " + qi(physicalName) + " DROP COLUMN " + qi(of.name));
-                        }
+                }
+                for (FieldSchema of : oldFields) {
+                    if (!newNames.contains(of.name)) {
+                        dsl.alterTable(DSL.name(physicalName))
+                                .drop(DSL.name(of.name))
+                                .execute();
                     }
                 }
 
                 rebuildIndexes(conn, newSchema, physicalName);
             }
 
-            try (PreparedStatement update = conn.prepareStatement(
-                    "UPDATE _collections SET name=?, type=?, schema=?, system=?, createRule=?, listRule=?, viewRule=?, updateRule=?, deleteRule=?, options=? WHERE id=? OR name=?")) {
-                update.setString(1, newSchema.name);
-                update.setString(2, newSchema.type);
-                update.setString(3, mapper.writeValueAsString(newSchema.fields));
-                update.setInt(4, newSchema.system ? 1 : 0);
-                update.setString(5, newSchema.createRule);
-                update.setString(6, newSchema.listRule);
-                update.setString(7, newSchema.viewRule);
-                update.setString(8, newSchema.updateRule);
-                update.setString(9, newSchema.deleteRule);
-                update.setString(10, mapper.writeValueAsString(rawOptions));
-                update.setString(11, collection);
-                update.setString(12, collection);
-                update.executeUpdate();
-            }
+            database.dsl(conn)
+                    .update(qt("_collections"))
+                    .set(qfs("name"), newSchema.name)
+                    .set(qfs("type"), newSchema.type)
+                    .set(qfs("schema"), mapper.writeValueAsString(newSchema.fields))
+                    .set(qfi("system"), newSchema.system ? 1 : 0)
+                    .set(qfs("createRule"), newSchema.createRule)
+                    .set(qfs("listRule"), newSchema.listRule)
+                    .set(qfs("viewRule"), newSchema.viewRule)
+                    .set(qfs("updateRule"), newSchema.updateRule)
+                    .set(qfs("deleteRule"), newSchema.deleteRule)
+                    .set(qfs("options"), mapper.writeValueAsString(rawOptions))
+                    .where(qfs("id").eq(collection).or(qfs("name").eq(collection)))
+                    .execute();
 
-        } catch (SQLException | IOException e) {
-            handleSqlConstraintException(e instanceof SQLException ? (SQLException) e : null);
+        } catch (SQLException | IOException | DataAccessException e) {
+            handleSqlConstraintException(e);
             throw new ApiException(400, "Failed to update collection: " + e.getMessage());
         } finally {
             if (conn != null) {
@@ -1071,21 +1199,18 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
                 throw new ApiException(404, "Collection not found.");
             }
 
-            try (PreparedStatement delete = conn.prepareStatement("DELETE FROM _collections WHERE id = ? OR name = ?")) {
-                delete.setString(1, collection);
-                delete.setString(2, collection);
-                delete.executeUpdate();
+            database.dsl(conn)
+                    .deleteFrom(qt("_collections"))
+                    .where(qfs("id").eq(collection).or(qfs("name").eq(collection)))
+                    .execute();
+
+            if ("view".equals(type)) {
+                database.dsl(conn).dropViewIfExists(DSL.name(physicalName)).execute();
+            } else {
+                database.dsl(conn).dropTableIfExists(DSL.name(physicalName)).execute();
             }
 
-            try (Statement stmt = conn.createStatement()) {
-                if ("view".equals(type)) {
-                    stmt.execute("DROP VIEW IF EXISTS " + qi(physicalName));
-                } else {
-                    stmt.execute("DROP TABLE IF EXISTS " + qi(physicalName));
-                }
-            }
-
-        } catch (SQLException e) {
+        } catch (SQLException | DataAccessException e) {
             throw new ApiException(400, "Failed to delete collection: " + e.getMessage());
         } finally {
             if (conn != null) {
@@ -1101,10 +1226,11 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
     public void truncateCollection(String collection) {
         requireCollectionExists(collection);
         CollectionSchema schema = getCollectionSchema(collection);
-        try (Connection conn = connection();
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("DELETE FROM " + qi(schema.name));
-        } catch (SQLException e) {
+        try {
+            database.dsl()
+                    .deleteFrom(qt(schema.name))
+                    .execute();
+        } catch (DataAccessException e) {
             throw new ApiException(400, "Failed to truncate collection: " + e.getMessage());
         }
     }
@@ -1132,56 +1258,47 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
             if (safeQuery.containsKey("perPage")) perPage = Integer.parseInt(safeQuery.get("perPage"));
         } catch (NumberFormatException ignored) {}
 
-        String whereClause = "";
+        Condition whereCondition = DSL.trueCondition();
         if (safeQuery.containsKey("filter")) {
-            String filterSql = FilterToSqlCompiler.compile(safeQuery.get("filter"));
+            FilterToSqlCompiler.CompiledFilter compiledFilter = FilterToSqlCompiler.compileBound(
+                    safeQuery.get("filter"),
+                    this::qi,
+                    database::renderContainsCondition
+            );
 
-            String authJson = "null";
+            Object authJson = null;
             if (principal != null) {
                 try {
-                    authJson = "'" + mapper.writeValueAsString(Map.of(
+                    authJson = mapper.writeValueAsString(Map.of(
                             "id", principal.id(),
                             "collectionId", principal.collectionName(),
                             "collectionName", principal.collectionName(),
                             "email", "dummy@example.com"
-                    )).replace("'", "''") + "'";
+                    ));
                 } catch (Exception ignored) {}
             }
-            String queryJson = "'{}'";
-            try { queryJson = "'" + mapper.writeValueAsString(safeQuery).replace("'", "''") + "'"; } catch (Exception ignored) {}
+            String queryJson = "{}";
+            try { queryJson = mapper.writeValueAsString(safeQuery); } catch (Exception ignored) {}
 
-            filterSql = filterSql.replace(":request_auth", authJson);
-            filterSql = filterSql.replace(":request_query", queryJson);
-            filterSql = filterSql.replace(":request_method", "'GET'");
-            filterSql = filterSql.replace(":request_body", "'{}'");
-
-            whereClause = " WHERE " + filterSql;
+            BoundSql boundFilter = bindFilterContext(compiledFilter, authJson, queryJson, "GET", "{}");
+            whereCondition = DSL.condition(boundFilter.sql(), boundFilter.bindings().toArray());
         }
 
-        try (Connection conn = connection()) {
-            int total = 0;
-            try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery("SELECT count(*) FROM " + qi(colSchema.name) + whereClause)) {
-                if (rs.next()) total = rs.getInt(1);
-            }
-
+        try {
+            DSLContext dsl = database.dsl();
             int offset = (page - 1) * perPage;
+            int total = dsl.selectCount()
+                    .from(qt(colSchema.name))
+                    .where(whereCondition)
+                    .fetchOne(0, int.class);
             List<Map<String, Object>> items = new ArrayList<>();
-            String sql = "SELECT * FROM " + qi(colSchema.name) + whereClause + " LIMIT ? OFFSET ?";
-            try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-                stmt.setInt(1, perPage);
-                stmt.setInt(2, offset);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    ResultSetMetaData md = rs.getMetaData();
-                    int columns = md.getColumnCount();
-                    while (rs.next()) {
-                        Map<String, Object> row = new LinkedHashMap<>();
-                        for (int i = 1; i <= columns; i++) {
-                            row.put(md.getColumnLabel(i), rs.getObject(i));
-                        }
-                        items.add(RecordProcessor.process(this, colSchema, row, false, safeQuery, principal));
-                    }
-                }
+            for (Map<String, Object> row : dsl.select()
+                    .from(qt(colSchema.name))
+                    .where(whereCondition)
+                    .limit(perPage)
+                    .offset(offset)
+                    .fetchMaps()) {
+                items.add(RecordProcessor.process(this, colSchema, row, false, safeQuery, principal));
             }
 
             int totalPages = (int) Math.ceil((double) total / perPage);
@@ -1193,7 +1310,7 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
                     "totalPages", totalPages
             );
 
-        } catch (SQLException e) {
+        } catch (DataAccessException e) {
             throw new ApiException(400, "Failed to list records: " + e.getMessage());
         }
     }
@@ -1314,47 +1431,20 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
         for (Map.Entry<String, Object> entry : recordValues.entrySet()) {
             if (!"id".equals(entry.getKey())) {
                 fields.add(entry.getKey());
-                if (entry.getValue() instanceof Boolean b) {
-                    values.add(b ? 1 : 0);
-                } else if (entry.getValue() instanceof Number) {
-                    values.add(entry.getValue());
-                } else {
-                    values.add(entry.getValue().toString());
-                }
+                values.add(toStoredValue(entry.getValue()));
             }
         }
 
-        StringBuilder sql = new StringBuilder("INSERT INTO ").append(qi(colSchema.name)).append("(");
-        for (int i = 0; i < fields.size(); i++) {
-            if (i > 0) sql.append(",");
-            sql.append(qi(fields.get(i)));
-        }
-        sql.append(") VALUES(");
-        for (int i = 0; i < fields.size(); i++) {
-            if (i > 0) sql.append(",");
-            sql.append("?");
-        }
-        sql.append(")");
-
-        Connection conn = null;
         try {
-            conn = connection();
-            try (PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
-                for (int i = 0; i < values.size(); i++) {
-                    stmt.setObject(i + 1, values.get(i));
-                }
-                stmt.executeUpdate();
-            }
-        } catch (SQLException e) {
+            List<Field<Object>> insertFields = fields.stream().map(this::qf).toList();
+            database.dsl()
+                    .insertInto(qt(colSchema.name))
+                    .columns(insertFields)
+                    .values(values)
+                    .execute();
+        } catch (DataAccessException e) {
             handleSqlConstraintException(e);
             throw new ApiException(400, "Failed to create record: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    closeIfStandalone(conn);
-                } catch (SQLException ignored) {
-                }
-            }
         }
 
         return getRecord(collection, id, query, principal);
@@ -1397,46 +1487,26 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
         for (Map.Entry<String, Object> entry : recordValues.entrySet()) {
             if (!"id".equals(entry.getKey())) {
                 fields.add(entry.getKey());
-                if (entry.getValue() instanceof Boolean b) {
-                    values.add(b ? 1 : 0);
-                } else if (entry.getValue() instanceof Number) {
-                    values.add(entry.getValue());
-                } else {
-                    values.add(entry.getValue().toString());
-                }
+                values.add(toStoredValue(entry.getValue()));
             }
         }
 
         fields.add("updated");
         values.add(now);
 
-        StringBuilder sql = new StringBuilder("UPDATE ").append(qi(colSchema.name)).append(" SET ");
-        for (int i = 0; i < fields.size(); i++) {
-            if (i > 0) sql.append(",");
-            sql.append(qi(fields.get(i))).append("=?");
-        }
-        sql.append(" WHERE id=?");
-
-        Connection conn = null;
         try {
-            conn = connection();
-            try (PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
-                for (int i = 0; i < values.size(); i++) {
-                    stmt.setObject(i + 1, values.get(i));
-                }
-                stmt.setString(values.size() + 1, id);
-                stmt.executeUpdate();
+            Map<Field<Object>, Object> updates = new LinkedHashMap<>();
+            for (int i = 0; i < fields.size(); i++) {
+                updates.put(qf(fields.get(i)), values.get(i));
             }
-        } catch (SQLException e) {
+            database.dsl()
+                    .update(qt(colSchema.name))
+                    .set(updates)
+                    .where(qfs("id").eq(id))
+                    .execute();
+        } catch (DataAccessException e) {
             handleSqlConstraintException(e);
             throw new ApiException(400, "Failed to update record: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    closeIfStandalone(conn);
-                } catch (SQLException ignored) {
-                }
-            }
         }
 
         return getRecord(collection, id, query, principal);
@@ -1451,22 +1521,13 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
     public void deleteRecord(String collection, String id, RequestPrincipal principal) {
         requireCollectionExists(collection);
         CollectionSchema schema = getCollectionSchema(collection);
-        Connection conn = null;
         try {
-            conn = connection();
-            try (PreparedStatement stmt = conn.prepareStatement("DELETE FROM " + qi(schema.name) + " WHERE id = ?")) {
-                stmt.setString(1, id);
-                stmt.executeUpdate();
-            }
-        } catch (SQLException e) {
+            database.dsl()
+                    .deleteFrom(qt(schema.name))
+                    .where(qfs("id").eq(id))
+                    .execute();
+        } catch (DataAccessException e) {
             throw new ApiException(400, "Failed to delete record: " + e.getMessage());
-        } finally {
-            if (conn != null) {
-                try {
-                    closeIfStandalone(conn);
-                } catch (SQLException ignored) {
-                }
-            }
         }
     }
 
@@ -1511,24 +1572,23 @@ public final class SqliteStorageEngine implements StorageEngine, RecordProcessor
             data.put("authId", principal.id());
         }
 
-        try (Connection conn = connection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "INSERT INTO _logs(id, created, updated, level, message, data) VALUES(?,?,?,?,?,?)")) {
-            stmt.setString(1, id);
-            stmt.setString(2, now);
-            stmt.setString(3, now);
-            stmt.setInt(4, level);
-            stmt.setString(5, message);
-            stmt.setString(6, mapper.writeValueAsString(data));
-            stmt.executeUpdate();
-        } catch (SQLException | IOException ignored) {
+        try {
+            database.dsl()
+                    .insertInto(qt("_logs"))
+                    .set(qfs("id"), id)
+                    .set(qfs("created"), now)
+                    .set(qfs("updated"), now)
+                    .set(qfi("level"), level)
+                    .set(qfs("message"), message)
+                    .set(qfs("data"), mapper.writeValueAsString(data))
+                    .execute();
+        } catch (DataAccessException | IOException ignored) {
             // Activity logging must never fail the request
         }
     }
 
     @Override
     public void realtimeHub(RealtimeHub hub) {
-        this.realtimeHub = hub;
     }
 
     @Override

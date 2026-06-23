@@ -5,9 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -96,7 +94,7 @@ public final class AuthProcessor {
             throw new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_failed", "message", "provider is required.")));
         }
 
-        CollectionSchema.OAuth2ProviderConfig provider = colSchema.oauth2.providers.stream()
+        colSchema.oauth2.providers.stream()
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
                 .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_failed", "message", "Provider is missing or is not enabled."))));

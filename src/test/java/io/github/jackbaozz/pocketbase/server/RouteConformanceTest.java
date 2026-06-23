@@ -1,6 +1,7 @@
 package io.github.jackbaozz.pocketbase.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,7 +15,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Map;
 
@@ -51,7 +51,7 @@ public class RouteConformanceTest {
             if (is == null) {
                 throw new IllegalStateException("Missing official-route-manifest.json");
             }
-            List<Map<String, String>> list = mapper.readValue(is, List.class);
+            List<Map<String, String>> list = mapper.readValue(is, new TypeReference<List<Map<String, String>>>() {});
             List<HttpApi.Route> routes = new ArrayList<>();
             for (Map<String, String> m : list) {
                 routes.add(new HttpApi.Route(m.get("method"), m.get("path")));

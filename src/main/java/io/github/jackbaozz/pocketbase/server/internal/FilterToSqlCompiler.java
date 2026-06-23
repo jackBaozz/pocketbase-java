@@ -2,18 +2,67 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 public final class FilterToSqlCompiler {
 
     private FilterToSqlCompiler() {}
 
+    public record CompiledFilter(String sql, List<Object> bindings) {
+    }
+
+    public interface ContainsRenderer {
+        CompiledFilter render(CompiledFilter left, CompiledFilter right, boolean negated);
+    }
+
     public static String compile(String filter) {
+        return compileInternal(filter, FilterToSqlCompiler::standardQuoteIdentifier, false).sql();
+    }
+
+    public static CompiledFilter compileBound(String filter, Function<String, String> quoteIdentifier) {
+        return compileBound(filter, quoteIdentifier, null);
+    }
+
+    public static CompiledFilter compileBound(String filter, Function<String, String> quoteIdentifier, ContainsRenderer containsRenderer) {
+        return compileInternal(filter, quoteIdentifier, true, containsRenderer);
+    }
+
+    private static CompiledFilter compileInternal(String filter, Function<String, String> quoteIdentifier, boolean bindLiterals) {
+        return compileInternal(filter, quoteIdentifier, bindLiterals, null);
+    }
+
+    private static CompiledFilter compileInternal(String filter, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer) {
         if (filter == null || filter.isBlank()) {
-            return "1=1";
+            return new CompiledFilter("1=1", List.of());
         }
         List<Token> tokens = tokenize(filter);
-        Parser parser = new Parser(tokens);
-        return parser.parseExpression();
+        Parser parser = new Parser(tokens, quoteIdentifier, bindLiterals, containsRenderer);
+        SqlPart part = parser.parseExpression();
+        return new CompiledFilter(part.sql(), List.copyOf(part.bindings()));
+    }
+
+    private static String standardQuoteIdentifier(String id) {
+        return "\"" + id.replace("\"", "\"\"") + "\"";
+    }
+
+    private record SqlPart(String sql, List<Object> bindings) {
+        static SqlPart of(String sql) {
+            return new SqlPart(sql, List.of());
+        }
+
+        static SqlPart bind(Object value) {
+            return new SqlPart("?", List.of(value));
+        }
+
+        SqlPart wrap() {
+            return new SqlPart("(" + sql + ")", bindings);
+        }
+
+        static SqlPart join(SqlPart left, String operator, SqlPart right) {
+            List<Object> bindings = new ArrayList<>(left.bindings);
+            bindings.addAll(right.bindings);
+            return new SqlPart("(" + left.sql + " " + operator + " " + right.sql + ")", bindings);
+        }
     }
 
     private enum TokenType {
@@ -144,10 +193,16 @@ public final class FilterToSqlCompiler {
 
     private static class Parser {
         private final List<Token> tokens;
+        private final Function<String, String> quoteIdentifier;
+        private final boolean bindLiterals;
+        private final ContainsRenderer containsRenderer;
         private int pos = 0;
 
-        Parser(List<Token> tokens) {
+        Parser(List<Token> tokens, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer) {
             this.tokens = tokens;
+            this.quoteIdentifier = quoteIdentifier;
+            this.bindLiterals = bindLiterals;
+            this.containsRenderer = containsRenderer;
         }
 
         private Token peek() {
@@ -169,37 +224,37 @@ public final class FilterToSqlCompiler {
             return false;
         }
 
-        String parseExpression() {
+        SqlPart parseExpression() {
             return parseOr();
         }
 
-        private String parseOr() {
-            String left = parseAnd();
+        private SqlPart parseOr() {
+            SqlPart left = parseAnd();
             while (peek().type == TokenType.OPERATOR && peek().value.equals("OR")) {
                 consume();
-                String right = parseAnd();
-                left = "(" + left + " OR " + right + ")";
+                SqlPart right = parseAnd();
+                left = SqlPart.join(left, "OR", right);
             }
             return left;
         }
 
-        private String parseAnd() {
-            String left = parseCondition();
+        private SqlPart parseAnd() {
+            SqlPart left = parseCondition();
             while (peek().type == TokenType.OPERATOR && peek().value.equals("AND")) {
                 consume();
-                String right = parseCondition();
-                left = "(" + left + " AND " + right + ")";
+                SqlPart right = parseCondition();
+                left = SqlPart.join(left, "AND", right);
             }
             return left;
         }
 
         private static class Operand {
-            final String sql;
+            final SqlPart sql;
             final boolean isCollection;
             final String collectionName;
             final String fieldName;
 
-            Operand(String sql, boolean isCollection, String collectionName, String fieldName) {
+            Operand(SqlPart sql, boolean isCollection, String collectionName, String fieldName) {
                 this.sql = sql;
                 this.isCollection = isCollection;
                 this.collectionName = collectionName;
@@ -207,13 +262,13 @@ public final class FilterToSqlCompiler {
             }
         }
 
-        private String parseCondition() {
+        private SqlPart parseCondition() {
             if (match(TokenType.LPAREN)) {
-                String expr = parseExpression();
+                SqlPart expr = parseExpression();
                 if (!match(TokenType.RPAREN)) {
                     throw new ApiException(400, "Missing closing parenthesis in filter.");
                 }
-                return "(" + expr + ")";
+                return expr.wrap();
             }
 
             Operand left = parseOperand();
@@ -228,60 +283,113 @@ public final class FilterToSqlCompiler {
         private Operand parseOperand() {
             Token t = consume();
             if (t.type == TokenType.STRING) {
-                return new Operand("'" + t.value.replace("'", "''") + "'", false, null, null);
+                return new Operand(literal(t.value), false, null, null);
             }
             if (t.type == TokenType.NUMBER) {
-                return new Operand(t.value, false, null, null);
+                return new Operand(literal(parseNumber(t.value)), false, null, null);
             }
             if (t.type == TokenType.IDENTIFIER) {
                 if (t.value.equalsIgnoreCase("null") || t.value.equalsIgnoreCase("true") || t.value.equalsIgnoreCase("false")) {
-                    return new Operand(t.value.toUpperCase(), false, null, null);
+                    return new Operand(keywordLiteral(t.value), false, null, null);
                 }
                 if (t.value.startsWith("@request.auth.")) {
-                    return new Operand("json_extract(:request_auth, '$." + t.value.substring("@request.auth.".length()) + "')", false, null, null);
+                    return new Operand(SqlPart.of("json_extract(:request_auth, '$." + t.value.substring("@request.auth.".length()) + "')"), false, null, null);
                 }
                 if (t.value.startsWith("@request.body.")) {
-                    return new Operand("json_extract(:request_body, '$." + t.value.substring("@request.body.".length()) + "')", false, null, null);
+                    return new Operand(SqlPart.of("json_extract(:request_body, '$." + t.value.substring("@request.body.".length()) + "')"), false, null, null);
                 }
                 if (t.value.startsWith("@request.query.")) {
-                    return new Operand("json_extract(:request_query, '$." + t.value.substring("@request.query.".length()) + "')", false, null, null);
+                    return new Operand(SqlPart.of("json_extract(:request_query, '$." + t.value.substring("@request.query.".length()) + "')"), false, null, null);
                 }
                 if (t.value.equals("@request.method")) {
-                    return new Operand(":request_method", false, null, null);
+                    return new Operand(SqlPart.of(":request_method"), false, null, null);
                 }
                 if (t.value.startsWith("@collection.")) {
                     String[] parts = t.value.split("\\.");
                     if (parts.length >= 3) {
                         String colName = parts[1];
                         String fieldName = t.value.substring(("@collection." + colName + ".").length());
-                        return new Operand(t.value, true, colName, fieldName);
+                        return new Operand(SqlPart.of(t.value), true, colName, fieldName);
                     }
                 }
-                return new Operand(escapeIdentifier(t.value), false, null, null);
+                return new Operand(SqlPart.of(escapeIdentifier(t.value)), false, null, null);
             }
             throw new ApiException(400, "Unexpected token in filter: " + t.value);
         }
 
-        private String escapeIdentifier(String id) {
-            return "\"" + id.replace("\"", "\"\"") + "\"";
+        private SqlPart literal(Object value) {
+            if (bindLiterals) {
+                return SqlPart.bind(value);
+            }
+            if (value instanceof Number) {
+                return SqlPart.of(value.toString());
+            }
+            return SqlPart.of("'" + value.toString().replace("'", "''") + "'");
         }
 
-        private String buildSqlCondition(Operand left, String op, Operand right) {
+        private SqlPart keywordLiteral(String value) {
+            return switch (value.toLowerCase()) {
+                case "null" -> SqlPart.of("NULL");
+                case "true" -> bindLiterals ? SqlPart.bind(true) : SqlPart.of("TRUE");
+                case "false" -> bindLiterals ? SqlPart.bind(false) : SqlPart.of("FALSE");
+                default -> throw new ApiException(400, "Unexpected keyword: " + value);
+            };
+        }
+
+        private Number parseNumber(String value) {
+            if (value.contains(".")) {
+                return Double.parseDouble(value);
+            }
+            return Long.parseLong(value);
+        }
+
+        private String escapeIdentifier(String id) {
+            return quoteIdentifier.apply(id);
+        }
+
+        private SqlPart buildSqlCondition(Operand left, String op, Operand right) {
             String baseOp = op.startsWith("?") ? op.substring(1) : op;
 
             if (left.isCollection) {
+                SqlPart collectionField = SqlPart.of(escapeIdentifier(left.collectionName) + "." + escapeIdentifier(left.fieldName));
+                SqlPart comparison = buildComparison(collectionField, baseOp, right.sql);
                 String subquery = "SELECT 1 FROM " + escapeIdentifier(left.collectionName) +
-                                  " WHERE " + escapeIdentifier(left.collectionName) + "." + escapeIdentifier(left.fieldName) +
-                                  " " + mapOpToSql(baseOp, right.sql);
-                return "EXISTS (" + subquery + ")";
+                                  " WHERE " + comparison.sql();
+                return new SqlPart("EXISTS (" + subquery + ")", comparison.bindings());
             }
             if (right.isCollection) {
+                SqlPart collectionField = SqlPart.of(escapeIdentifier(right.collectionName) + "." + escapeIdentifier(right.fieldName));
+                SqlPart comparison = buildComparison(collectionField, invertOp(baseOp), left.sql);
                 String subquery = "SELECT 1 FROM " + escapeIdentifier(right.collectionName) +
-                                  " WHERE " + escapeIdentifier(right.collectionName) + "." + escapeIdentifier(right.fieldName) +
-                                  " " + mapOpToSql(invertOp(baseOp), left.sql);
-                return "EXISTS (" + subquery + ")";
+                                  " WHERE " + comparison.sql();
+                return new SqlPart("EXISTS (" + subquery + ")", comparison.bindings());
             }
-            return left.sql + " " + mapOpToSql(baseOp, right.sql);
+            return buildComparison(left.sql, baseOp, right.sql);
+        }
+
+        private SqlPart buildComparison(SqlPart left, String op, SqlPart right) {
+            if ("~".equals(op) || "!~".equals(op)) {
+                return renderContains(left, right, "!~".equals(op));
+            }
+            SqlPart mapped = mapOpToSql(op, right);
+            List<Object> bindings = new ArrayList<>(left.bindings());
+            bindings.addAll(mapped.bindings());
+            return new SqlPart(left.sql() + " " + mapped.sql(), bindings);
+        }
+
+        private SqlPart renderContains(SqlPart left, SqlPart right, boolean negated) {
+            if (containsRenderer != null) {
+                CompiledFilter rendered = containsRenderer.render(
+                        new CompiledFilter(left.sql(), left.bindings()),
+                        new CompiledFilter(right.sql(), right.bindings()),
+                        negated
+                );
+                return new SqlPart(rendered.sql(), rendered.bindings());
+            }
+            SqlPart mapped = new SqlPart((negated ? "NOT LIKE " : "LIKE ") + "'%' || " + right.sql() + " || '%'", right.bindings());
+            List<Object> bindings = new ArrayList<>(left.bindings());
+            bindings.addAll(mapped.bindings());
+            return new SqlPart(left.sql() + " " + mapped.sql(), bindings);
         }
 
         private String invertOp(String op) {
@@ -294,16 +402,14 @@ public final class FilterToSqlCompiler {
             };
         }
 
-        private String mapOpToSql(String op, String rightSql) {
+        private SqlPart mapOpToSql(String op, SqlPart rightSql) {
             return switch (op) {
-                case "=", "==" -> "= " + rightSql;
-                case "!=" -> "!= " + rightSql;
-                case ">" -> "> " + rightSql;
-                case ">=" -> ">= " + rightSql;
-                case "<" -> "< " + rightSql;
-                case "<=" -> "<= " + rightSql;
-                case "~" -> "LIKE '%' || " + rightSql + " || '%'";
-                case "!~" -> "NOT LIKE '%' || " + rightSql + " || '%'";
+                case "=", "==" -> new SqlPart("= " + rightSql.sql(), rightSql.bindings());
+                case "!=" -> new SqlPart("!= " + rightSql.sql(), rightSql.bindings());
+                case ">" -> new SqlPart("> " + rightSql.sql(), rightSql.bindings());
+                case ">=" -> new SqlPart(">= " + rightSql.sql(), rightSql.bindings());
+                case "<" -> new SqlPart("< " + rightSql.sql(), rightSql.bindings());
+                case "<=" -> new SqlPart("<= " + rightSql.sql(), rightSql.bindings());
                 default -> throw new ApiException(400, "Unsupported operator: " + op);
             };
         }

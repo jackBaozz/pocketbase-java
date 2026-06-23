@@ -55,7 +55,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     };
     private static final Pattern NAME_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,62}$");
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
-    private static final int MAX_EXPAND_DEPTH = 6;
     private static final int MAX_ACTIVITY_LOGS = 10_000;
     private static final int SQL_MAX_QUERY_LENGTH = 5000;
     private static final int SQL_MAX_ROWS = 1000;
@@ -2942,163 +2941,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return out;
     }
 
-    private Map<String, Object> responseRecord(
-            CollectionSchema collection,
-            Map<String, Object> record,
-            boolean includeHidden,
-            Map<String, String> query,
-            RequestPrincipal principal
-    ) {
-        Map<String, Object> out = publicRecord(collection, record, includeHidden);
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
-        applyExpand(collection, record, out, expandPaths(safeQuery.get("expand")), safeQuery, principal, includeHidden, 0);
-        return selectFields(out, safeQuery.get("fields"));
-    }
-
-    private void applyExpand(
-            CollectionSchema collection,
-            Map<String, Object> source,
-            Map<String, Object> output,
-            List<List<String>> paths,
-            Map<String, String> query,
-            RequestPrincipal principal,
-            boolean includeHidden,
-            int depth
-    ) {
-        if (paths.isEmpty() || depth >= MAX_EXPAND_DEPTH) {
-            return;
-        }
-
-        Map<String, List<List<String>>> grouped = new LinkedHashMap<>();
-        for (List<String> path : paths) {
-            if (path.isEmpty()) {
-                continue;
-            }
-            List<String> tail = path.size() == 1 ? List.of() : path.subList(1, path.size());
-            grouped.computeIfAbsent(path.get(0), ignored -> new ArrayList<>()).add(tail);
-        }
-
-        Map<String, Object> expanded = new LinkedHashMap<>();
-        for (Map.Entry<String, List<List<String>>> entry : grouped.entrySet()) {
-            FieldSchema field = relationField(collection, entry.getKey());
-            if (field == null) {
-                continue;
-            }
-            CollectionSchema target = relationTarget(field);
-            if (target == null) {
-                continue;
-            }
-            Object rawValue = source.get(field.name);
-            List<Map<String, Object>> related = new ArrayList<>();
-            for (String id : relationIds(rawValue)) {
-                Map<String, Object> relatedRecord = findRecordOrNull(target, id);
-                if (relatedRecord == null || !canViewExpandedRecord(target, relatedRecord, query, principal)) {
-                    continue;
-                }
-                Map<String, Object> relatedOutput = publicRecord(target, relatedRecord, includeHidden);
-                applyExpand(target, relatedRecord, relatedOutput, entry.getValue(), query, principal, includeHidden, depth + 1);
-                related.add(relatedOutput);
-            }
-            if (relationMultiple(field, rawValue)) {
-                expanded.put(field.name, related);
-            } else if (!related.isEmpty()) {
-                expanded.put(field.name, related.get(0));
-            }
-        }
-
-        if (!expanded.isEmpty()) {
-            output.put("expand", expanded);
-        }
-    }
-
-    private List<List<String>> expandPaths(String expand) {
-        if (expand == null || expand.isBlank()) {
-            return List.of();
-        }
-        List<List<String>> paths = new ArrayList<>();
-        for (String rawPath : expand.split(",")) {
-            String trimmed = rawPath.trim();
-            if (trimmed.isBlank()) {
-                continue;
-            }
-            List<String> segments = new ArrayList<>();
-            for (String segment : trimmed.split("\\.")) {
-                String name = segment.trim();
-                if (!name.isBlank()) {
-                    segments.add(name);
-                }
-                if (segments.size() >= MAX_EXPAND_DEPTH) {
-                    break;
-                }
-            }
-            if (!segments.isEmpty()) {
-                paths.add(segments);
-            }
-        }
-        return paths;
-    }
-
-    private FieldSchema relationField(CollectionSchema collection, String name) {
-        return collection.fields.stream()
-                .filter(field -> Objects.equals(field.name, name) && "relation".equals(normalizeType(field.type)))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private CollectionSchema relationTarget(FieldSchema field) {
-        List<String> candidates = new ArrayList<>();
-        if (field.collectionId != null && !field.collectionId.isBlank()) {
-            candidates.add(field.collectionId);
-        }
-        if (field.collectionIds != null) {
-            field.collectionIds.stream()
-                    .filter(value -> value != null && !value.isBlank())
-                    .forEach(candidates::add);
-        }
-        addOptionCandidates(candidates, field.options == null ? null : field.options.get("collectionId"));
-        addOptionCandidates(candidates, field.options == null ? null : field.options.get("collectionIds"));
-        addOptionCandidates(candidates, field.options == null ? null : field.options.get("collection"));
-        addOptionCandidates(candidates, field.options == null ? null : field.options.get("collectionName"));
-        for (String candidate : candidates) {
-            CollectionSchema collection = findCollectionOrNull(candidate);
-            if (collection != null) {
-                return collection;
-            }
-        }
-        return null;
-    }
-
-    private void addOptionCandidates(List<String> candidates, JsonNode value) {
-        if (value == null || value.isNull()) {
-            return;
-        }
-        if (value.isArray()) {
-            value.forEach(item -> addOptionCandidates(candidates, item));
-            return;
-        }
-        String text = value.asText();
-        if (!text.isBlank()) {
-            candidates.add(text);
-        }
-    }
-
-    private List<String> relationIds(Object value) {
-        if (value == null) {
-            return List.of();
-        }
-        if (value instanceof Collection<?> collection) {
-            return collection.stream()
-                    .map(String::valueOf)
-                    .filter(item -> !item.isBlank())
-                    .collect(Collectors.toCollection(ArrayList::new));
-        }
-        String text = String.valueOf(value);
-        return text.isBlank() ? List.of() : List.of(text);
-    }
-
-    private boolean relationMultiple(FieldSchema field, Object rawValue) {
-        return rawValue instanceof Collection<?> || maxSelect(field) > 1;
-    }
 
     private boolean canViewExpandedRecord(
             CollectionSchema collection,
@@ -4804,10 +4646,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return type == null ? "text" : type.trim().toLowerCase(Locale.ROOT);
     }
 
-    private static boolean isBlankText(JsonNode value) {
-        return value.isTextual() && value.asText().isBlank();
-    }
-
     private static String requiredText(JsonNode body, String field) {
         JsonNode value = body == null ? null : body.get(field);
         if (value == null || value.isNull() || value.asText().isBlank()) {
@@ -4900,7 +4738,5 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     ) {
     }
 
-    private enum Unchanged {
-        INSTANCE
-    }
+
 }

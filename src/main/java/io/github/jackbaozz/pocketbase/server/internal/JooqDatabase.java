@@ -2,7 +2,9 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.jooq.SQLDialect;
 import org.jooq.impl.DSL;
 
@@ -114,12 +116,38 @@ public final class JooqDatabase implements AutoCloseable {
         return engine.dialect();
     }
 
+    String quoteIdentifier(String identifier) {
+        return dsl().render(DSL.name(identifier));
+    }
+
     DSLContext dsl() {
         Connection current = transactionConnection.get();
         if (current != null) {
             return DSL.using(current, dialect());
         }
         return DSL.using(dataSource, dialect());
+    }
+
+    DSLContext dsl(Connection conn) {
+        return DSL.using(conn, dialect());
+    }
+
+    FilterToSqlCompiler.CompiledFilter renderContainsCondition(
+            FilterToSqlCompiler.CompiledFilter left,
+            FilterToSqlCompiler.CompiledFilter right,
+            boolean negated
+    ) {
+        DSLContext context = dsl();
+        Field<String> leftField = DSL.field(left.sql(), String.class, left.bindings().toArray());
+        Field<String> rightField = DSL.field(right.sql(), String.class, right.bindings().toArray());
+        Condition condition = leftField.contains(rightField);
+        if (negated) {
+            condition = condition.not();
+        }
+        return new FilterToSqlCompiler.CompiledFilter(
+                context.render(condition),
+                context.extractBindValues(condition)
+        );
     }
 
     Connection connection() throws SQLException {
