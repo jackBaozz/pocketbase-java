@@ -33,7 +33,7 @@ public final class FieldValidator {
         String type = normalizeType(field.type);
         if (value.isNull() || isBlankText(value)) {
             if (field.required && !(update && "password".equals(type))) {
-                errors.put(field.name, validationError(field.name + " is required."));
+                errors.put(field.name, validationError("validation_required", "Cannot be blank."));
             }
             return update && "password".equals(type) ? Unchanged.INSTANCE : null;
         }
@@ -53,7 +53,7 @@ public final class FieldValidator {
                 default -> value.asText();
             };
         } catch (IllegalArgumentException e) {
-            errors.put(field.name, validationError(e.getMessage()));
+            errors.put(field.name, validationError("validation_invalid_value", e.getMessage()));
             return null;
         }
     }
@@ -66,14 +66,14 @@ public final class FieldValidator {
         return node.isTextual() && node.asText().isBlank();
     }
 
-    private static Map<String, Object> validationError(String message) {
-        return Map.of("code", "validation_failed", "message", message);
+    private static Map<String, Object> validationError(String code, String message) {
+        return Map.of("code", code, "message", message);
     }
 
     private static Object normalizeEmail(FieldSchema field, JsonNode value, Map<String, Object> errors) {
         String email = value.asText().trim().toLowerCase(Locale.ROOT);
         if (!email.contains("@") || email.startsWith("@") || email.endsWith("@")) {
-            errors.put(field.name, validationError("Invalid email address."));
+            errors.put(field.name, validationError("validation_invalid_email", "Must be a valid email address."));
             return email;
         }
 
@@ -82,7 +82,7 @@ public final class FieldValidator {
                 for (JsonNode domainNode : field.options.get("exceptDomains")) {
                     String domain = domainNode.asText();
                     if (email.endsWith("@" + domain) || email.endsWith("." + domain)) {
-                        errors.put(field.name, validationError("Email domain is not allowed."));
+                        errors.put(field.name, validationError("validation_invalid_email", "Email domain is not allowed."));
                         break;
                     }
                 }
@@ -97,7 +97,7 @@ public final class FieldValidator {
                     }
                 }
                 if (!matched) {
-                    errors.put(field.name, validationError("Email domain is not allowed."));
+                    errors.put(field.name, validationError("validation_invalid_email", "Email domain is not allowed."));
                 }
             }
         }
@@ -110,20 +110,20 @@ public final class FieldValidator {
             if (field.options.containsKey("min")) {
                 int min = field.options.get("min").asInt();
                 if (pwd.length() < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
+                    errors.put(field.name, validationError("validation_length_out_of_range", "Cannot be less than " + min + " characters."));
                 }
             }
             if (field.options.containsKey("max")) {
                 int max = field.options.get("max").asInt();
                 if (pwd.length() > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
+                    errors.put(field.name, validationError("validation_length_out_of_range", "Cannot be more than " + max + " characters."));
                 }
             }
             if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
                 String pattern = field.options.get("pattern").asText();
                 try {
                     if (!Pattern.compile(pattern).matcher(pwd).matches()) {
-                        errors.put(field.name, validationError("Invalid password format."));
+                        errors.put(field.name, validationError("validation_invalid_format", "Invalid password format."));
                     }
                 } catch (Exception e) {
                     // ignore invalid regex in schema
@@ -142,7 +142,7 @@ public final class FieldValidator {
             if (intValue == 0 || intValue == 1) {
                 return intValue == 1;
             }
-            errors.put(field.name, validationError("Expected boolean value."));
+            errors.put(field.name, validationError("validation_invalid_format", "Expected boolean value."));
             return null;
         }
         String text = value.asText().trim().toLowerCase(Locale.ROOT);
@@ -152,7 +152,7 @@ public final class FieldValidator {
         if ("false".equals(text) || "0".equals(text)) {
             return false;
         }
-        errors.put(field.name, validationError("Expected boolean value."));
+        errors.put(field.name, validationError("validation_invalid_format", "Expected boolean value."));
         return null;
     }
 
@@ -164,11 +164,11 @@ public final class FieldValidator {
             try {
                 numVal = Double.parseDouble(value.asText());
             } catch (NumberFormatException ignored) {
-                errors.put(field.name, validationError("Expected numeric value."));
+                errors.put(field.name, validationError("validation_invalid_format", "Expected numeric value."));
                 return null;
             }
         } else {
-            errors.put(field.name, validationError("Expected numeric value."));
+            errors.put(field.name, validationError("validation_invalid_format", "Expected numeric value."));
             return null;
         }
 
@@ -176,13 +176,13 @@ public final class FieldValidator {
             if (field.options.containsKey("min")) {
                 double min = field.options.get("min").asDouble();
                 if (numVal < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + "."));
+                    errors.put(field.name, validationError("validation_invalid_value", "Cannot be less than " + min + "."));
                 }
             }
             if (field.options.containsKey("max")) {
                 double max = field.options.get("max").asDouble();
                 if (numVal > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + "."));
+                    errors.put(field.name, validationError("validation_invalid_value", "Cannot be more than " + max + "."));
                 }
             }
         }
@@ -198,15 +198,15 @@ public final class FieldValidator {
             if (value.isArray()) {
                 for (JsonNode item : value) {
                     if (!allowed.contains(item.asText())) {
-                        errors.put(field.name, validationError("Value is not in the allowed list."));
+                        errors.put(field.name, validationError("validation_invalid_value", "Value is not in the allowed list."));
                     }
                 }
                 int maxSelect = field.options.containsKey("maxSelect") ? field.options.get("maxSelect").asInt(1) : 1;
                 if (value.size() > maxSelect && maxSelect > 0) {
-                    errors.put(field.name, validationError("Too many values selected."));
+                    errors.put(field.name, validationError("validation_invalid_value", "Too many values selected."));
                 }
             } else if (!allowed.contains(value.asText())) {
-                errors.put(field.name, validationError("Value is not in the allowed list."));
+                errors.put(field.name, validationError("validation_invalid_value", "Value is not in the allowed list."));
             }
         }
         return converted;
@@ -217,7 +217,7 @@ public final class FieldValidator {
         try {
             URI uri = new URI(urlText);
             if (uri.getScheme() == null || (!uri.getScheme().equalsIgnoreCase("http") && !uri.getScheme().equalsIgnoreCase("https"))) {
-                errors.put(field.name, validationError("Must be a valid HTTP/HTTPS URL."));
+                errors.put(field.name, validationError("validation_invalid_url", "Must be a valid HTTP/HTTPS URL."));
                 return urlText;
             }
             if (field.options != null) {
@@ -234,7 +234,7 @@ public final class FieldValidator {
                         }
                     }
                     if (!matched) {
-                        errors.put(field.name, validationError("URL host is not allowed."));
+                        errors.put(field.name, validationError("validation_invalid_url", "URL host is not allowed."));
                     }
                 }
                 JsonNode exceptHosts = field.options.containsKey("exceptHosts") ? field.options.get("exceptHosts") : field.options.get("exceptDomains");
@@ -243,7 +243,7 @@ public final class FieldValidator {
                     if (host != null) {
                         for (JsonNode hostNode : exceptHosts) {
                             if (host.equalsIgnoreCase(hostNode.asText())) {
-                                errors.put(field.name, validationError("URL host is not allowed."));
+                                errors.put(field.name, validationError("validation_invalid_url", "URL host is not allowed."));
                                 break;
                             }
                         }
@@ -251,7 +251,7 @@ public final class FieldValidator {
                 }
             }
         } catch (URISyntaxException e) {
-            errors.put(field.name, validationError("Must be a valid URL."));
+            errors.put(field.name, validationError("validation_invalid_url", "Must be a valid URL."));
         }
         return urlText;
     }
@@ -262,20 +262,20 @@ public final class FieldValidator {
             if (field.options.containsKey("min")) {
                 int min = field.options.get("min").asInt();
                 if (text.length() < min) {
-                    errors.put(field.name, validationError("Cannot be less than " + min + " characters."));
+                    errors.put(field.name, validationError("validation_length_out_of_range", "Cannot be less than " + min + " characters."));
                 }
             }
             if (field.options.containsKey("max")) {
                 int max = field.options.get("max").asInt();
                 if (text.length() > max) {
-                    errors.put(field.name, validationError("Cannot be more than " + max + " characters."));
+                    errors.put(field.name, validationError("validation_length_out_of_range", "Cannot be more than " + max + " characters."));
                 }
             }
             if (field.options.containsKey("pattern") && !field.options.get("pattern").asText().isEmpty()) {
                 String pattern = field.options.get("pattern").asText();
                 try {
                     if (!Pattern.compile(pattern).matcher(text).matches()) {
-                        errors.put(field.name, validationError("Invalid format."));
+                        errors.put(field.name, validationError("validation_invalid_format", "Invalid format."));
                     }
                 } catch (Exception e) {
                     // Ignore invalid pattern
@@ -298,18 +298,18 @@ public final class FieldValidator {
                 if (field.options.containsKey("min") && !field.options.get("min").asText().isEmpty()) {
                     String minDate = field.options.get("min").asText();
                     if (dateText.compareTo(minDate) < 0) {
-                        errors.put(field.name, validationError("Cannot be before " + minDate + "."));
+                        errors.put(field.name, validationError("validation_invalid_date", "Cannot be before " + minDate + "."));
                     }
                 }
                 if (field.options.containsKey("max") && !field.options.get("max").asText().isEmpty()) {
                     String maxDate = field.options.get("max").asText();
                     if (dateText.compareTo(maxDate) > 0) {
-                        errors.put(field.name, validationError("Cannot be after " + maxDate + "."));
+                        errors.put(field.name, validationError("validation_invalid_date", "Cannot be after " + maxDate + "."));
                     }
                 }
             }
         } catch (Exception e) {
-            errors.put(field.name, validationError("Invalid date format."));
+            errors.put(field.name, validationError("validation_invalid_date", "Invalid date format."));
         }
         return dateText;
     }
@@ -322,16 +322,16 @@ public final class FieldValidator {
                 if (value.isArray()) {
                     for (JsonNode item : value) {
                         if (!recordExists.test(targetCollection, item.asText())) {
-                            errors.put(field.name, validationError("Failed to resolve relation " + item.asText()));
+                            errors.put(field.name, validationError("validation_missing_record", "Failed to resolve relation " + item.asText()));
                         }
                     }
                     int maxSelect = field.options.containsKey("maxSelect") ? field.options.get("maxSelect").asInt(1) : 1;
                     if (value.size() > maxSelect && maxSelect > 0) {
-                        errors.put(field.name, validationError("Too many values selected."));
+                        errors.put(field.name, validationError("validation_invalid_value", "Too many values selected."));
                     }
                 } else {
                     if (!recordExists.test(targetCollection, value.asText())) {
-                        errors.put(field.name, validationError("Failed to resolve relation " + value.asText()));
+                        errors.put(field.name, validationError("validation_missing_record", "Failed to resolve relation " + value.asText()));
                     }
                 }
             }

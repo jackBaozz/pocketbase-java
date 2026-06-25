@@ -91,13 +91,13 @@ public final class AuthProcessor {
         }
         String providerName = body.has("provider") ? body.get("provider").asText() : null;
         if (providerName == null || providerName.isBlank()) {
-            throw new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_failed", "message", "provider is required.")));
+            throw new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_required", "message", "provider is required.")));
         }
 
         colSchema.oauth2.providers.stream()
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_failed", "message", "Provider is missing or is not enabled."))));
+                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_missing_record", "message", "Provider is missing or is not enabled."))));
 
         throw new ApiException(400, "OAuth2 simulated failure for SQLite MVP parity tests.");
     }

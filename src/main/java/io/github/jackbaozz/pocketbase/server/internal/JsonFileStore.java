@@ -189,7 +189,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized void testS3(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Failed to test the S3 filesystem.", fieldError("filesystem", "filesystem is required."));
+            throw new ApiException(400, "Failed to test the S3 filesystem.", fieldError("filesystem", "validation_invalid_value", "filesystem is required."));
         }
         String filesystem = bodyText(body, "filesystem", "");
         Map<String, Object> config = s3SettingsFor(filesystem, body);
@@ -198,20 +198,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized void testEmail(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "email is required."));
+            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "validation_invalid_value", "email is required."));
         }
         String email = bodyText(body, "email", "").toLowerCase(Locale.ROOT);
         String template = bodyText(body, "template", "");
         String collectionName = bodyText(body, "collection", SUPERUSERS);
         if (!EMAIL_PATTERN.matcher(email).matches()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "Invalid email address."));
+            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "validation_invalid_value", "Invalid email address."));
         }
         if (!TEST_EMAIL_TEMPLATES.contains(template)) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("template", "Invalid email template."));
+            throw new ApiException(400, "Failed to send the test email.", fieldError("template", "validation_invalid_value", "Invalid email template."));
         }
         CollectionSchema collection = findCollectionOrNull(collectionName);
         if (collection == null || !"auth".equals(collection.type)) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("collection", "Must be a valid auth collection id or name."));
+            throw new ApiException(400, "Failed to send the test email.", fieldError("collection", "validation_invalid_value", "Must be a valid auth collection id or name."));
         }
 
         TestEmailContent content = testEmailContent(template);
@@ -343,7 +343,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "query is required.")
+                    fieldError("query", "validation_invalid_value", "query is required.")
             );
         }
         String query = queryNode.asText();
@@ -351,7 +351,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters.")
+                    fieldError("query", "validation_invalid_value", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters.")
             );
         }
 
@@ -383,7 +383,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "query is required.")
+                    fieldError("query", "validation_invalid_value", "query is required.")
             );
         }
         String query = queryNode.asText();
@@ -391,7 +391,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "query must be at most 5000 characters.")
+                    fieldError("query", "validation_invalid_value", "query must be at most 5000 characters.")
             );
         }
 
@@ -1387,10 +1387,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema collection = mapper.convertValue(body, CollectionSchema.class);
         normalizeCollection(collection, false);
         if (collectionsByName.containsKey(collection.name)) {
-            throw new ApiException(400, "Collection name already exists.", fieldError("name", "Collection name already exists."));
+            throw new ApiException(400, "Collection name already exists.", fieldError("name", "validation_invalid_value", "Collection name already exists."));
         }
         if (findCollectionOrNull(collection.id) != null) {
-            throw new ApiException(400, "Collection id already exists.", fieldError("id", "Collection id already exists."));
+            throw new ApiException(400, "Collection id already exists.", fieldError("id", "validation_invalid_value", "Collection id already exists."));
         }
         collectionsByName.put(collection.name, copyCollection(collection));
         recordsByCollectionId.put(collection.id, new ArrayList<>());
@@ -1436,7 +1436,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         normalizeCollection(existing, true);
         if (!oldName.equals(existing.name) && collectionsByName.containsKey(existing.name)) {
             existing.name = oldName;
-            throw new ApiException(400, "Collection name already exists.", fieldError("name", "Collection name already exists."));
+            throw new ApiException(400, "Collection name already exists.", fieldError("name", "validation_invalid_value", "Collection name already exists."));
         }
         if (!oldName.equals(existing.name)) {
             collectionsByName.remove(oldName);
@@ -1499,7 +1499,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         JsonNode collectionsNode = body.get("collections");
         if (collectionsNode == null || !collectionsNode.isArray() || collectionsNode.isEmpty()) {
-            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "collections is required."));
+            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "collections is required."));
         }
 
         boolean deleteMissing = body.path("deleteMissing").asBoolean(false);
@@ -1522,7 +1522,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         Set<String> seenNames = new LinkedHashSet<>();
         for (JsonNode item : collectionsNode) {
             if (item == null || !item.isObject()) {
-                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Each collection must be a JSON object."));
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Each collection must be a JSON object."));
             }
             CollectionSchema imported = mapper.convertValue(item, CollectionSchema.class);
             CollectionSchema existing = existingCollectionForImport(imported);
@@ -1545,10 +1545,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             normalizeCollection(imported, existing != null);
             imported.updated = now();
             if (!seenIds.add(imported.id)) {
-                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Duplicate collection id: " + imported.id));
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Duplicate collection id: " + imported.id));
             }
             if (!seenNames.add(imported.name)) {
-                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Duplicate collection name: " + imported.name));
+                throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Duplicate collection name: " + imported.name));
             }
             putImportedCollection(nextCollections, imported, existing);
             newOrUpdated.add(imported);
@@ -1582,7 +1582,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             saveAll();
             cleanupRemovedCollectionData(nextIds);
         } catch (RuntimeException e) {
-            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "Raw error:\n" + e.getMessage()));
+            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Raw error:n" + e.getMessage()));
         }
 
         return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
@@ -1989,7 +1989,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema.OAuth2ProviderConfig provider = collection.oauth2.providers.stream()
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", fieldError("provider", "Provider with name " + providerName + " is missing or is not enabled.")));
+                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", fieldError("provider", "validation_invalid_value", "Provider with name " + providerName + " is missing or is not enabled.")));
 
         OAuth2Support.OAuth2User oauthUser = OAuth2Support.authenticate(mapper, provider, code, redirectURL, codeVerifier);
         Map<String, Object> record = findOAuth2LinkedRecord(collection, providerName, oauthUser.providerId());
@@ -2104,10 +2104,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String otpId = requiredText(body, "otpId");
         String password = requiredText(body, "password");
         if (otpId.length() > 255) {
-            throw new ApiException(400, "An error occurred while validating the submitted data.", fieldError("otpId", "otpId must be at most 255 characters."));
+            throw new ApiException(400, "An error occurred while validating the submitted data.", fieldError("otpId", "validation_invalid_value", "otpId must be at most 255 characters."));
         }
         if (password.length() > 71) {
-            throw new ApiException(400, "An error occurred while validating the submitted data.", fieldError("password", "password must be at most 71 characters."));
+            throw new ApiException(400, "An error occurred while validating the submitted data.", fieldError("password", "validation_invalid_value", "password must be at most 71 characters."));
         }
 
         Map<String, Object> otp = findOtp(otpId);
@@ -2162,10 +2162,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String password = requiredText(body, "password");
         String passwordConfirm = requiredText(body, "passwordConfirm");
         if (!password.equals(passwordConfirm)) {
-            throw new ApiException(400, "passwordConfirm does not match password.", fieldError("passwordConfirm", "Passwords do not match."));
+            throw new ApiException(400, "passwordConfirm does not match password.", fieldError("passwordConfirm", "validation_invalid_value", "Passwords do not match."));
         }
         if (password.length() < 8) {
-            throw new ApiException(400, "Password must be at least 8 characters.", fieldError("password", "Password must be at least 8 characters."));
+            throw new ApiException(400, "Password must be at least 8 characters.", fieldError("password", "validation_invalid_value", "Password must be at least 8 characters."));
         }
 
         String passwordField = passwordField(action.collection());
@@ -2685,7 +2685,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private void ensureEmailAvailable(CollectionSchema collection, String email, String currentId) {
         Map<String, Object> existing = findAuthRecordByEmail(collection, email);
         if (existing != null && !Objects.equals(currentId, String.valueOf(existing.get("id")))) {
-            throw new ApiException(400, "Email is already in use.", fieldError("email", "Value must be unique."));
+            throw new ApiException(400, "Email is already in use.", fieldError("email", "validation_invalid_value", "Value must be unique."));
         }
     }
 
@@ -2700,7 +2700,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private String normalizedEmail(String value) {
         String email = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         if (email.isBlank() || !email.contains("@") || email.startsWith("@") || email.endsWith("@")) {
-            throw new ApiException(400, "Invalid email address.", fieldError("email", "Invalid email address."));
+            throw new ApiException(400, "Invalid email address.", fieldError("email", "validation_invalid_value", "Invalid email address."));
         }
         return email;
     }
@@ -2866,7 +2866,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode value = body.get(field.name);
             if (value == null || value.isMissingNode()) {
                 if (!update && field.required) {
-                    errors.put(field.name, validationError(field.name + " is required."));
+                    errors.put(field.name, validationError("validation_required", "Cannot be blank."));
                 }
                 continue;
             }
@@ -2913,7 +2913,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     continue;
                 }
                 if (Objects.equals(candidate, record.get(field.name))) {
-                    errors.put(field.name, validationError("Value must be unique."));
+                    errors.put(field.name, validationError("validation_not_unique", "Value must be unique."));
                     break;
                 }
             }
@@ -3441,7 +3441,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         int port = intSetting(smtp.get("port"), 587);
         String host = textSetting(smtp.get("host"));
         if (host.isBlank()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("host", "SMTP host is required."));
+            throw new ApiException(400, "Failed to send the test email.", fieldError("host", "validation_invalid_value", "SMTP host is required."));
         }
         return new SmtpMailer.Settings(
                 host,
@@ -3543,7 +3543,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     "This is a test login alert from a new location.",
                     "<p>This is a test login alert from a new location.</p>"
             );
-            default -> throw new ApiException(400, "Failed to send the test email.", fieldError("template", "Invalid email template."));
+            default -> throw new ApiException(400, "Failed to send the test email.", fieldError("template", "validation_invalid_value", "Invalid email template."));
         };
     }
 
@@ -3906,8 +3906,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema nameConflict = target.get(imported.name);
         if (nameConflict != null && !Objects.equals(nameConflict.id, imported.id)) {
             throw new ApiException(400, "Failed to import collections.", fieldError(
-                    "collections",
-                    "Collection name already exists: " + imported.name
+                    "collections", "validation_invalid_value", "Collection name already exists: " + imported.name
             ));
         }
         String oldName = null;
@@ -4043,11 +4042,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             collection.id = IdGenerator.prefixed("pbc_");
         }
         if (collection.name == null || collection.name.isBlank() || !NAME_PATTERN.matcher(collection.name).matches()) {
-            throw new ApiException(400, "Invalid collection name.", fieldError("name", "Use letters, numbers and underscore."));
+            throw new ApiException(400, "Invalid collection name.", fieldError("name", "validation_invalid_format", "Use letters, numbers and underscore."));
         }
         collection.type = normalizeType(collection.type == null || collection.type.isBlank() ? "base" : collection.type);
         if (!"base".equals(collection.type) && !"auth".equals(collection.type) && !"view".equals(collection.type)) {
-            throw new ApiException(400, "Unsupported collection type.", fieldError("type", "Supported types are base, auth and view."));
+            throw new ApiException(400, "Unsupported collection type.", fieldError("type", "validation_invalid_value", "Supported types are base, auth and view."));
         }
         if (collection.fields == null) {
             collection.fields = new ArrayList<>();
@@ -4074,10 +4073,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             field.id = IdGenerator.prefixed("field_");
         }
         if (field.name == null || field.name.isBlank() || !NAME_PATTERN.matcher(field.name).matches()) {
-            throw new ApiException(400, "Invalid field name.", fieldError("fields", "Use letters, numbers and underscore."));
+            throw new ApiException(400, "Invalid field name.", fieldError("fields", "validation_invalid_value", "Use letters, numbers and underscore."));
         }
         if (!names.add(field.name)) {
-            throw new ApiException(400, "Duplicate field name.", fieldError(field.name, "Duplicate field name."));
+            throw new ApiException(400, "Duplicate field name.", fieldError(field.name, "validation_invalid_value", "Duplicate field name."));
         }
         field.type = normalizeType(field.type == null || field.type.isBlank() ? "text" : field.type);
         if (field.options == null) {
@@ -4649,7 +4648,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private static String requiredText(JsonNode body, String field) {
         JsonNode value = body == null ? null : body.get(field);
         if (value == null || value.isNull() || value.asText().isBlank()) {
-            throw new ApiException(400, field + " is required.", fieldError(field, field + " is required."));
+            throw new ApiException(400, field + " is required.", fieldError(field, "validation_required", field + " is required."));
         }
         return value.asText();
     }
@@ -4678,12 +4677,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
     }
 
-    private static Map<String, Object> fieldError(String field, String message) {
-        return Map.of(field, validationError(message));
+    private static Map<String, Object> fieldError(String field, String code, String message) {
+        return Map.of(field, validationError(code, message));
     }
 
-    private static Map<String, Object> validationError(String message) {
-        return Map.of("code", "validation_failed", "message", message);
+    private static Map<String, Object> validationError(String code, String message) {
+        return Map.of("code", code, "message", message);
     }
 
     private record TestEmailContent(String subject, String text, String html) {

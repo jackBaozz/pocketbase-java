@@ -42,6 +42,7 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <jackson.version>2.17.2</jackson.version>
         <jooq.version>3.19.24</jooq.version>
+        <testcontainers.version>1.20.1</testcontainers.version>
         <storage>json</storage>
         <junit.version>5.10.3</junit.version>
         <maven.clean.plugin.version>3.3.2</maven.clean.plugin.version>
@@ -106,6 +107,34 @@
             <artifactId>postgresql</artifactId>
             <version>42.7.4</version>
             <optional>true</optional>
+        </dependency>
+
+        <!-- Testcontainers for Integration Testing -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <!-- Playwright for Admin UI Tests -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>1.44.0</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

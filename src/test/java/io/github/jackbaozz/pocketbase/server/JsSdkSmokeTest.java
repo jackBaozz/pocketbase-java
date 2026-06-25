@@ -25,6 +25,7 @@ public class JsSdkSmokeTest {
     void setUp() throws Exception {
         // Start the Java pocketbase server
         ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
+        TestDatabaseFactory.init();
         server = LocalPocketBase.start(config);
         baseUrl = "http://127.0.0.1:" + server.port();
 

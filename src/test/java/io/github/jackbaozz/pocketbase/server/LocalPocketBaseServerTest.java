@@ -2038,6 +2038,7 @@ class LocalPocketBaseServerTest {
     }
 
     private void start() throws IOException {
+        TestDatabaseFactory.init();
         server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, tempDir, null, null));
     }
 
