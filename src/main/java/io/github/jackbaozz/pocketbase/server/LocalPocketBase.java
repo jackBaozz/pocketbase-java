@@ -6,7 +6,7 @@ import io.github.jackbaozz.pocketbase.server.internal.JsonFileStore;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
 import io.github.jackbaozz.pocketbase.server.internal.StorageEngine;
-import io.github.jackbaozz.pocketbase.server.internal.SqliteStorageEngine;
+import io.github.jackbaozz.pocketbase.server.internal.RelationalStorageEngine;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -36,7 +36,7 @@ public final class LocalPocketBase implements AutoCloseable {
                 || "mariadb".equalsIgnoreCase(storageType)
                 || "postgres".equalsIgnoreCase(storageType)
                 || "postgresql".equalsIgnoreCase(storageType)) {
-            store = SqliteStorageEngine.open(
+            store = RelationalStorageEngine.open(
                     config.dataDir(),
                     config.bootstrapSuperuserEmail(),
                     config.bootstrapSuperuserPassword(),

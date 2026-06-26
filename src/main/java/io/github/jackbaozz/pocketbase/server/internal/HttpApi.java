@@ -776,6 +776,7 @@ public final class HttpApi implements HttpHandler {
             return Optional.empty();
         }
         return store.verifyToken(token)
+                .filter(claims -> !"file".equals(claims.get("type")) && !"file".equals(claims.get("tokenType")))
                 .map(RequestPrincipal::fromClaims);
     }
 

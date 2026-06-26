@@ -81,7 +81,7 @@ These are the high-value carryovers found in the current tree.
 
 Work these first before adding new broad features.
 
-- [ ] **P3-001 Stabilize and commit current jOOQ work**
+- [x] **P3-001 Stabilize and commit current jOOQ work**
   - Scope: current `FilterToSqlCompiler`, `JooqDatabase`, `SqliteStorageEngine`, and `BehaviorFixturesTest` changes.
   - Acceptance: `mvn -gs settings.xml -s settings.xml test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`, `git diff --check`.
 
