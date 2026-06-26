@@ -85,7 +85,7 @@ Work these first before adding new broad features.
   - Scope: current `FilterToSqlCompiler`, `JooqDatabase`, `SqliteStorageEngine`, and `BehaviorFixturesTest` changes.
   - Acceptance: `mvn -gs settings.xml -s settings.xml test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`, `git diff --check`.
 
-- [ ] **P3-002 Rename and split relational storage**
+- [x] **P3-002 Rename and split relational storage**
   - Scope: split `SqliteStorageEngine` into `RelationalStorageEngine` plus SQLite/MySQL/PostgreSQL dialect/provider helpers.
   - Acceptance: no new code outside engine construction should need to know whether the relational engine is SQLite/MySQL/PostgreSQL.
 
@@ -113,17 +113,17 @@ Goal: make jOOQ the actual relational abstraction, not a partial wrapper around 
 
 #### P3-A01: Storage Engine Refactor
 
-- [ ] Rename `SqliteStorageEngine` to a relational engine name or introduce a wrapper that makes SQLite/MySQL/PostgreSQL explicit.
-- [ ] Extract repository classes for collections, records, logs, auth system collections, files metadata, backups, and settings.
-- [ ] Keep `StorageEngine` as the public boundary used by `HttpApi`.
-- [ ] Move connection/transaction lifecycle into one place.
-- [ ] Add tests proving nested storage calls do not exhaust the SQLite single-connection pool.
-- [ ] Remove storage-specific names from route-level code.
+- [x] Rename `SqliteStorageEngine` to a relational engine name or introduce a wrapper that makes SQLite/MySQL/PostgreSQL explicit.
+- [x] Extract repository classes for collections, records, logs, auth system collections, files metadata, backups, and settings.
+- [x] Keep `StorageEngine` as the public boundary used by `HttpApi`.
+- [x] Move connection/transaction lifecycle into one place.
+- [x] Add tests proving nested storage calls do not exhaust the SQLite single-connection pool.
+- [x] Remove storage-specific names from route-level code.
 
 Acceptance:
 
-- [ ] `LocalPocketBase.start()` can select `json`, `sqlite`, `mysql`, and `postgres` without leaking engine-specific implementation names.
-- [ ] CRUD and batch rollback tests pass on SQLite after the refactor.
+- [x] `LocalPocketBase.start()` can select `json`, `sqlite`, `mysql`, and `postgres` without leaking engine-specific implementation names.
+- [x] CRUD and batch rollback tests pass on SQLite after the refactor.
 
 #### P3-A02: jOOQ Query Builder Coverage
 
