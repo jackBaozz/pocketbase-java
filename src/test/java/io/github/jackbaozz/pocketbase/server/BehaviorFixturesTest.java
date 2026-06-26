@@ -3,6 +3,7 @@ package io.github.jackbaozz.pocketbase.server;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +29,11 @@ public class BehaviorFixturesTest {
 
     @TempDir
     Path dataDir;
+
+    @BeforeAll
+    static void initAll() {
+        TestDatabaseFactory.init();
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -108,7 +114,7 @@ public class BehaviorFixturesTest {
         assertEquals(400, body1.get("code").asInt());
         JsonNode nameError = body1.get("data").get("name");
         assertNotNull(nameError, "Missing validation error for name field");
-        assertEquals("validation_failed", nameError.get("code").asText());
+        assertEquals("validation_invalid_format", nameError.get("code").asText());
 
         // 2. Test valid name with invalid type
         String invalidTypeJson = "{\"name\":\"valid_name\",\"type\":\"invalid_type\"}";
@@ -125,7 +131,7 @@ public class BehaviorFixturesTest {
         assertEquals(400, body2.get("code").asInt());
         JsonNode typeError = body2.get("data").get("type");
         assertNotNull(typeError, "Missing validation error for type field");
-        assertEquals("validation_failed", typeError.get("code").asText());
+        assertEquals("validation_invalid_value", typeError.get("code").asText());
     }
 
     @Test
@@ -166,7 +172,7 @@ public class BehaviorFixturesTest {
         assertEquals(400, createInvalidRes.statusCode());
         JsonNode invalidBody = mapper.readTree(createInvalidRes.body());
         assertTrue(invalidBody.get("data").has("title"));
-        assertEquals("validation_failed", invalidBody.get("data").get("title").get("code").asText());
+        assertEquals("validation_required", invalidBody.get("data").get("title").get("code").asText());
 
         // 3. Create a valid record
         String validRecordJson = "{\"title\":\"My First Post\",\"views\":100}";

@@ -86,39 +86,25 @@ Work these first before adding new broad features.
   - Acceptance: `mvn -gs settings.xml -s settings.xml test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`, `git diff --check`.
 
 - [x] **P3-002 Rename and split relational storage**
-  - Scope: split `SqliteStorageEngine` into `RelationalStorageEngine` plus SQLite/MySQL/PostgreSQL dialect/provider helpers.
-  - Acceptance: no new code outside engine construction should need to know whether the relational engine is SQLite/MySQL/PostgreSQL.
-
-- [ ] **P3-003 Make SQLite storage non-stub for core system endpoints**
+  - Scope: `RelationalStorageEngine`, update initialization.
+- [x] **P3-003 Make SQLite storage non-stub for core system endpoints**
   - Scope: settings, logs detail/stats, crons, backups, file token, OTP, impersonation, `upsertRecord`, `filePath`, `backupFile`.
   - Acceptance: no dummy token strings, no empty successful responses for official routes, no `UnsupportedOperationException` for reachable API routes.
 
-- [ ] **P3-004 Add real MySQL/PostgreSQL fixture gates**
+- [x] **P3-004 Add real MySQL/PostgreSQL fixture gates**
   - Scope: Testcontainers or external DSN profiles for behavior fixtures.
   - Acceptance: skipped only when DSN/container is unavailable, failed when behavior differs.
 
-- [ ] **P3-005 Complete official error envelope and validation text audit**
+- [x] **P3-005 Complete official error envelope and validation text audit**
   - Scope: auth, collection, record, file, settings, SQL, backup, batch, realtime errors.
   - Acceptance: fixtures assert `code`, `status`, `message`, `data`, nested field keys, and route-specific status codes.
 
-- [ ] **P3-006 Make Admin UI route and workflow parity measurable**
+- [x] **P3-006 Make Admin UI route and workflow parity measurable**
   - Scope: Playwright smoke for hash routes, login, collection edit, record edit, settings, logs, OAuth popup, backups, import/export, SQL.
   - Acceptance: browser smoke fails when a major official workflow becomes unreachable.
 
 ## 5. Workstreams
 
-### Stream A: Relational Database And jOOQ Completion
-
-Goal: make jOOQ the actual relational abstraction, not a partial wrapper around handwritten SQL.
-
-#### P3-A01: Storage Engine Refactor
-
-- [x] Rename `SqliteStorageEngine` to a relational engine name or introduce a wrapper that makes SQLite/MySQL/PostgreSQL explicit.
-- [x] Extract repository classes for collections, records, logs, auth system collections, files metadata, backups, and settings.
-- [x] Keep `StorageEngine` as the public boundary used by `HttpApi`.
-- [x] Move connection/transaction lifecycle into one place.
-- [x] Add tests proving nested storage calls do not exhaust the SQLite single-connection pool.
-- [x] Remove storage-specific names from route-level code.
 
 Acceptance:
 
