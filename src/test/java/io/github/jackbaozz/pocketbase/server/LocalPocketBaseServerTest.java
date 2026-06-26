@@ -384,9 +384,20 @@ class LocalPocketBaseServerTest {
                 "smtp", Map.of("password", "******"),
                 "s3", Map.of("secret", "******")
         ));
-        String settingsFile = Files.readString(tempDir.resolve("pb_settings.json"), StandardCharsets.UTF_8);
-        assertTrue(settingsFile.contains("smtp-secret"));
-        assertTrue(settingsFile.contains("storage-secret"));
+        if ("sqlite".equals(System.getProperty("storage"))) {
+            try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:sqlite:" + tempDir.resolve("pocketbase.db").toAbsolutePath());
+                 java.sql.Statement stmt = conn.createStatement();
+                 java.sql.ResultSet rs = stmt.executeQuery("SELECT value FROM _params WHERE key = 'settings'")) {
+                assertTrue(rs.next());
+                String settingsVal = rs.getString(1);
+                assertTrue(settingsVal.contains("smtp-secret"));
+                assertTrue(settingsVal.contains("storage-secret"));
+            }
+        } else {
+            String settingsFile = Files.readString(tempDir.resolve("pb_settings.json"), StandardCharsets.UTF_8);
+            assertTrue(settingsFile.contains("smtp-secret"));
+            assertTrue(settingsFile.contains("storage-secret"));
+        }
 
         JsonNode filteredLogs = request(
                 "GET",

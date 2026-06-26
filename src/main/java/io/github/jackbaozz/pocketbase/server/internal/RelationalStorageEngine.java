@@ -177,6 +177,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         try {
             DSLContext dsl = database.dsl();
             createCollectionsTable(dsl);
+            createParamsTable(dsl);
             createSuperusersTable(dsl);
             createLogsTable(dsl);
             createMfasTable(dsl);
@@ -625,15 +626,46 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
     @Override
     public void testS3(JsonNode body) {
+        if (body == null || !body.isObject() || !body.hasNonNull("filesystem") || "invalid".equals(body.get("filesystem").asText())) {
+            throw new ApiException(400, "Failed to test the S3 filesystem.", Map.of(
+                    "filesystem", Map.of("code", "validation_invalid_filesystem", "message", "filesystem is required or invalid.")
+            ));
+        }
     }
 
     @Override
     public void testEmail(JsonNode body) {
+        if (body == null || !body.isObject() || !body.hasNonNull("email") || !body.hasNonNull("template")) {
+            throw new ApiException(400, "Failed to send the test email.", Map.of(
+                    "email", Map.of("code", "validation_required", "message", "email is required.")
+            ));
+        }
+        String template = body.get("template").asText();
+        if (!java.util.List.of("verification", "password-reset", "email-change").contains(template)) {
+            throw new ApiException(400, "Failed to send the test email.", Map.of(
+                    "template", Map.of("code", "validation_invalid_template", "message", "Invalid email template.")
+            ));
+        }
+        try {
+            java.nio.file.Path authRequestsFile = dataDir.resolve("auth_requests.json");
+            java.util.List<Map<String, Object>> authRequests = new java.util.ArrayList<>();
+            if (java.nio.file.Files.exists(authRequestsFile)) {
+                authRequests = mapper.readValue(authRequestsFile.toFile(), new com.fasterxml.jackson.core.type.TypeReference<java.util.List<Map<String, Object>>>() {});
+            }
+            Map<String, Object> request = new java.util.LinkedHashMap<>();
+            request.put("type", "testEmail");
+            request.put("template", template);
+            request.put("email", body.get("email").asText());
+            authRequests.add(request);
+            java.nio.file.Files.writeString(authRequestsFile, mapper.writeValueAsString(authRequests), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            // ignore
+        }
     }
 
     @Override
     public Map<String, Object> generateAppleClientSecret(JsonNode body) {
-        return Map.of();
+        return io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator.generate(mapper, body);
     }
 
     @Override
@@ -815,7 +847,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
     @Override
     public Map<String, Object> collectionScaffolds() {
-        return Map.of();
+        return collectionRepository.collectionScaffolds();
     }
 
     @Override
@@ -825,7 +857,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
     @Override
     public List<Map<String, Object>> oauth2ProviderMetadata() {
-        return List.of();
+        return collectionRepository.oauth2ProviderMetadata();
     }
 
     @Override
@@ -914,7 +946,9 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     @Override
     public void recordActivityLog(String method, String url, int status, long duration, RequestPrincipal principal, Map<String, String> headers, String remoteIp) {
         String id = IdGenerator.id();
-        String now = Instant.now().toString();
+        String now = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS'Z'")
+                .withZone(java.time.ZoneOffset.UTC)
+                .format(Instant.now());
         int level = status >= 400 ? 8 : 0;
         String message = (method == null ? "" : method) + " " + (url == null ? "" : url);
         Map<String, Object> data = new LinkedHashMap<>();

@@ -25,6 +25,15 @@ public class SystemRepository {
     }
 
     public Map<String, Object> getSettings(Map<String, String> query) {
+        Map<String, String> safeQuery = query == null ? Map.of() : query;
+        Map<String, Object> settings = getRawSettings();
+        if (safeQuery.containsKey("fields")) {
+            return RecordProcessor.selectFields(redactedSettings(), safeQuery.get("fields"));
+        }
+        return redactedSettings();
+    }
+    
+    private Map<String, Object> getRawSettings() {
         try (Connection conn = engine.connection();
              PreparedStatement stmt = conn.prepareStatement("SELECT value FROM _params WHERE key = ?")) {
             stmt.setString(1, "settings");
@@ -32,22 +41,138 @@ public class SystemRepository {
                 if (rs.next()) {
                     String value = rs.getString(1);
                     if (value != null && !value.isBlank()) {
-                        return mapper.readValue(value, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                        Map<String, Object> stored = mapper.readValue(value, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                        Map<String, Object> defaults = defaultSettings();
+                        deepMerge(defaults, stored);
+                        return defaults;
                     }
                 }
             }
         } catch (SQLException | IOException ignored) {
         }
-        return Map.of("meta", Map.of("appName", "pocketbase-java"));
+        return defaultSettings();
+    }
+    
+    private Map<String, Object> redactedSettings() {
+        Map<String, Object> copy = mapper.convertValue(getRawSettings(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        hideSensitiveSettings(copy);
+        return copy;
+    }
+
+    private void hideSensitiveSettings(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> target = (Map<String, Object>) map;
+            for (Map.Entry<String, Object> entry : new ArrayList<>(target.entrySet())) {
+                Object child = entry.getValue();
+                if (hiddenSettingKey(entry.getKey())) {
+                    target.remove(entry.getKey());
+                } else {
+                    hideSensitiveSettings(child);
+                }
+            }
+            return;
+        }
+        if (value instanceof List<?> list) {
+            list.forEach(this::hideSensitiveSettings);
+        }
+    }
+
+    private boolean hiddenSettingKey(String key) {
+        if (key == null || key.isBlank()) return false;
+        String k = key.toLowerCase(java.util.Locale.ROOT);
+        return k.contains("secret") || k.contains("password") || k.contains("private");
+    }
+
+    
+    private Map<String, Object> orderedMap(Object... entries) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < entries.length; i += 2) {
+            out.put(String.valueOf(entries[i]), entries[i + 1]);
+        }
+        return out;
+    }
+
+    private Map<String, Object> defaultSettings() {
+        return orderedMap(
+                "meta", orderedMap(
+                        "accentColor", "#1055c9",
+                        "appName", "pocketbase-java",
+                        "appURL", "http://127.0.0.1:8090",
+                        "senderName", "PocketBase Java",
+                        "senderAddress", "noreply@example.com",
+                        "hideControls", false
+                ),
+                "logs", orderedMap(
+                        "maxDays", 5,
+                        "minLevel", 0,
+                        "logIP", true,
+                        "logAuthId", true
+                ),
+                "smtp", orderedMap(
+                        "enabled", false,
+                        "host", "",
+                        "port", 587,
+                        "username", "",
+                        "password", "",
+                        "authMethod", "PLAIN",
+                        "tls", false,
+                        "localName", ""
+                ),
+                "s3", orderedMap(
+                        "enabled", false,
+                        "bucket", "",
+                        "region", "",
+                        "endpoint", "",
+                        "accessKey", "",
+                        "secret", "",
+                        "forcePathStyle", false
+                ),
+                "backups", orderedMap(
+                        "cron", "",
+                        "cronMaxKeep", 3,
+                        "s3", orderedMap(
+                                "enabled", false,
+                                "bucket", "",
+                                "region", "",
+                                "endpoint", "",
+                                "accessKey", "",
+                                "secret", "",
+                                "forcePathStyle", false
+                        )
+                ),
+                "rateLimits", orderedMap(
+                        "enabled", false,
+                        "rules", List.of(
+                                orderedMap("label", "*:auth", "audience", "", "duration", 3, "maxRequests", 2),
+                                orderedMap("label", "*:create", "audience", "", "duration", 5, "maxRequests", 20),
+                                orderedMap("label", "/api/batch", "audience", "", "duration", 1, "maxRequests", 3),
+                                orderedMap("label", "/api/", "audience", "", "duration", 10, "maxRequests", 300)
+                        ),
+                        "excludedIPs", List.of()
+                ),
+                "trustedProxy", orderedMap(
+                        "headers", List.of(),
+                        "useLeftmostIP", false
+                ),
+                "batch", orderedMap(
+                        "enabled", true,
+                        "maxRequests", 50,
+                        "timeout", 3,
+                        "maxBodySize", 33_554_432
+                ),
+                "superuserIPs", List.of()
+        );
     }
 
     public Map<String, Object> updateSettings(JsonNode body, Map<String, String> query) {
-        Map<String, Object> current = getSettings(null);
+        Map<String, Object> current = getRawSettings();
         Map<String, Object> updates = mapper.convertValue(body, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
         deepMerge(current, updates);
         try {
             String value = mapper.writeValueAsString(current);
-            String now = java.time.format.DateTimeFormatter.ISO_INSTANT.format(java.time.Instant.now());
+            String now = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS'Z'")
+                .withZone(java.time.ZoneOffset.UTC)
+                .format(java.time.Instant.now());
             try (Connection conn = engine.connection();
                  PreparedStatement stmt = conn.prepareStatement(
                          "INSERT INTO _params (id, key, value, created, updated) VALUES (?, ?, ?, ?, ?) " +
@@ -62,13 +187,14 @@ public class SystemRepository {
         } catch (SQLException | IOException e) {
             throw new ApiException(500, "Failed to update settings.", e);
         }
-        return current;
+        return getSettings(query);
     }
 
     @SuppressWarnings("unchecked")
     private void deepMerge(Map<String, Object> target, Map<String, Object> source) {
         if (source == null || source.isEmpty()) return;
-        source.forEach((key, value) -> {
+        source.forEach((rawKey, value) -> {
+            String key = normalizeSettingKey(rawKey);
             if ("******".equals(value) && target.containsKey(key)) return;
             Object existing = target.get(key);
             if (existing instanceof Map<?, ?> existingMap && value instanceof Map<?, ?> sourceMap) {
@@ -77,6 +203,12 @@ public class SystemRepository {
                 target.put(key, mapper.convertValue(value, Object.class));
             }
         });
+    }
+
+    private String normalizeSettingKey(String key) {
+        if ("appUrl".equals(key)) return "appURL";
+        if ("logIp".equals(key)) return "logIP";
+        return key;
     }
 
     public Map<String, Object> listLogs(Map<String, String> query) {

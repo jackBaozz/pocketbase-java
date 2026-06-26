@@ -23,6 +23,94 @@ import java.util.regex.Pattern;
 public class CollectionRepository {
     private final RelationalStorageEngine engine;
     private final ObjectMapper mapper;
+    
+    private record OAuth2ProviderMetadata(String name, String displayName, String logo) {
+    }
+    
+    private Map<String, Object> collectionMap(CollectionSchema collection) {
+        return mapper.convertValue(copyCollection(collection), new TypeReference<>() {});
+    }
+
+    private CollectionSchema copyCollection(CollectionSchema collection) {
+        return mapper.convertValue(mapper.valueToTree(collection), CollectionSchema.class);
+    }
+    
+    private Map<String, Object> orderedMap(Object... entries) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < entries.length; i += 2) {
+            out.put(String.valueOf(entries[i]), entries[i + 1]);
+        }
+        return out;
+    }
+
+    private CollectionSchema scaffoldCollection(String type) {
+        CollectionSchema collection = new CollectionSchema();
+        collection.id = "";
+        collection.name = "";
+        collection.type = type;
+        collection.system = false;
+        collection.fields = new ArrayList<>();
+        if ("auth".equals(type)) {
+            collection.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
+            collection.fields.add(new FieldSchema("field_password", "password", "password", true, false, true));
+            collection.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
+        }
+        return collection;
+    }
+
+    public Map<String, Object> collectionScaffolds() {
+        Map<String, Object> base = collectionMap(scaffoldCollection("base"));
+        Map<String, Object> auth = collectionMap(scaffoldCollection("auth"));
+        Map<String, Object> view = collectionMap(scaffoldCollection("view"));
+        view.put("viewQuery", "");
+        return orderedMap(
+                "base", base,
+                "auth", auth,
+                "view", view
+        );
+    }
+    
+    public List<Map<String, Object>> oauth2ProviderMetadata() {
+        return List.of(
+            new OAuth2ProviderMetadata("apple", "Apple", ""),
+            new OAuth2ProviderMetadata("bitbucket", "Bitbucket", ""),
+            new OAuth2ProviderMetadata("box", "Box", ""),
+            new OAuth2ProviderMetadata("discord", "Discord", ""),
+            new OAuth2ProviderMetadata("facebook", "Facebook", ""),
+            new OAuth2ProviderMetadata("gitea", "Gitea", ""),
+            new OAuth2ProviderMetadata("gitee", "Gitee", ""),
+            new OAuth2ProviderMetadata("github", "GitHub", ""),
+            new OAuth2ProviderMetadata("gitlab", "GitLab", ""),
+            new OAuth2ProviderMetadata("google", "Google", ""),
+            new OAuth2ProviderMetadata("instagram", "Instagram", ""),
+            new OAuth2ProviderMetadata("kakao", "Kakao", ""),
+            new OAuth2ProviderMetadata("lark", "Lark", ""),
+            new OAuth2ProviderMetadata("linear", "Linear", ""),
+            new OAuth2ProviderMetadata("livechat", "LiveChat", ""),
+            new OAuth2ProviderMetadata("mailcow", "mailcow", ""),
+            new OAuth2ProviderMetadata("microsoft", "Microsoft", ""),
+            new OAuth2ProviderMetadata("monday", "monday.com", ""),
+            new OAuth2ProviderMetadata("notion", "Notion", ""),
+            new OAuth2ProviderMetadata("oidc", "OIDC", ""),
+            new OAuth2ProviderMetadata("patreon", "Patreon", ""),
+            new OAuth2ProviderMetadata("planningcenter", "Planning Center", ""),
+            new OAuth2ProviderMetadata("spotify", "Spotify", ""),
+            new OAuth2ProviderMetadata("strava", "Strava", ""),
+            new OAuth2ProviderMetadata("trakt", "Trakt", ""),
+            new OAuth2ProviderMetadata("twitch", "Twitch", ""),
+            new OAuth2ProviderMetadata("twitter", "Twitter", ""),
+            new OAuth2ProviderMetadata("vk", "VK", ""),
+            new OAuth2ProviderMetadata("wakatime", "WakaTime", ""),
+            new OAuth2ProviderMetadata("yandex", "Yandex", "")
+        ).stream()
+                .map(provider -> orderedMap(
+                        "name", provider.name(),
+                        "displayName", provider.displayName(),
+                        "logo", provider.logo()
+                ))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+
 
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,62}$");
 
