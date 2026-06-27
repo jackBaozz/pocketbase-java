@@ -44,6 +44,8 @@ public class FileRepository extends BaseRepository {
     }
 
     public Optional<RequestPrincipal> verifyFileToken(String token) {
-        return Optional.empty();
+        var claims = tokenService.verify(token);
+        if (claims.isEmpty()) return Optional.empty();
+        return Optional.of(RequestPrincipal.fromClaims(claims.get()));
     }
 }

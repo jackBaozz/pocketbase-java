@@ -18,7 +18,7 @@ public record RequestPrincipal(
         claims = claims == null ? Map.of() : Map.copyOf(claims);
     }
 
-    static RequestPrincipal fromClaims(Map<String, Object> claims) {
+    public static RequestPrincipal fromClaims(Map<String, Object> claims) {
         Map<String, Object> safeClaims = claims == null ? Map.of() : new LinkedHashMap<>(claims);
         return new RequestPrincipal(
                 text(safeClaims.get("sub")),
