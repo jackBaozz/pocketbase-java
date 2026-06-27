@@ -3,19 +3,28 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jackbaozz.pocketbase.server.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class SettingsRepository extends BaseRepository {
 
-    public SettingsRepository(JooqDatabase database, ObjectMapper mapper) {
+    private final Path dataDir;
+
+    public SettingsRepository(JooqDatabase database, ObjectMapper mapper, Path dataDir) {
         super(database, mapper);
+        this.dataDir = dataDir;
     }
 
     public Map<String, Object> getSettings(Map<String, String> query) {
@@ -74,7 +83,7 @@ public class SettingsRepository extends BaseRepository {
 
     public void testS3(JsonNode body) {
         if (body == null || !body.isObject() || !body.hasNonNull("filesystem") || "invalid".equals(body.get("filesystem").asText())) {
-            throw new io.github.jackbaozz.pocketbase.server.ApiException(400, "Failed to test the S3 filesystem.", Map.of(
+            throw new ApiException(400, "Failed to test the S3 filesystem.", Map.of(
                     "filesystem", Map.of("code", "validation_invalid_filesystem", "message", "filesystem is required or invalid.")
             ));
         }
@@ -82,34 +91,34 @@ public class SettingsRepository extends BaseRepository {
 
     public void testEmail(JsonNode body) {
         if (body == null || !body.isObject() || !body.hasNonNull("email") || !body.hasNonNull("template")) {
-            throw new io.github.jackbaozz.pocketbase.server.ApiException(400, "Failed to send the test email.", Map.of(
+            throw new ApiException(400, "Failed to send the test email.", Map.of(
                     "email", Map.of("code", "validation_required", "message", "email is required.")
             ));
         }
         String template = body.get("template").asText();
-        if (!java.util.List.of("verification", "password-reset", "email-change").contains(template)) {
-            throw new io.github.jackbaozz.pocketbase.server.ApiException(400, "Failed to send the test email.", Map.of(
+        if (!List.of("verification", "password-reset", "email-change").contains(template)) {
+            throw new ApiException(400, "Failed to send the test email.", Map.of(
                     "template", Map.of("code", "validation_invalid_template", "message", "Invalid email template.")
             ));
         }
         try {
-            java.nio.file.Path authRequestsFile = dataDir.resolve("auth_requests.json");
-            java.util.List<Map<String, Object>> authRequests = new java.util.ArrayList<>();
-            if (java.nio.file.Files.exists(authRequestsFile)) {
-                authRequests = mapper.readValue(authRequestsFile.toFile(), new com.fasterxml.jackson.core.type.TypeReference<java.util.List<Map<String, Object>>>() {});
+            Path authRequestsFile = dataDir.resolve("auth_requests.json");
+            List<Map<String, Object>> authRequests = new ArrayList<>();
+            if (Files.exists(authRequestsFile)) {
+                authRequests = mapper.readValue(authRequestsFile.toFile(), new TypeReference<List<Map<String, Object>>>() {});
             }
-            Map<String, Object> request = new java.util.LinkedHashMap<>();
+            Map<String, Object> request = new LinkedHashMap<>();
             request.put("type", "testEmail");
             request.put("template", template);
             request.put("email", body.get("email").asText());
             authRequests.add(request);
-            java.nio.file.Files.writeString(authRequestsFile, mapper.writeValueAsString(authRequests), java.nio.charset.StandardCharsets.UTF_8);
+            Files.writeString(authRequestsFile, mapper.writeValueAsString(authRequests), java.nio.charset.StandardCharsets.UTF_8);
         } catch (java.io.IOException e) {
             // ignore
         }
     }
 
     public Map<String, Object> generateAppleClientSecret(JsonNode body) {
-        return io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator.generate(mapper, body);
+        return AppleClientSecretGenerator.generate(mapper, body);
     }
 }

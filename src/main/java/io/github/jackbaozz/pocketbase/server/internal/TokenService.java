@@ -13,19 +13,19 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-final class TokenService {
+public final class TokenService {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
     private final ObjectMapper mapper;
     private final byte[] secret;
 
-    TokenService(ObjectMapper mapper, String secret) {
+    public TokenService(ObjectMapper mapper, String secret) {
         this.mapper = mapper;
         this.secret = secret.getBytes(StandardCharsets.UTF_8);
     }
 
-    String create(Map<String, Object> claims, Duration ttl) {
+    public String create(Map<String, Object> claims, Duration ttl) {
         long now = Instant.now().getEpochSecond();
         Map<String, Object> header = new LinkedHashMap<>();
         header.put("alg", "HS256");
@@ -41,7 +41,7 @@ final class TokenService {
         return head + "." + body + "." + signature;
     }
 
-    Optional<Map<String, Object>> verify(String token) {
+    public Optional<Map<String, Object>> verify(String token) {
         if (token == null || token.isBlank()) {
             return Optional.empty();
         }

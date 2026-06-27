@@ -3,11 +3,11 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jackbaozz.pocketbase.server.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.repository.*;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
-import io.github.jackbaozz.pocketbase.server.model.UploadedFile;
+import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Table;
@@ -69,7 +69,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         this.recordRepository = new RecordRepository(database, mapper, collectionRepository, this);
         this.authRepository = new AuthRepository(database, mapper, tokenService, this, recordRepository);
         this.logRepository = new LogRepository(database, mapper);
-        this.settingsRepository = new SettingsRepository(database, mapper);
+        this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
         this.backupRepository = new BackupRepository(database, mapper, dataDir);
         this.fileRepository = new FileRepository(database, mapper, dataDir, tokenService);
 
@@ -451,6 +451,14 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         );
     }
 
+
+    private String qi(String identifier) {
+        return database.quoteIdentifier(identifier);
+    }
+
+    private Connection connection() throws SQLException {
+        return database.connection();
+    }
 
     private List<Map<String, Object>> recordsForRule(String collectionName) {
         CollectionSchema collection = getCollection(collectionName);

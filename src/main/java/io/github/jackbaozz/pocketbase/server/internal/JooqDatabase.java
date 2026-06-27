@@ -54,7 +54,7 @@ public final class JooqDatabase implements AutoCloseable {
         this.dataSource = dataSource;
     }
 
-    static JooqDatabase open(Engine engine, Path dataDir) {
+    public static JooqDatabase open(Engine engine, Path dataDir) {
         HikariConfig config = new HikariConfig();
         config.setPoolName("PocketBaseJooq-" + engine.name().toLowerCase(Locale.ROOT));
         config.setMaximumPoolSize(engine == Engine.SQLITE ? 1 : 10);
@@ -108,19 +108,19 @@ public final class JooqDatabase implements AutoCloseable {
         return null;
     }
 
-    Engine engine() {
+    public Engine engine() {
         return engine;
     }
 
-    SQLDialect dialect() {
+    public SQLDialect dialect() {
         return engine.dialect();
     }
 
-    String quoteIdentifier(String identifier) {
+    public String quoteIdentifier(String identifier) {
         return dsl().render(DSL.name(identifier));
     }
 
-    DSLContext dsl() {
+    public DSLContext dsl() {
         Connection current = transactionConnection.get();
         if (current != null) {
             return DSL.using(current, dialect());
@@ -128,7 +128,7 @@ public final class JooqDatabase implements AutoCloseable {
         return DSL.using(dataSource, dialect());
     }
 
-    DSLContext dsl(Connection conn) {
+    public DSLContext dsl(Connection conn) {
         return DSL.using(conn, dialect());
     }
 
@@ -150,12 +150,12 @@ public final class JooqDatabase implements AutoCloseable {
         );
     }
 
-    Connection connection() throws SQLException {
+    public Connection connection() throws SQLException {
         Connection current = transactionConnection.get();
         return current == null ? dataSource.getConnection() : closeShield(current);
     }
 
-    void closeIfStandalone(Connection conn) throws SQLException {
+    public void closeIfStandalone(Connection conn) throws SQLException {
         if (transactionConnection.get() != conn) {
             conn.close();
         }
@@ -178,7 +178,7 @@ public final class JooqDatabase implements AutoCloseable {
         );
     }
 
-    <T> T transactional(Supplier<T> action) {
+    public <T> T transactional(Supplier<T> action) {
         if (transactionConnection.get() != null) {
             return action.get();
         }

@@ -2,26 +2,26 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import java.security.SecureRandom;
 
-final class IdGenerator {
+public final class IdGenerator {
     private static final char[] ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789".toCharArray();
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private IdGenerator() {
     }
 
-    static String id() {
+    public static String id() {
         return random(15);
     }
 
-    static String prefixed(String prefix) {
+    public static String prefixed(String prefix) {
         return prefix + random(12);
     }
 
-    static String suffix() {
+    public static String suffix() {
         return random(10);
     }
 
-    static String digits(int length) {
+    public static String digits(int length) {
         int size = Math.max(1, length);
         char[] value = new char[size];
         for (int i = 0; i < value.length; i++) {

@@ -6,7 +6,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 
-final class PasswordHasher {
+public final class PasswordHasher {
     private static final String ALGORITHM = "PBKDF2WithHmacSHA256";
     private static final int ITERATIONS = 120_000;
     private static final int KEY_LENGTH = 256;
@@ -15,7 +15,7 @@ final class PasswordHasher {
     private PasswordHasher() {
     }
 
-    static String hash(String password) {
+    public static String hash(String password) {
         if (password == null || password.isBlank()) {
             throw new IllegalArgumentException("password must not be blank");
         }
@@ -25,7 +25,7 @@ final class PasswordHasher {
         return "pbkdf2_sha256$" + ITERATIONS + "$" + encode(salt) + "$" + encode(hash);
     }
 
-    static boolean verify(String password, String encoded) {
+    public static boolean verify(String password, String encoded) {
         if (password == null || encoded == null || !encoded.startsWith("pbkdf2_sha256$")) {
             return false;
         }

@@ -2,7 +2,7 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jackbaozz.pocketbase.server.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.FieldValidator;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
@@ -10,7 +10,7 @@ import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
-import io.github.jackbaozz.pocketbase.server.model.UploadedFile;
+import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
 import org.jooq.Field;
 import org.jooq.exception.DataAccessException;
 

@@ -1,7 +1,7 @@
 package io.github.jackbaozz.pocketbase.server.internal.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jackbaozz.pocketbase.server.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import org.jooq.Field;
 import org.jooq.Table;

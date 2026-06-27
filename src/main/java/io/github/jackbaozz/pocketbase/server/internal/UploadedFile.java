@@ -3,8 +3,8 @@ package io.github.jackbaozz.pocketbase.server.internal;
 /**
  * Multipart uploaded file kept in memory for the current request.
  */
-record UploadedFile(String fieldName, String originalFilename, String contentType, byte[] bytes) {
-    UploadedFile {
+public record UploadedFile(String fieldName, String originalFilename, String contentType, byte[] bytes) {
+    public UploadedFile {
         if (fieldName == null || fieldName.isBlank()) {
             throw new IllegalArgumentException("fieldName must not be blank");
         }

@@ -14,14 +14,14 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-final class AppleClientSecretGenerator {
+public final class AppleClientSecretGenerator {
     private static final int MAX_DURATION_SECONDS = 15_777_000;
     private static final String APPLE_AUDIENCE = "https://appleid.apple.com";
 
     private AppleClientSecretGenerator() {
     }
 
-    static Map<String, Object> generate(ObjectMapper mapper, JsonNode body) {
+    public static Map<String, Object> generate(ObjectMapper mapper, JsonNode body) {
         if (body == null || !body.isObject()) {
             throw new ApiException(400, "Invalid client secret data.");
         }

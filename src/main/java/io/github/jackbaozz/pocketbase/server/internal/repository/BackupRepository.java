@@ -2,7 +2,7 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.jackbaozz.pocketbase.server.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 
 import java.io.IOException;
