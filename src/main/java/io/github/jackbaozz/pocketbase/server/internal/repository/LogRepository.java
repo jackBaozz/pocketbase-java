@@ -5,14 +5,11 @@ import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
+import org.jooq.Record;
+import org.jooq.Result;
 import org.jooq.exception.DataAccessException;
 
 import java.io.IOException;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -36,53 +33,40 @@ public class LogRepository extends BaseRepository {
             if (safeQuery.containsKey("perPage")) perPage = Integer.parseInt(safeQuery.get("perPage"));
         } catch (NumberFormatException ignored) {}
 
-        try (Connection conn = database.connection()) {
-            int total = 0;
-            try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery("SELECT count(*) FROM _logs")) {
-                if (rs.next()) total = rs.getInt(1);
-            }
+        try {
+            int total = database.dsl().fetchCount(qt("_logs"));
 
             int offset = (page - 1) * perPage;
+            Result<? extends Record> records = database.dsl()
+                    .selectFrom(qt("_logs"))
+                    .orderBy(qfs("created").desc())
+                    .limit(perPage)
+                    .offset(offset)
+                    .fetch();
+
             List<Map<String, Object>> items = new ArrayList<>();
-            try (PreparedStatement stmt = conn.prepareStatement("SELECT * FROM _logs ORDER BY created DESC LIMIT ? OFFSET ?")) {
-                stmt.setInt(1, perPage);
-                stmt.setInt(2, offset);
-                try (ResultSet rs = stmt.executeQuery()) {
-                    while (rs.next()) {
-                        Map<String, Object> log = new LinkedHashMap<>();
-                        log.put("id", rs.getString("id"));
-                        log.put("created", rs.getString("created"));
-                        log.put("updated", rs.getString("updated"));
-                        log.put("level", rs.getInt("level"));
-                        log.put("message", rs.getString("message"));
-                        String dataStr = rs.getString("data");
-                        if (dataStr != null) {
-                            try {
-                                log.put("data", mapper.readValue(dataStr, Map.class));
-                            } catch (IOException e) {
-                                log.put("data", Map.of());
-                            }
-                        }
-                        items.add(log);
-                    }
-                }
+            for (Record r : records) {
+                items.add(recordToLogMap(r));
             }
+
             int totalPages = (int) Math.ceil((double) total / perPage);
             return Map.of("items", items, "page", page, "perPage", perPage, "totalItems", total, "totalPages", totalPages);
-        } catch (SQLException e) {
+        } catch (DataAccessException e) {
             return Map.of("items", List.of(), "page", 1, "perPage", 30, "totalItems", 0, "totalPages", 0);
         }
     }
 
     public List<Map<String, Object>> logStats(Map<String, String> query) {
         List<Map<String, Object>> result = new ArrayList<>();
-        try (Connection conn = database.connection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT created FROM _logs")) {
+        try {
+            Result<? extends Record> records = database.dsl()
+                    .select(qfs("created"))
+                    .from(qt("_logs"))
+                    .fetch();
+
             Map<String, Integer> counts = new LinkedHashMap<>();
-            while (rs.next()) {
-                String created = rs.getString("created");
+            for (Record r : records) {
+                String created = r.get(qfs("created"));
                 if (created != null && created.length() >= 13) {
                     String hour = created.substring(0, 13) + ":00:00.000Z";
                     counts.put(hour, counts.getOrDefault(hour, 0) + 1);
@@ -96,39 +80,43 @@ public class LogRepository extends BaseRepository {
                         bucket.put("total", e.getValue());
                         result.add(bucket);
                     });
-        } catch (SQLException ignored) {
+        } catch (DataAccessException ignored) {
         }
         return result;
     }
 
     public Map<String, Object> getLog(String id, Map<String, String> query) {
-        try (Connection conn = database.connection();
-             PreparedStatement stmt = conn.prepareStatement("SELECT * FROM _logs WHERE id = ?")) {
-            stmt.setString(1, id);
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    Map<String, Object> log = new LinkedHashMap<>();
-                    log.put("id", rs.getString("id"));
-                    log.put("created", rs.getString("created"));
-                    log.put("updated", rs.getString("updated"));
-                    log.put("level", rs.getInt("level"));
-                    log.put("message", rs.getString("message"));
-                    String dataStr = rs.getString("data");
-                    if (dataStr != null) {
-                        try {
-                            log.put("data", mapper.readValue(dataStr, Map.class));
-                        } catch (IOException e) {
-                            log.put("data", Map.of());
-                        }
-                    } else {
-                        log.put("data", Map.of());
-                    }
-                    return log;
-                }
+        try {
+            Record r = database.dsl()
+                    .selectFrom(qt("_logs"))
+                    .where(qfs("id").eq(id))
+                    .fetchOne();
+            if (r != null) {
+                return recordToLogMap(r);
             }
-        } catch (SQLException ignored) {
+        } catch (DataAccessException ignored) {
         }
         throw new ApiException(404, "Log not found.");
+    }
+
+    private Map<String, Object> recordToLogMap(Record r) {
+        Map<String, Object> log = new LinkedHashMap<>();
+        log.put("id", r.get(qfs("id")));
+        log.put("created", r.get(qfs("created")));
+        log.put("updated", r.get(qfs("updated")));
+        log.put("level", r.get(qfi("level")));
+        log.put("message", r.get(qfs("message")));
+        String dataStr = r.get(qfs("data"));
+        if (dataStr != null) {
+            try {
+                log.put("data", mapper.readValue(dataStr, Map.class));
+            } catch (IOException e) {
+                log.put("data", Map.of());
+            }
+        } else {
+            log.put("data", Map.of());
+        }
+        return log;
     }
 
     public void recordActivityLog(String method, String url, int status, long duration, RequestPrincipal principal, Map<String, String> headers, String remoteIp) {

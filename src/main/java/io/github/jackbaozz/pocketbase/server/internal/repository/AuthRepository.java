@@ -11,10 +11,6 @@ import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.internal.TokenService;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -40,14 +36,8 @@ public class AuthRepository extends BaseRepository {
         String email = body.get("email").asText();
         String password = body.get("password").asText();
 
-        try (Connection conn = database.connection();
-             PreparedStatement check = conn.prepareStatement("SELECT count(*) FROM _superusers");
-             ResultSet rs = check.executeQuery()) {
-            if (rs.next() && rs.getInt(1) > 0) {
-                throw new ApiException(403, "Superuser already exists.");
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("superuser bootstrap check failed", e);
+        if (database.dsl().fetchCount(qt("_superusers")) > 0) {
+            throw new ApiException(403, "Superuser already exists.");
         }
 
         String id = "su_" + IdGenerator.id();
@@ -55,19 +45,11 @@ public class AuthRepository extends BaseRepository {
         String tokenKey = IdGenerator.id();
         String now = Instant.now().toString();
 
-        try (Connection conn = database.connection();
-             PreparedStatement insert = conn.prepareStatement(
-                     "INSERT INTO _superusers(id, email, passwordHash, tokenKey, created, updated) VALUES(?,?,?,?,?,?)")) {
-            insert.setString(1, id);
-            insert.setString(2, email);
-            insert.setString(3, passHash);
-            insert.setString(4, tokenKey);
-            insert.setString(5, now);
-            insert.setString(6, now);
-            insert.executeUpdate();
-        } catch (SQLException e) {
-            throw new ApiException(400, "Failed to bootstrap superuser: " + e.getMessage());
-        }
+        database.dsl()
+                .insertInto(qt("_superusers"))
+                .columns(qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"), qfs("created"), qfs("updated"))
+                .values(id, email, passHash, tokenKey, now, now)
+                .execute();
 
         Map<String, Object> record = Map.of(
                 "id", id,
@@ -83,44 +65,41 @@ public class AuthRepository extends BaseRepository {
         String password = body.get("password").asText();
 
         if (SUPERUSERS.equals(collection)) {
-            try (Connection conn = database.connection();
-                 PreparedStatement select = conn.prepareStatement(
-                         "SELECT id, email, passwordHash, tokenKey, created, updated FROM _superusers WHERE email = ?")) {
-                select.setString(1, identity);
-                try (ResultSet rs = select.executeQuery()) {
-                    if (rs.next()) {
-                        String hash = rs.getString("passwordHash");
-                        if (PasswordHasher.verify(password, hash)) {
-                            String tokenKey = rs.getString("tokenKey");
-                            String id = rs.getString("id");
-                            String email = rs.getString("email");
-                            String created = rs.getString("created");
-                            String updated = rs.getString("updated");
+            var record = database.dsl()
+                    .select(qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"), qfs("created"), qfs("updated"))
+                    .from(qt("_superusers"))
+                    .where(qfs("email").eq(identity))
+                    .fetchOne();
 
-                            Map<String, Object> claims = Map.of(
-                                    "sub", id,
-                                    "email", email,
-                                    "type", "superuser",
-                                    "collectionId", "pbc_superusers",
-                                    "collectionName", SUPERUSERS,
-                                    "tokenType", "auth",
-                                    "tokenKey", tokenKey
-                            );
-                            String token = tokenService.create(claims, Duration.ofDays(7));
-                            Map<String, Object> record = Map.of(
-                                    "id", id,
-                                    "email", email,
-                                    "collectionId", "pbc_superusers",
-                                    "collectionName", SUPERUSERS,
-                                    "created", created,
-                                    "updated", updated
-                            );
-                            return Map.of("token", token, "record", record);
-                        }
-                    }
+            if (record != null) {
+                String hash = record.getValue(qfs("passwordHash"));
+                if (PasswordHasher.verify(password, hash)) {
+                    String tokenKey = record.getValue(qfs("tokenKey"));
+                    String id = record.getValue(qfs("id"));
+                    String email = record.getValue(qfs("email"));
+                    String created = record.getValue(qfs("created"));
+                    String updated = record.getValue(qfs("updated"));
+
+                    Map<String, Object> claims = Map.of(
+                            "sub", id,
+                            "email", email,
+                            "type", "superuser",
+                            "collectionId", "pbc_superusers",
+                            "collectionName", SUPERUSERS,
+                            "tokenType", "auth",
+                            "tokenKey", tokenKey
+                    );
+                    String token = tokenService.create(claims, Duration.ofDays(7));
+                    Map<String, Object> rec = Map.of(
+                            "id", id,
+                            "email", email,
+                            "collectionId", "pbc_superusers",
+                            "collectionName", SUPERUSERS,
+                            "created", created,
+                            "updated", updated
+                    );
+                    return Map.of("token", token, "record", rec);
                 }
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
             }
             throw new ApiException(400, "Invalid identity or password.");
         }

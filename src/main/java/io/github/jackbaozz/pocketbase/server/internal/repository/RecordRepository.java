@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.FieldValidator;
+import io.github.jackbaozz.pocketbase.server.internal.FilterToSqlCompiler;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
@@ -12,13 +13,10 @@ import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
 import org.jooq.Field;
+import org.jooq.SortField;
+import org.jooq.impl.DSL;
 import org.jooq.exception.DataAccessException;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,70 +38,73 @@ public class RecordRepository extends BaseRepository {
         collectionRepository.requireCollectionExists(collection);
         CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
 
-        Connection conn = null;
-        try {
-            conn = database.connection();
-            try (PreparedStatement select = conn.prepareStatement("SELECT * FROM " + qi(colSchema.name) + " WHERE id = ?")) {
-                select.setString(1, id);
-                try (ResultSet rs = select.executeQuery()) {
-                    if (rs.next()) {
-                        ResultSetMetaData md = rs.getMetaData();
-                        int columns = md.getColumnCount();
-                        Map<String, Object> row = new LinkedHashMap<>();
-                        for (int i = 1; i <= columns; i++) {
-                            row.put(md.getColumnLabel(i), rs.getObject(i));
-                        }
-                        return RecordProcessor.process(storeContext, colSchema, row, false, query, principal);
-                    }
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        } finally {
-            if (conn != null) {
-                try {
-                    database.closeIfStandalone(conn);
-                } catch (SQLException ignored) {
-                }
-            }
+        org.jooq.Record record = database.dsl()
+                .selectFrom(qt(colSchema.name))
+                .where(qfs("id").eq(id))
+                .fetchOne();
+        if (record == null) {
+            throw new ApiException(404, "Record not found.");
         }
-        throw new ApiException(404, "Record not found.");
+        return RecordProcessor.process(storeContext, colSchema, record.intoMap(), false, query, principal);
     }
 
     public Map<String, Object> listRecords(String collection, Map<String, String> query, RequestPrincipal principal) {
         collectionRepository.requireCollectionExists(collection);
         CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
 
-        Connection conn = null;
-        try {
-            conn = database.connection();
-            try (PreparedStatement select = conn.prepareStatement("SELECT * FROM " + qi(colSchema.name));
-                 ResultSet rs = select.executeQuery()) {
-                List<Map<String, Object>> items = new ArrayList<>();
-                ResultSetMetaData md = rs.getMetaData();
-                int columns = md.getColumnCount();
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int i = 1; i <= columns; i++) {
-                        row.put(md.getColumnLabel(i), rs.getObject(i));
-                    }
-                    Map<String, Object> processed = RecordProcessor.process(storeContext, colSchema, row, false, query, principal);
-                    if (processed != null && storeContext.canView(colSchema, processed, query, principal)) {
-                        items.add(processed);
-                    }
-                }
-                return Map.of("items", items, "page", 1, "perPage", 100, "totalItems", items.size(), "totalPages", 1);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        } finally {
-            if (conn != null) {
-                try {
-                    database.closeIfStandalone(conn);
-                } catch (SQLException ignored) {
+        // Filter support
+        String filter = query.getOrDefault("filter", "");
+        org.jooq.Condition condition = null;
+        if (filter != null && !filter.isBlank()) {
+            String filterSql = FilterToSqlCompiler.compile(filter);
+            condition = DSL.condition(filterSql);
+        }
+
+        // Sort support: parse sort string like "-created,title" where "-" prefix means DESC
+        String sort = query.getOrDefault("sort", "");
+        List<SortField<?>> sortFields = new ArrayList<>();
+        if (sort != null && !sort.isBlank()) {
+            for (String part : sort.split(",")) {
+                String trimmed = part.trim();
+                if (trimmed.isEmpty()) continue;
+                if (trimmed.startsWith("-")) {
+                    String fieldName = trimmed.substring(1);
+                    sortFields.add(qf(fieldName).desc());
+                } else {
+                    sortFields.add(qf(trimmed).asc());
                 }
             }
         }
+
+        // Pagination
+        int page = 1;
+        int perPage = 100;
+        if (query.containsKey("page")) {
+            try { page = Math.max(1, Integer.parseInt(query.get("page"))); } catch (NumberFormatException ignored) {}
+        }
+        if (query.containsKey("perPage")) {
+            try { perPage = Math.max(1, Integer.parseInt(query.get("perPage"))); } catch (NumberFormatException ignored) {}
+        }
+
+        // Build and execute query
+        org.jooq.SelectConditionStep<?> selectWithCondition = condition != null
+                ? database.dsl().selectFrom(qt(colSchema.name)).where(condition)
+                : database.dsl().selectFrom(qt(colSchema.name)).where(DSL.trueCondition());
+
+        org.jooq.SelectSeekStepN<?> selectWithSort = sortFields.isEmpty()
+                ? selectWithCondition.orderBy(sortFields)
+                : selectWithCondition.orderBy(sortFields);
+
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (org.jooq.Record record : selectWithSort.limit(perPage).offset((page - 1) * perPage).fetch()) {
+            Map<String, Object> processed = RecordProcessor.process(storeContext, colSchema, record.intoMap(), false, query, principal);
+            if (processed != null && storeContext.canView(colSchema, processed, query, principal)) {
+                items.add(processed);
+            }
+        }
+
+        int totalPages = (items.size() < perPage) ? page : page + 1;
+        return Map.of("items", items, "page", page, "perPage", perPage, "totalItems", items.size(), "totalPages", totalPages);
     }
 
     public Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
@@ -232,13 +233,12 @@ public class RecordRepository extends BaseRepository {
     }
 
     public Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
+        String collectionName = collectionRepository.getCollectionSchema(collection).name;
         boolean exists = false;
-        try (Connection conn = database.connection();
-             PreparedStatement stmt = conn.prepareStatement("SELECT 1 FROM " + qi(collectionRepository.getCollectionSchema(collection).name) + " WHERE id = ?")) {
-            stmt.setString(1, id);
-            try (ResultSet rs = stmt.executeQuery()) {
-                exists = rs.next();
-            }
+        try {
+            exists = database.dsl().fetchExists(
+                    database.dsl().selectOne().from(qt(collectionName)).where(qfs("id").eq(id))
+            );
         } catch (Exception ignored) {
         }
         if (exists) {

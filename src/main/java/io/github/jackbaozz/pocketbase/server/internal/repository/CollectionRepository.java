@@ -8,15 +8,16 @@ import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
+import org.jooq.Record;
+import org.jooq.Record1;
 import org.jooq.exception.DataAccessException;
 import org.jooq.impl.DSL;
 import org.jooq.impl.SQLDataType;
 
 import java.io.IOException;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -30,47 +31,56 @@ public class CollectionRepository extends BaseRepository {
         super(database, mapper);
     }
 
-    public Map<String, Object> listCollections(Map<String, String> query) {
-        try (Connection conn = database.connection();
-             PreparedStatement select = conn.prepareStatement("SELECT id, name, type, schema, system, createRule, listRule, viewRule, updateRule, deleteRule, options FROM _collections");
-             ResultSet rs = select.executeQuery()) {
-            List<Map<String, Object>> items = new ArrayList<>();
-            while (rs.next()) {
-                Map<String, Object> col = new LinkedHashMap<>();
-                col.put("id", rs.getString("id"));
-                col.put("name", rs.getString("name"));
-                col.put("type", rs.getString("type"));
-                String schemaJson = rs.getString("schema");
-                if (schemaJson != null) {
-                    try {
-                        col.put("schema", mapper.readValue(schemaJson, List.class));
-                    } catch (IOException e) {
-                        col.put("schema", List.of());
-                    }
-                } else {
-                    col.put("schema", List.of());
-                }
-                col.put("system", rs.getInt("system") == 1);
-                col.put("createRule", rs.getString("createRule"));
-                col.put("listRule", rs.getString("listRule"));
-                col.put("viewRule", rs.getString("viewRule"));
-                col.put("updateRule", rs.getString("updateRule"));
-                col.put("deleteRule", rs.getString("deleteRule"));
+    private Condition collectionCondition(String collection) {
+        return qfs("name").eq(collection).or(qfs("id").eq(collection));
+    }
 
-                String optsJson = rs.getString("options");
-                if (optsJson != null && !optsJson.isBlank()) {
-                    try {
-                        col.put("options", mapper.readValue(optsJson, Map.class));
-                    } catch (IOException e) {
-                        col.put("options", Map.of());
-                    }
-                } else {
-                    col.put("options", Map.of());
-                }
-                items.add(col);
-            }
+    public Map<String, Object> listCollections(Map<String, String> query) {
+        try {
+            List<Map<String, Object>> items = database.dsl()
+                    .select(
+                            qfs("id"), qfs("name"), qfs("type"), qfs("schema"),
+                            qfi("system"), qfs("createRule"), qfs("listRule"),
+                            qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
+                    )
+                    .from(qt("_collections"))
+                    .fetch()
+                    .map(rs -> {
+                        Map<String, Object> col = new LinkedHashMap<>();
+                        col.put("id", rs.get(qfs("id")));
+                        col.put("name", rs.get(qfs("name")));
+                        col.put("type", rs.get(qfs("type")));
+                        String schemaJson = rs.get(qfs("schema"));
+                        if (schemaJson != null) {
+                            try {
+                                col.put("schema", mapper.readValue(schemaJson, List.class));
+                            } catch (IOException e) {
+                                col.put("schema", List.of());
+                            }
+                        } else {
+                            col.put("schema", List.of());
+                        }
+                        col.put("system", rs.get(qfi("system")) == 1);
+                        col.put("createRule", rs.get(qfs("createRule")));
+                        col.put("listRule", rs.get(qfs("listRule")));
+                        col.put("viewRule", rs.get(qfs("viewRule")));
+                        col.put("updateRule", rs.get(qfs("updateRule")));
+                        col.put("deleteRule", rs.get(qfs("deleteRule")));
+
+                        String optsJson = rs.get(qfs("options"));
+                        if (optsJson != null && !optsJson.isBlank()) {
+                            try {
+                                col.put("options", mapper.readValue(optsJson, Map.class));
+                            } catch (IOException e) {
+                                col.put("options", Map.of());
+                            }
+                        } else {
+                            col.put("options", Map.of());
+                        }
+                        return col;
+                    });
             return Map.of("items", items, "page", 1, "perPage", 100, "totalItems", items.size(), "totalPages", 1);
-        } catch (SQLException e) {
+        } catch (DataAccessException e) {
             throw new RuntimeException("failed to list collections", e);
         }
     }
@@ -98,31 +108,32 @@ public class CollectionRepository extends BaseRepository {
         Connection conn = null;
         try {
             conn = database.connection();
-            try (PreparedStatement check = conn.prepareStatement("SELECT count(*) FROM _collections WHERE name = ? OR id = ?")) {
-                check.setString(1, colSchema.name);
-                check.setString(2, colSchema.id);
-                try (ResultSet rs = check.executeQuery()) {
-                    if (rs.next() && rs.getInt(1) > 0) {
-                        throw new ApiException(400, "Collection name or id already exists.");
-                    }
-                }
+
+            int count = database.dsl(conn)
+                    .selectCount()
+                    .from(qt("_collections"))
+                    .where(collectionCondition(colSchema.name))
+                    .fetchOne(0, int.class);
+            if (count > 0) {
+                throw new ApiException(400, "Collection name or id already exists.");
             }
 
-            try (PreparedStatement insert = conn.prepareStatement(
-                    "INSERT INTO _collections(id, name, type, schema, system, createRule, listRule, viewRule, updateRule, deleteRule, options) VALUES(?,?,?,?,?,?,?,?,?,?,?)")) {
-                insert.setString(1, colSchema.id);
-                insert.setString(2, colSchema.name);
-                insert.setString(3, colSchema.type);
-                insert.setString(4, mapper.writeValueAsString(colSchema.fields));
-                insert.setInt(5, colSchema.system ? 1 : 0);
-                insert.setString(6, colSchema.createRule);
-                insert.setString(7, colSchema.listRule);
-                insert.setString(8, colSchema.viewRule);
-                insert.setString(9, colSchema.updateRule);
-                insert.setString(10, colSchema.deleteRule);
-                insert.setString(11, mapper.writeValueAsString(rawOptions));
-                insert.executeUpdate();
-            }
+            database.dsl(conn)
+                    .insertInto(qt("_collections"))
+                    .columns(
+                            qfs("id"), qfs("name"), qfs("type"), qfs("schema"),
+                            qfi("system"), qfs("createRule"), qfs("listRule"),
+                            qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
+                    )
+                    .values(
+                            colSchema.id, colSchema.name, colSchema.type,
+                            mapper.writeValueAsString(colSchema.fields),
+                            colSchema.system ? 1 : 0,
+                            colSchema.createRule, colSchema.listRule, colSchema.viewRule,
+                            colSchema.updateRule, colSchema.deleteRule,
+                            mapper.writeValueAsString(rawOptions)
+                    )
+                    .execute();
 
             if ("view".equals(colSchema.type)) {
                 String viewQuery = rawOptions.containsKey("query") ? rawOptions.get("query").toString() : "SELECT 1";
@@ -158,21 +169,20 @@ public class CollectionRepository extends BaseRepository {
     }
 
     public Map<String, Object> getCollection(String collection, Map<String, String> query) {
-        try (Connection conn = database.connection();
-             PreparedStatement select = conn.prepareStatement(
-                     "SELECT id, name, type, schema, system, createRule, listRule, viewRule, updateRule, deleteRule, options FROM _collections WHERE name = ? OR id = ?")) {
-            select.setString(1, collection);
-            select.setString(2, collection);
-            try (ResultSet rs = select.executeQuery()) {
-                if (rs.next()) {
-                    Map<String, Object> col = new LinkedHashMap<>();
-                    col.put("id", rs.getString("id"));
-                    col.put("name", rs.getString("name"));
-                    col.put("type", rs.getString("type"));
-                    return col;
-                }
+        try {
+            Record rs = database.dsl()
+                    .select(qfs("id"), qfs("name"), qfs("type"))
+                    .from(qt("_collections"))
+                    .where(collectionCondition(collection))
+                    .fetchOne();
+            if (rs != null) {
+                Map<String, Object> col = new LinkedHashMap<>();
+                col.put("id", rs.get(qfs("id")));
+                col.put("name", rs.get(qfs("name")));
+                col.put("type", rs.get(qfs("type")));
+                return col;
             }
-        } catch (SQLException e) {
+        } catch (DataAccessException e) {
             throw new RuntimeException(e);
         }
         throw new ApiException(404, "Collection not found.");
@@ -197,16 +207,17 @@ public class CollectionRepository extends BaseRepository {
             conn = database.connection();
             String oldSchemaJson = null;
             String physicalName = null;
-            try (PreparedStatement select = conn.prepareStatement("SELECT name, schema FROM _collections WHERE name = ? OR id = ?")) {
-                select.setString(1, collection);
-                select.setString(2, collection);
-                try (ResultSet rs = select.executeQuery()) {
-                    if (rs.next()) {
-                        physicalName = rs.getString("name");
-                        oldSchemaJson = rs.getString("schema");
-                    }
-                }
+
+            Record rs = database.dsl(conn)
+                    .select(qfs("name"), qfs("schema"))
+                    .from(qt("_collections"))
+                    .where(collectionCondition(collection))
+                    .fetchOne();
+            if (rs != null) {
+                physicalName = rs.get(qfs("name"));
+                oldSchemaJson = rs.get(qfs("schema"));
             }
+
             if (physicalName == null) throw new ApiException(404, "Collection not found.");
 
             if ("view".equals(newSchema.type)) {
@@ -255,7 +266,7 @@ public class CollectionRepository extends BaseRepository {
                     .set(qfs("updateRule"), newSchema.updateRule)
                     .set(qfs("deleteRule"), newSchema.deleteRule)
                     .set(qfs("options"), mapper.writeValueAsString(rawOptions))
-                    .where(qfs("id").eq(collection).or(qfs("name").eq(collection)))
+                    .where(collectionCondition(collection))
                     .execute();
 
         } catch (SQLException | IOException | DataAccessException e) {
@@ -279,15 +290,15 @@ public class CollectionRepository extends BaseRepository {
             conn = database.connection();
             String physicalName = null;
             String type = null;
-            try (PreparedStatement select = conn.prepareStatement("SELECT name, type FROM _collections WHERE id = ? OR name = ?")) {
-                select.setString(1, collection);
-                select.setString(2, collection);
-                try (ResultSet rs = select.executeQuery()) {
-                    if (rs.next()) {
-                        physicalName = rs.getString("name");
-                        type = rs.getString("type");
-                    }
-                }
+
+            Record rs = database.dsl(conn)
+                    .select(qfs("name"), qfs("type"))
+                    .from(qt("_collections"))
+                    .where(collectionCondition(collection))
+                    .fetchOne();
+            if (rs != null) {
+                physicalName = rs.get(qfs("name"));
+                type = rs.get(qfs("type"));
             }
 
             if (physicalName == null) {
@@ -296,7 +307,7 @@ public class CollectionRepository extends BaseRepository {
 
             database.dsl(conn)
                     .deleteFrom(qt("_collections"))
-                    .where(qfs("id").eq(collection).or(qfs("name").eq(collection)))
+                    .where(collectionCondition(collection))
                     .execute();
 
             if ("view".equals(type)) {
@@ -347,7 +358,7 @@ public class CollectionRepository extends BaseRepository {
                 throw new ApiException(400, "Invalid collection payload.");
             }
         }
-        List<String> deleted = new ArrayList<>(); 
+        List<String> deleted = new ArrayList<>();
 
         if (dryRun) {
             return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
@@ -379,56 +390,50 @@ public class CollectionRepository extends BaseRepository {
     }
 
     public void requireCollectionExists(String collection) {
-        try (Connection conn = database.connection();
-             PreparedStatement select = conn.prepareStatement("SELECT count(*) FROM _collections WHERE name = ? OR id = ?")) {
-            select.setString(1, collection);
-            select.setString(2, collection);
-            try (ResultSet rs = select.executeQuery()) {
-                if (!rs.next() || rs.getInt(1) == 0) {
-                    throw new ApiException(404, "Collection not found.");
-                }
+        try {
+            int count = database.dsl()
+                    .selectCount()
+                    .from(qt("_collections"))
+                    .where(collectionCondition(collection))
+                    .fetchOne(0, int.class);
+            if (count == 0) {
+                throw new ApiException(404, "Collection not found.");
             }
-        } catch (SQLException e) {
+        } catch (DataAccessException e) {
             throw new RuntimeException(e);
         }
     }
 
     public CollectionSchema getCollectionSchema(String nameOrId) {
-        Connection conn = null;
         try {
-            conn = database.connection();
-            try (PreparedStatement select = conn.prepareStatement("SELECT id, name, schema, type, system, createRule, listRule, viewRule, updateRule, deleteRule FROM _collections WHERE name = ? OR id = ?")) {
-                select.setString(1, nameOrId);
-                select.setString(2, nameOrId);
-                try (ResultSet rs = select.executeQuery()) {
-                    if (rs.next()) {
-                        CollectionSchema col = new CollectionSchema();
-                        col.id = rs.getString("id");
-                        col.name = rs.getString("name");
-                        col.type = rs.getString("type");
-                        col.system = rs.getInt("system") == 1;
-                        col.createRule = rs.getString("createRule");
-                        col.listRule = rs.getString("listRule");
-                        col.viewRule = rs.getString("viewRule");
-                        col.updateRule = rs.getString("updateRule");
-                        col.deleteRule = rs.getString("deleteRule");
-                        String schemaJson = rs.getString("schema");
-                        if (schemaJson != null && !schemaJson.isBlank()) {
-                            col.fields = mapper.readValue(schemaJson, new TypeReference<List<FieldSchema>>() {});
-                        }
-                        return col;
-                    }
+            Record rs = database.dsl()
+                    .select(
+                            qfs("id"), qfs("name"), qfs("schema"), qfs("type"),
+                            qfi("system"), qfs("createRule"), qfs("listRule"),
+                            qfs("viewRule"), qfs("updateRule"), qfs("deleteRule")
+                    )
+                    .from(qt("_collections"))
+                    .where(collectionCondition(nameOrId))
+                    .fetchOne();
+            if (rs != null) {
+                CollectionSchema col = new CollectionSchema();
+                col.id = rs.get(qfs("id"));
+                col.name = rs.get(qfs("name"));
+                col.type = rs.get(qfs("type"));
+                col.system = rs.get(qfi("system")) == 1;
+                col.createRule = rs.get(qfs("createRule"));
+                col.listRule = rs.get(qfs("listRule"));
+                col.viewRule = rs.get(qfs("viewRule"));
+                col.updateRule = rs.get(qfs("updateRule"));
+                col.deleteRule = rs.get(qfs("deleteRule"));
+                String schemaJson = rs.get(qfs("schema"));
+                if (schemaJson != null && !schemaJson.isBlank()) {
+                    col.fields = mapper.readValue(schemaJson, new TypeReference<List<FieldSchema>>() {});
                 }
+                return col;
             }
-        } catch (SQLException | IOException e) {
+        } catch (DataAccessException | IOException e) {
             throw new RuntimeException(e);
-        } finally {
-            if (conn != null) {
-                try {
-                    database.closeIfStandalone(conn);
-                } catch (SQLException ignored) {
-                }
-            }
         }
         throw new ApiException(404, "Collection not found.");
     }

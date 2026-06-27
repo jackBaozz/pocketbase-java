@@ -9,9 +9,6 @@ import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -28,11 +25,14 @@ public class SettingsRepository extends BaseRepository {
     }
 
     public Map<String, Object> getSettings(Map<String, String> query) {
-        try (Connection conn = database.connection();
-             PreparedStatement select = conn.prepareStatement("SELECT value FROM _params WHERE id = 'settings'");
-             ResultSet rs = select.executeQuery()) {
-            if (rs.next()) {
-                String val = rs.getString("value");
+        try {
+            var result = database.dsl()
+                    .select(qfs("value"))
+                    .from(qt("_params"))
+                    .where(qfs("id").eq("settings"))
+                    .fetchOne();
+            if (result != null) {
+                String val = result.get(qfs("value"));
                 if (val != null && !val.isBlank()) {
                     return mapper.readValue(val, new TypeReference<Map<String, Object>>() {});
                 }
