@@ -4256,6 +4256,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     @Override
+    public Map<String, Object> findRecordByEmail(CollectionSchema collection, String email) {
+        if (!"auth".equals(collection.type)) return null;
+        return findAuthRecordByEmail(collection, email);
+    }
+
+    @Override
+    public void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields) {
+        Map<String, Object> record = findRecordOrNull(collection, recordId);
+        if (record == null) return;
+        record.putAll(fields);
+        record.put("updated", now());
+        saveRecords(collection);
+    }
+
+    @Override
     public boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal) {
         return canViewExpandedRecord(collection, record, query, principal);
     }

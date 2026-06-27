@@ -264,6 +264,48 @@ public class RecordRepository extends BaseRepository {
         }
     }
 
+    /**
+     * Find a record in an auth collection by email address.
+     * Returns null if no record is found (does not throw).
+     */
+    public Map<String, Object> findRecordByEmail(String collection, String email) {
+        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+        if (!"auth".equals(colSchema.type)) {
+            throw new ApiException(400, "The collection is not an auth collection.");
+        }
+        try {
+            var record = database.dsl()
+                    .selectFrom(qt(colSchema.name))
+                    .where(qfs("email").eq(email))
+                    .fetchOne();
+            if (record == null) return null;
+            return record.intoMap();
+        } catch (DataAccessException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Update specific fields on a record. Used for auth action mutations
+     * (password reset, verification, email change, token key rotation).
+     */
+    public void updateFields(String collection, String recordId, Map<String, Object> fields) {
+        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+        try {
+            Map<Field<Object>, Object> updates = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : fields.entrySet()) {
+                updates.put(qf(entry.getKey()), toStoredValue(entry.getValue()));
+            }
+            database.dsl()
+                    .update(qt(colSchema.name))
+                    .set(updates)
+                    .where(qfs("id").eq(recordId))
+                    .execute();
+        } catch (DataAccessException e) {
+            throw new ApiException(400, "Failed to update record: " + e.getMessage());
+        }
+    }
+
     private Object toStoredValue(Object value) {
         if (value instanceof Boolean b) {
             return b ? 1 : 0;

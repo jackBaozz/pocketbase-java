@@ -280,6 +280,16 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         return recordRepository.getRecord(collection.name, id, Map.of(), null);
     }
 
+    @Override
+    public Map<String, Object> findRecordByEmail(CollectionSchema collection, String email) {
+        return recordRepository.findRecordByEmail(collection.name, email);
+    }
+
+    @Override
+    public void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields) {
+        recordRepository.updateFields(collection.name, recordId, fields);
+    }
+
 
 
 

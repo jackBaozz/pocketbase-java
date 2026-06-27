@@ -17,6 +17,8 @@ public final class RecordProcessor {
     public interface StoreContext {
         CollectionSchema getCollection(String nameOrId);
         Map<String, Object> getRecord(CollectionSchema collection, String id);
+        Map<String, Object> findRecordByEmail(CollectionSchema collection, String email);
+        void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields);
         boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal);
     }
 

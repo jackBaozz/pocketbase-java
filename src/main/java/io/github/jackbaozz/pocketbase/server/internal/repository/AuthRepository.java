@@ -120,27 +120,27 @@ public class AuthRepository extends BaseRepository {
     }
 
     public void requestPasswordReset(String collection, JsonNode body) {
-        AuthProcessor.requestPasswordReset(collection);
+        AuthProcessor.requestPasswordReset(storeContext, tokenService, collection, body);
     }
 
     public void confirmPasswordReset(String collection, JsonNode body) {
-        AuthProcessor.confirmPasswordReset(collection);
+        AuthProcessor.confirmPasswordReset(storeContext, tokenService, collection, body);
     }
 
     public void requestVerification(String collection, JsonNode body) {
-        AuthProcessor.requestVerification(collection);
+        AuthProcessor.requestVerification(storeContext, tokenService, collection, body);
     }
 
     public void confirmVerification(String collection, JsonNode body) {
-        AuthProcessor.confirmVerification(collection);
+        AuthProcessor.confirmVerification(storeContext, tokenService, collection, body);
     }
 
     public void requestEmailChange(String collection, JsonNode body, RequestPrincipal principal) {
-        AuthProcessor.requestEmailChange(collection);
+        AuthProcessor.requestEmailChange(storeContext, tokenService, collection, body, principal);
     }
 
     public void confirmEmailChange(String collection, JsonNode body) {
-        AuthProcessor.confirmEmailChange(collection);
+        AuthProcessor.confirmEmailChange(storeContext, tokenService, collection, body);
     }
 
     public Map<String, Object> impersonate(String collection, String id, JsonNode body, Map<String, String> query) {
