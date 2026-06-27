@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.FieldTypeMapping;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
@@ -147,7 +148,7 @@ public class CollectionRepository extends BaseRepository {
                         .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                         .column(DSL.name("updated"), SQLDataType.VARCHAR(64));
                 for (FieldSchema field : colSchema.fields) {
-                    createTable = createTable.column(DSL.name(field.name), SQLDataType.CLOB);
+                    createTable = createTable.column(DSL.name(field.name), FieldTypeMapping.sqlType(field.type));
                 }
                 createTable.constraints(DSL.constraint(DSL.name("pk_" + colSchema.name)).primaryKey(DSL.name("id")))
                         .execute();
@@ -239,7 +240,7 @@ public class CollectionRepository extends BaseRepository {
                 for (FieldSchema nf : newSchema.fields) {
                     if (!oldNames.contains(nf.name)) {
                         dsl.alterTable(DSL.name(physicalName))
-                                .add(DSL.name(nf.name), SQLDataType.CLOB)
+                                .add(DSL.name(nf.name), FieldTypeMapping.sqlType(nf.type))
                                 .execute();
                     }
                 }
