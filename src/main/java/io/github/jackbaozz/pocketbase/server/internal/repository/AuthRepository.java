@@ -10,6 +10,7 @@ import io.github.jackbaozz.pocketbase.server.internal.PasswordHasher;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.internal.TokenService;
+import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -157,11 +158,118 @@ public class AuthRepository extends BaseRepository {
     }
 
     public Map<String, Object> requestOtp(String collection, JsonNode body) {
-        throw new ApiException(400, "Failed to request OTP.", Map.of("email", "OTP login is not configured."));
+        CollectionSchema colSchema = storeContext.getCollection(collection);
+        if (colSchema == null || !"auth".equals(colSchema.type)) {
+            throw new ApiException(400, "The collection is not an auth collection.");
+        }
+        if (colSchema.otp == null || !colSchema.otp.enabled) {
+            throw new ApiException(403, "The collection is not configured to allow OTP authentication.");
+        }
+
+        String email = body != null && body.has("email") ? body.get("email").asText().trim().toLowerCase() : "";
+        if (email.isEmpty()) {
+            throw new ApiException(400, "email is required.",
+                    Map.of("email", Map.of("code", "validation_required", "message", "email is required.")));
+        }
+
+        Map<String, Object> record = storeContext.findRecordByEmail(colSchema, email);
+        if (record == null) {
+            // Return a dummy otpId to avoid email enumeration
+            return Map.of("otpId", IdGenerator.id());
+        }
+
+        // Generate OTP code
+        int length = colSchema.otp.length;
+        String code = IdGenerator.digits(length);
+        String otpId = IdGenerator.id();
+        String now = Instant.now().toString();
+
+        // Persist OTP record in _otps table
+        try {
+            database.dsl()
+                    .insertInto(qt("_otps"))
+                    .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordId"),
+                            qfs("collectionId"), qfs("passwordHash"), qfs("sentTo"))
+                    .values(otpId, now, now, String.valueOf(record.get("id")),
+                            colSchema.id, PasswordHasher.hash(code), email)
+                    .execute();
+        } catch (Exception e) {
+            throw new ApiException(400, "Failed to request OTP.");
+        }
+
+        return Map.of("otpId", otpId);
     }
 
     public Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query) {
-        throw new ApiException(400, "Failed to authenticate with OTP.");
+        CollectionSchema colSchema = storeContext.getCollection(collection);
+        if (colSchema == null || !"auth".equals(colSchema.type)) {
+            throw new ApiException(400, "The collection is not an auth collection.");
+        }
+        if (colSchema.otp == null || !colSchema.otp.enabled) {
+            throw new ApiException(403, "The collection is not configured to allow OTP authentication.");
+        }
+
+        String otpId = body != null && body.has("otpId") ? body.get("otpId").asText() : "";
+        String password = body != null && body.has("password") ? body.get("password").asText() : "";
+
+        if (otpId.isEmpty()) {
+            throw new ApiException(400, "otpId is required.",
+                    Map.of("otpId", Map.of("code", "validation_required", "message", "otpId is required.")));
+        }
+        if (password.isEmpty() || password.length() > 71) {
+            throw new ApiException(400, "Invalid OTP password.",
+                    Map.of("password", Map.of("code", "validation_invalid_value", "message", "Invalid OTP password.")));
+        }
+
+        // Look up OTP record
+        var otpRecord = database.dsl()
+                .selectFrom(qt("_otps"))
+                .where(qfs("id").eq(otpId))
+                .fetchOne();
+
+        if (otpRecord == null) {
+            throw new ApiException(400, "Invalid or expired OTP.");
+        }
+
+        String recordId = otpRecord.getValue(qfs("recordId"), String.class);
+        String collectionId = otpRecord.getValue(qfs("collectionId"), String.class);
+        String passwordHash = otpRecord.getValue(qfs("passwordHash"), String.class);
+
+        if (!colSchema.id.equals(collectionId) && !colSchema.name.equals(collection)) {
+            throw new ApiException(400, "Invalid or expired OTP.");
+        }
+
+        // Verify OTP password
+        if (!PasswordHasher.verify(password, passwordHash)) {
+            // Delete OTP on failed attempt to prevent brute force
+            try {
+                database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(otpId)).execute();
+            } catch (Exception ignored) {}
+            throw new ApiException(400, "Invalid or expired OTP.");
+        }
+
+        // OTP verified - delete it (one-time use)
+        try {
+            database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(otpId)).execute();
+        } catch (Exception ignored) {}
+
+        // Get the auth record and issue a token
+        Map<String, Object> record = storeContext.getRecord(colSchema, recordId);
+        if (record == null) {
+            throw new ApiException(400, "Auth record no longer exists.");
+        }
+
+        Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("sub", record.get("id"));
+        claims.put("email", record.getOrDefault("email", ""));
+        claims.put("type", colSchema.system ? "superuser" : "auth");
+        claims.put("collectionId", colSchema.id);
+        claims.put("collectionName", colSchema.name);
+        claims.put("tokenType", "auth");
+        claims.put("tokenKey", record.getOrDefault("tokenKey", ""));
+
+        String token = tokenService.create(claims, Duration.ofDays(7));
+        return Map.of("token", token, "record", record);
     }
 
     public Optional<Map<String, Object>> verifyToken(String token) {
