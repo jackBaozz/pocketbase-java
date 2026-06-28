@@ -314,6 +314,9 @@ public final class FilterToSqlCompiler {
                 if (t.value.startsWith("@request.query.")) {
                     return new Operand(SqlPart.of(dialectJsonExtract(":request_query", t.value.substring("@request.query.".length()))), false, null, null);
                 }
+                if (t.value.startsWith("@request.headers.")) {
+                    return new Operand(SqlPart.of(dialectJsonExtract(":request_headers", t.value.substring("@request.headers.".length()))), false, null, null);
+                }
                 if (t.value.equals("@request.method")) {
                     return new Operand(SqlPart.of(":request_method"), false, null, null);
                 }

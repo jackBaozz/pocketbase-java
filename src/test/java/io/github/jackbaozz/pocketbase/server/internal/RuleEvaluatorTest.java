@@ -98,6 +98,7 @@ class RuleEvaluatorTest {
         
         assertTrue(RuleEvaluator.matches("@request.auth.id = userId", ctx));
         assertTrue(RuleEvaluator.matches("@request.auth.email = 'test@example.com'", ctx));
+        assertTrue(RuleEvaluator.matches("@request.auth.collectionName = 'users'", ctx));
         assertTrue(RuleEvaluator.matches("@request.auth.verified = true", ctx));
         assertTrue(RuleEvaluator.matches("@request.body.status = 'published'", ctx));
         assertTrue(RuleEvaluator.matches("@request.body.count > 5", ctx));

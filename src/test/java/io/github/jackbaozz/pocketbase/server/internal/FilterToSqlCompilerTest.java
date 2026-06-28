@@ -169,6 +169,13 @@ class FilterToSqlCompilerTest {
     }
 
     @Test
+    void requestHeadersReference() {
+        var result = FilterToSqlCompiler.compileBound("host = @request.headers.host",
+                id -> "\"" + id + "\"");
+        assertTrue(result.sql().contains("request_headers") || result.sql().contains("@request"));
+    }
+
+    @Test
     void collectionReference() {
         var result = FilterToSqlCompiler.compileBound("@collection.users.email = 'test@example.com'",
                 id -> "\"" + id + "\"");

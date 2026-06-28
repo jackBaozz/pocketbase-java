@@ -317,6 +317,10 @@ public final class RuleEvaluator {
                 case "@todayEnd" -> LocalDate.now(ZoneOffset.UTC).plusDays(1).atStartOfDay().minusNanos(1).toInstant(ZoneOffset.UTC).toString();
                 case "@request.method" -> method;
                 case "@request.context" -> "default";
+                case "@request.headers" -> Map.of(); // Mocked empty headers
+                case "@request.auth.id" -> principal != null ? principal.id() : null;
+                case "@request.auth.collectionId" -> principal != null ? principal.collectionId() : null;
+                case "@request.auth.collectionName" -> principal != null ? principal.collectionName() : null;
                 default -> resolvePath(normalized);
             };
             if (identifier.endsWith(":lower") && value != null) {
