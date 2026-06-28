@@ -89,6 +89,10 @@ public class CollectionRepository extends BaseRepository {
     }
 
     public CollectionSchema createCollection(JsonNode body) {
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
+        }
         CollectionSchema colSchema;
         Map<String, Object> rawOptions = Map.of();
         try {
@@ -97,7 +101,8 @@ public class CollectionRepository extends BaseRepository {
                 rawOptions = mapper.convertValue(body.get("options"), new TypeReference<Map<String, Object>>() {});
             }
         } catch (IOException e) {
-            throw new ApiException(400, "Collection payload must be a JSON object.");
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
 
         if (colSchema.id == null || colSchema.id.isBlank()) {
@@ -184,6 +189,10 @@ public class CollectionRepository extends BaseRepository {
 
     public CollectionSchema updateCollection(String collection, JsonNode body) {
         requireCollectionExists(collection);
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
+        }
         CollectionSchema newSchema;
         Map<String, Object> rawOptions = Map.of();
         try {
@@ -192,7 +201,8 @@ public class CollectionRepository extends BaseRepository {
                 rawOptions = mapper.convertValue(body.get("options"), new TypeReference<Map<String, Object>>() {});
             }
         } catch (IOException e) {
-            throw new ApiException(400, "Collection payload must be a JSON object.");
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         normalizeCollectionSchema(newSchema, rawOptions);
         validateSchemaIdentifiers(newSchema, "Failed to update collection.");
@@ -293,19 +303,24 @@ public class CollectionRepository extends BaseRepository {
             conn = database.connection();
             String physicalName = null;
             String type = null;
+            boolean system = false;
 
             Record rs = database.dsl(conn)
-                    .select(qfs("name"), qfs("type"))
+                    .select(qfs("name"), qfs("type"), qfi("system"))
                     .from(qt("_collections"))
                     .where(collectionCondition(collection))
                     .fetchOne();
             if (rs != null) {
                 physicalName = rs.get(qfs("name"));
                 type = rs.get(qfs("type"));
+                system = Objects.equals(rs.get(qfi("system")), 1);
             }
 
             if (physicalName == null) {
                 throw new ApiException(404, "Collection not found.");
+            }
+            if (system) {
+                throw new ApiException(400, "System collections cannot be deleted.");
             }
 
             database.dsl(conn)
@@ -334,6 +349,9 @@ public class CollectionRepository extends BaseRepository {
     public void truncateCollection(String collection) {
         requireCollectionExists(collection);
         CollectionSchema schema = getCollectionSchema(collection);
+        if (schema.system) {
+            throw new ApiException(400, "System collections cannot be truncated.");
+        }
         try {
             database.dsl()
                     .deleteFrom(qt(schema.name))
@@ -345,11 +363,12 @@ public class CollectionRepository extends BaseRepository {
 
     public Map<String, Object> importCollections(JsonNode body, boolean dryRun) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Collections import payload must be a JSON object.");
+            throw new ApiException(400, "Failed to import collections.",
+                    ApiErrors.invalidField("collections", "Collections import payload must be a JSON object."));
         }
         JsonNode collectionsNode = body.get("collections");
         if (collectionsNode == null || !collectionsNode.isArray() || collectionsNode.isEmpty()) {
-            throw new ApiException(400, "Failed to import collections.", Map.of("collections", Map.of("code", "validation_required", "message", "collections is required.")));
+            throw new ApiException(400, "Failed to import collections.", ApiErrors.requiredField("collections"));
         }
 
         List<CollectionSchema> newOrUpdated = new ArrayList<>();
@@ -361,7 +380,8 @@ public class CollectionRepository extends BaseRepository {
                         : Map.of());
                 newOrUpdated.add(collection);
             } catch (IOException e) {
-                throw new ApiException(400, "Invalid collection payload.");
+                throw new ApiException(400, "Failed to import collections.",
+                        ApiErrors.invalidField("collections", "Invalid collection payload."));
             }
         }
         boolean deleteMissing = body.path("deleteMissing").asBoolean(false);
@@ -430,14 +450,15 @@ public class CollectionRepository extends BaseRepository {
 
     public Map<String, Object> dryRunView(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "An error occurred while loading the submitted data.");
+            throw new ApiException(400, "An error occurred while loading the submitted data.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         JsonNode queryNode = body.get("query");
         if (queryNode == null || queryNode.isNull() || queryNode.asText().isBlank()) {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    Map.of("query", Map.of("code", "validation_invalid_value", "message", "query is required."))
+                    ApiErrors.requiredField("query")
             );
         }
         String query = queryNode.asText();
@@ -445,7 +466,7 @@ public class CollectionRepository extends BaseRepository {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    Map.of("query", Map.of("code", "validation_invalid_value", "message", "query must be at most " + MAX_VIEW_QUERY_LENGTH + " characters."))
+                    ApiErrors.invalidField("query", "query must be at most " + MAX_VIEW_QUERY_LENGTH + " characters.")
             );
         }
 
@@ -490,9 +511,12 @@ public class CollectionRepository extends BaseRepository {
                     "rows", rows
             );
         } catch (RuntimeException e) {
+            String message = "Invalid view query. Raw error:\n"
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             throw new ApiException(
                     400,
-                    "Invalid view query. Raw error:\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+                    message,
+                    ApiErrors.invalidField("query", message)
             );
         }
     }
@@ -618,11 +642,15 @@ public class CollectionRepository extends BaseRepository {
         String schemaJson = rs.get(qfs("schema"));
         if (schemaJson != null) {
             try {
-                col.put("schema", mapper.readValue(schemaJson, List.class));
+                List<?> fields = mapper.readValue(schemaJson, List.class);
+                col.put("fields", fields);
+                col.put("schema", fields);
             } catch (IOException e) {
+                col.put("fields", List.of());
                 col.put("schema", List.of());
             }
         } else {
+            col.put("fields", List.of());
             col.put("schema", List.of());
         }
         col.put("system", rs.get(qfi("system")) == 1);
@@ -632,16 +660,35 @@ public class CollectionRepository extends BaseRepository {
         col.put("updateRule", rs.get(qfs("updateRule")));
         col.put("deleteRule", rs.get(qfs("deleteRule")));
         String optsJson = rs.get(qfs("options"));
+        Map<?, ?> options;
         if (optsJson != null && !optsJson.isBlank()) {
             try {
-                col.put("options", mapper.readValue(optsJson, Map.class));
+                options = mapper.readValue(optsJson, Map.class);
             } catch (IOException e) {
-                col.put("options", Map.of());
+                options = Map.of();
             }
         } else {
-            col.put("options", Map.of());
+            options = Map.of();
+        }
+        col.put("options", options);
+        if ("auth".equals(col.get("type"))) {
+            copyOption(col, options, "passwordAuth");
+            copyOption(col, options, "otp");
+            copyOption(col, options, "mfa");
+            copyOption(col, options, "oauth2");
+            copyOption(col, options, "authToken");
+            copyOption(col, options, "passwordResetToken");
+            copyOption(col, options, "verificationToken");
+            copyOption(col, options, "emailChangeToken");
+            copyOption(col, options, "fileToken");
         }
         return col;
+    }
+
+    private void copyOption(Map<String, Object> collection, Map<?, ?> options, String key) {
+        if (options.containsKey(key)) {
+            collection.put(key, options.get(key));
+        }
     }
 
     private Map<String, Object> collectionMap(CollectionSchema collection) {

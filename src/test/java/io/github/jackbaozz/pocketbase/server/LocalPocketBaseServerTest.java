@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import io.github.jackbaozz.pocketbase.client.AuthResponse;
 import io.github.jackbaozz.pocketbase.client.PocketBaseClient;
-import io.github.jackbaozz.pocketbase.client.PocketBaseException;
 import io.github.jackbaozz.pocketbase.client.RecordList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -45,6 +44,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -142,6 +144,26 @@ class LocalPocketBaseServerTest {
         assertEquals("base", item.get("type").asText());
         assertFalse(item.has("fields"));
 
+        JsonNode fullPage = request("GET", "/api/collections?filter=" + filter + "&sort=name&page=1&perPage=10", token, null);
+        JsonNode alpha = null;
+        for (JsonNode collection : fullPage.get("items")) {
+            if ("collection_api_alpha".equals(collection.get("name").asText())) {
+                alpha = collection;
+                break;
+            }
+        }
+        assertNotNull(alpha);
+        assertTrue(fieldNames(alpha).contains("name"));
+
+        HttpResponse<String> invalidFilter = rawRequest(
+                "GET",
+                "/api/collections?filter=" + URLEncoder.encode("name #", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertEquals(400, invalidFilter.statusCode());
+        assertFieldErrorMessageStartsWith(invalidFilter, 400, "Invalid filter.", "filter", "validation_invalid_value", "Invalid filter");
+
         JsonNode single = request("GET", "/api/collections/collection_api_alpha?fields=id,name", token, null);
         assertEquals("collection_api_alpha", single.get("name").asText());
         assertTrue(single.has("id"));
@@ -172,6 +194,51 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void unsupportedMethodsAndBadJsonUseOfficialEnvelope() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> unsupported = rawRequest("DELETE", "/api/settings", token, null);
+        assertEquals(405, unsupported.statusCode());
+        assertErrorEnvelope(unsupported, 405, "Method not allowed.");
+
+        HttpResponse<String> badJson = rawJsonRequest("POST", "/api/collections", token, "{\"name\":");
+        assertEquals(400, badJson.statusCode());
+        assertFieldError(badJson, 400, "Failed to read request body.", "body", "validation_invalid_value", "Invalid JSON payload.");
+
+        HttpResponse<String> settingsArray = rawJsonRequest("PATCH", "/api/settings", token, "[]");
+        assertEquals(400, settingsArray.statusCode());
+        assertFieldError(settingsArray, 400, "Settings payload must be a JSON object.", "body", "validation_invalid_value", "Request body must be a JSON object.");
+
+        HttpResponse<String> collectionArray = rawJsonRequest("POST", "/api/collections", token, "[]");
+        assertEquals(400, collectionArray.statusCode());
+        assertFieldError(collectionArray, 400, "Collection payload must be a JSON object.", "body", "validation_invalid_value", "Request body must be a JSON object.");
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "payload_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+        HttpResponse<String> recordArray = rawJsonRequest("POST", "/api/collections/payload_posts/records", token, "[]");
+        assertEquals(400, recordArray.statusCode());
+        assertFieldError(recordArray, 400, "Record payload must be a JSON object.", "body", "validation_invalid_value", "Request body must be a JSON object.");
+
+        request("POST", "/api/collections/payload_posts/records", token, Map.of("title", "filter target"));
+        HttpResponse<String> recordFilter = rawRequest(
+                "GET",
+                "/api/collections/payload_posts/records?filter=" + URLEncoder.encode("title #", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertEquals(400, recordFilter.statusCode());
+        assertFieldErrorMessageStartsWith(recordFilter, 400, "Invalid filter.", "filter", "validation_invalid_value", "Invalid filter");
+
+        HttpResponse<String> dryRunArray = rawJsonRequest("POST", "/api/collections/meta/dry-run-view", token, "[]");
+        assertEquals(400, dryRunArray.statusCode());
+        assertFieldError(dryRunArray, 400, "An error occurred while loading the submitted data.", "body", "validation_invalid_value", "Request body must be a JSON object.");
+    }
+
+    @Test
     void dryRunViewPreviewsSelectQueriesAndRejectsWriteStatements() throws Exception {
         start();
         bootstrapSuperuser();
@@ -187,12 +254,24 @@ class LocalPocketBaseServerTest {
         assertEquals("final_value", preview.get("columns").get(0).get("name").asText());
         assertEquals("last", preview.get("rows").get(0).get(0).asText());
 
-        assertEquals(400, rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+        HttpResponse<String> writeQuery = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
                 "query", "insert into t values (1)"
-        )).statusCode());
-        assertEquals(400, rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+        ));
+        assertEquals(400, writeQuery.statusCode());
+        assertFieldError(
+                writeQuery,
+                400,
+                "Invalid view query. Raw error:\nwrite statements are not allowed",
+                "query",
+                "validation_invalid_value",
+                "Invalid view query. Raw error:\nwrite statements are not allowed"
+        );
+
+        HttpResponse<String> missingQuery = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
                 "query", ""
-        )).statusCode());
+        ));
+        assertEquals(400, missingQuery.statusCode());
+        assertFieldError(missingQuery, 400, "An error occurred while validating the submitted data.", "query", "validation_required", "Cannot be blank.");
     }
 
     @Test
@@ -233,6 +312,7 @@ class LocalPocketBaseServerTest {
                 "collections", List.of()
         ));
         assertEquals(400, emptyImport.statusCode());
+        assertFieldError(emptyImport, 400, "Failed to import collections.", "collections", "validation_required", "Cannot be blank.");
         JsonNode stillThere = request("GET", "/api/collections/" + obsolete.get("id").asText(), token, null);
         assertEquals("import_obsolete", stillThere.get("name").asText());
 
@@ -285,11 +365,54 @@ class LocalPocketBaseServerTest {
         JsonNode superusers = request("GET", "/api/collections/_superusers", token, null);
         assertEquals("_superusers", superusers.get("name").asText());
 
+        HttpResponse<String> deleteSystem = rawRequest("DELETE", "/api/collections/_superusers", token, null);
+        assertEquals(400, deleteSystem.statusCode());
+        assertErrorEnvelope(deleteSystem, 400, "System collections cannot be deleted.");
+
+        HttpResponse<String> truncateSystem = rawRequest("DELETE", "/api/collections/_superusers/truncate", token, null);
+        assertEquals(400, truncateSystem.statusCode());
+        assertErrorEnvelope(truncateSystem, 400, "System collections cannot be truncated.");
+
         HttpResponse<String> truncated = rawRequest("DELETE", "/api/collections/import_keep_renamed/truncate", token, null);
         assertEquals(204, truncated.statusCode());
         JsonNode empty = request("GET", "/api/collections/import_keep_renamed/records", null, null);
         assertEquals(0, empty.get("totalItems").asInt());
         assertFalse(Files.exists(tempDir.resolve("storage").resolve(keep.get("id").asText())));
+    }
+
+    @Test
+    void actionErrorsUseOfficialEnvelope() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "action_base_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text"))
+        ));
+        HttpResponse<String> baseAuth = rawRequest("POST", "/api/collections/action_base_posts/auth-with-password", null, Map.of(
+                "identity", "dev@example.com",
+                "password", "secret123"
+        ));
+        assertEquals(400, baseAuth.statusCode());
+        assertErrorEnvelope(baseAuth, 400, "The collection is not an auth collection.");
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "readonly_view",
+                "type", "view",
+                "options", Map.of("query", "select 'view-record' as id")
+        ));
+        HttpResponse<String> createViewRecord = rawRequest("POST", "/api/collections/readonly_view/records", token, Map.of(
+                "title", "should fail"
+        ));
+        assertEquals(400, createViewRecord.statusCode());
+        assertErrorEnvelope(createViewRecord, 400, "View collections are read-only.");
+
+        HttpResponse<String> updateViewRecord = rawRequest("PATCH", "/api/collections/readonly_view/records/view-record", token, Map.of(
+                "title", "should fail"
+        ));
+        assertEquals(400, updateViewRecord.statusCode());
+        assertErrorEnvelope(updateViewRecord, 400, "View collections are read-only.");
     }
 
     @Test
@@ -327,13 +450,47 @@ class LocalPocketBaseServerTest {
         ));
         request("POST", "/api/collections/tasks/records", token, Map.of("name", "before backup"));
 
+        HttpResponse<String> missingUpload = rawMultipartRequest("POST", "/api/backups", token, Map.of(), Map.of());
+        assertEquals(400, missingUpload.statusCode());
+        assertFieldError(missingUpload, 400, "Backup file is required.", "file", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> missingMultipartBoundary = rawBodyRequest(
+                "POST",
+                "/api/backups",
+                token,
+                "multipart/form-data",
+                "not a valid multipart payload".getBytes(StandardCharsets.UTF_8)
+        );
+        assertEquals(400, missingMultipartBoundary.statusCode());
+        assertFieldError(missingMultipartBoundary, 400, "Failed to read request body.", "body", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> invalidUpload = rawMultipartRequest("POST", "/api/backups", token, Map.of(), Map.of(
+                "file", new MultipartFile("broken.zip", "application/zip", "not a zip".getBytes(StandardCharsets.UTF_8))
+        ));
+        assertEquals(400, invalidUpload.statusCode());
+        assertFieldError(invalidUpload, 400, "Invalid backup archive.", "file", "validation_invalid_value", "Invalid backup archive.");
+
         JsonNode backup = request("POST", "/api/backups", token, Map.of("name", "snap.zip"));
         assertEquals("snap.zip", backup.get("key").asText());
         assertTrue(backup.get("size").asLong() > 0);
 
+        HttpResponse<String> duplicateBackup = rawRequest("POST", "/api/backups", token, Map.of("name", "snap.zip"));
+        assertEquals(400, duplicateBackup.statusCode());
+        assertFieldError(duplicateBackup, 400, "Backup already exists.", "name", "validation_not_unique", "Value must be unique.");
+
+        HttpResponse<String> duplicateUpload = rawMultipartRequest("POST", "/api/backups", token, Map.of(), Map.of(
+                "file", new MultipartFile("snap.zip", "application/zip", Files.readAllBytes(tempDir.resolve("backups").resolve("snap.zip")))
+        ));
+        assertEquals(400, duplicateUpload.statusCode());
+        assertFieldError(duplicateUpload, 400, "Backup already exists.", "file", "validation_not_unique", "Value must be unique.");
+
         JsonNode backups = request("GET", "/api/backups", token, null);
         assertEquals(1, backups.get("totalItems").asInt());
         assertEquals("snap.zip", backups.get("items").get(0).get("key").asText());
+
+        HttpResponse<String> missingDownload = rawRequest("GET", "/api/backups/missing.zip", token, null);
+        assertEquals(404, missingDownload.statusCode());
+        assertErrorEnvelope(missingDownload, 404, "Backup not found.");
 
         HttpResponse<byte[]> download = http.send(
                 HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/backups/snap.zip"))
@@ -350,6 +507,18 @@ class LocalPocketBaseServerTest {
         JsonNode changed = request("GET", "/api/collections/tasks/records", null, null);
         assertEquals(2, changed.get("totalItems").asInt());
 
+        appendZipEntry(
+                tempDir.resolve("backups").resolve("snap.zip"),
+                tempDir.resolve("backups").resolve("evil.zip"),
+                "storage/../escape.txt",
+                "malicious restore entry".getBytes(StandardCharsets.UTF_8)
+        );
+        HttpResponse<String> evilRestore = rawRequest("POST", "/api/backups/evil.zip/restore", token, null);
+        assertEquals(400, evilRestore.statusCode());
+        assertFieldError(evilRestore, 400, "Invalid backup archive.", "file", "validation_invalid_value", "Invalid backup archive.");
+        JsonNode stillChanged = request("GET", "/api/collections/tasks/records", null, null);
+        assertEquals(2, stillChanged.get("totalItems").asInt());
+
         request("POST", "/api/backups/snap.zip/restore", token, null);
         JsonNode restored = request("GET", "/api/collections/tasks/records", null, null);
         assertEquals(1, restored.get("totalItems").asInt());
@@ -357,6 +526,10 @@ class LocalPocketBaseServerTest {
 
         HttpResponse<String> deleted = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
         assertEquals(204, deleted.statusCode());
+
+        HttpResponse<String> deleteMissing = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
+        assertEquals(404, deleteMissing.statusCode());
+        assertErrorEnvelope(deleteMissing, 404, "Backup not found.");
     }
 
     @Test
@@ -438,6 +611,15 @@ class LocalPocketBaseServerTest {
         assertTrue(log.get("data").hasNonNull("authId"));
         assertTrue(log.get("data").get("execTime").asDouble() >= 0.0D);
 
+        HttpResponse<String> invalidLogFilter = rawRequest(
+                "GET",
+                "/api/logs?filter=" + URLEncoder.encode("data.status #", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertEquals(400, invalidLogFilter.statusCode());
+        assertFieldErrorMessageStartsWith(invalidLogFilter, 400, "Invalid filter.", "filter", "validation_invalid_value", "Invalid filter");
+
         JsonNode singleLog = request("GET", "/api/logs/" + log.get("id").asText(), token, null);
         assertEquals(log.get("id").asText(), singleLog.get("id").asText());
 
@@ -460,7 +642,50 @@ class LocalPocketBaseServerTest {
                 "filesystem", "invalid"
         ));
         assertEquals(400, invalidS3.statusCode());
-        assertTrue(invalidS3.body().contains("filesystem"));
+        assertFieldError(invalidS3, 400, "Failed to test the S3 filesystem.", "filesystem", "validation_invalid_value", "Must be either storage or backups.");
+
+        HttpResponse<String> missingS3 = rawRequest("POST", "/api/settings/test/s3", token, Map.of());
+        assertEquals(400, missingS3.statusCode());
+        assertFieldError(missingS3, 400, "Failed to test the S3 filesystem.", "filesystem", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> disabledS3 = rawRequest("POST", "/api/settings/test/s3", token, Map.of(
+                "filesystem", "storage"
+        ));
+        assertEquals(400, disabledS3.statusCode());
+        assertFieldError(
+                disabledS3,
+                400,
+                "Failed to test the S3 filesystem. Raw error: \nS3 storage filesystem is not enabled",
+                "filesystem",
+                "validation_invalid_value",
+                "S3 storage filesystem is not enabled"
+        );
+
+        HttpResponse<String> missingS3Bucket = rawRequest("POST", "/api/settings/test/s3", token, Map.of(
+                "filesystem", "storage",
+                "s3", Map.of(
+                        "enabled", true,
+                        "region", "us-east-1",
+                        "accessKey", "access-key",
+                        "secret", "secret-key"
+                )
+        ));
+        assertEquals(400, missingS3Bucket.statusCode());
+        assertFieldError(missingS3Bucket, 400, "Failed to test the S3 filesystem.", "bucket", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> missingBackupS3Secret = rawRequest("POST", "/api/settings/test/s3", token, Map.of(
+                "filesystem", "backups",
+                "backups", Map.of(
+                        "s3", Map.of(
+                                "enabled", true,
+                                "bucket", "backup-bucket",
+                                "region", "us-east-1",
+                                "accessKey", "backup-access-key"
+                        )
+                )
+        ));
+        assertEquals(400, missingBackupS3Secret.statusCode());
+        assertFieldError(missingBackupS3Secret, 400, "Failed to test the S3 filesystem.", "secret", "validation_required", "Cannot be blank.");
 
         HttpResponse<String> queuedEmail = rawRequest("POST", "/api/settings/test/email", token, Map.of(
                 "email", "dev@example.com",
@@ -479,7 +704,63 @@ class LocalPocketBaseServerTest {
                 "template", "unknown"
         ));
         assertEquals(400, invalidEmail.statusCode());
-        assertTrue(invalidEmail.body().contains("template"));
+        assertFieldError(invalidEmail, 400, "Failed to send the test email.", "template", "validation_invalid_value", "Invalid email template.");
+
+        HttpResponse<String> missingTemplate = rawRequest("POST", "/api/settings/test/email", token, Map.of(
+                "email", "dev@example.com"
+        ));
+        assertEquals(400, missingTemplate.statusCode());
+        assertFieldError(missingTemplate, 400, "Failed to send the test email.", "template", "validation_required", "Cannot be blank.");
+
+        try (FakeSmtpServer smtp = FakeSmtpServer.start("421 test smtp down")) {
+            HttpResponse<String> smtpFailure = rawRequest("POST", "/api/settings/test/email", token, Map.of(
+                    "email", "dev@example.com",
+                    "template", "verification",
+                    "smtp", Map.of(
+                            "enabled", true,
+                            "host", "127.0.0.1",
+                            "port", smtp.port()
+                    )
+            ));
+            assertEquals(400, smtpFailure.statusCode());
+            assertFieldError(
+                    smtpFailure,
+                    400,
+                    "Failed to send the test email. Raw error: \nSMTP command failed: 421 test smtp down",
+                    "smtp",
+                    "validation_invalid_value",
+                    "SMTP command failed: 421 test smtp down"
+            );
+        }
+
+        HttpResponse<String> missingAppleClientId = rawRequest("POST", "/api/settings/apple/generate-client-secret", token, Map.of(
+                "teamId", "TEAMID1234",
+                "keyId", "KEYID12345",
+                "privateKey", ecPrivateKeyPem(),
+                "duration", 3600
+        ));
+        assertEquals(400, missingAppleClientId.statusCode());
+        assertFieldError(missingAppleClientId, 400, "Invalid client secret data.", "clientId", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> invalidAppleDuration = rawRequest("POST", "/api/settings/apple/generate-client-secret", token, Map.of(
+                "clientId", "com.example.service",
+                "teamId", "TEAMID1234",
+                "keyId", "KEYID12345",
+                "privateKey", ecPrivateKeyPem(),
+                "duration", 0
+        ));
+        assertEquals(400, invalidAppleDuration.statusCode());
+        assertFieldError(invalidAppleDuration, 400, "Invalid client secret data.", "duration", "validation_invalid_value", "Must be between 1 and 15777000 seconds.");
+
+        HttpResponse<String> invalidApplePrivateKey = rawRequest("POST", "/api/settings/apple/generate-client-secret", token, Map.of(
+                "clientId", "com.example.service",
+                "teamId", "TEAMID1234",
+                "keyId", "KEYID12345",
+                "privateKey", "-----BEGIN PRIVATE KEY-----\nnot-valid-base64\n-----END PRIVATE KEY-----",
+                "duration", 3600
+        ));
+        assertEquals(400, invalidApplePrivateKey.statusCode());
+        assertFieldError(invalidApplePrivateKey, 400, "Invalid client secret data.", "privateKey", "validation_invalid_value", "Must be a valid PKCS#8 EC private key PEM.");
 
         JsonNode apple = request("POST", "/api/settings/apple/generate-client-secret", token, Map.of(
                 "clientId", "com.example.service",
@@ -594,8 +875,17 @@ class LocalPocketBaseServerTest {
         assertEquals("2", second.get("columns").get(0).get("name").asText());
         assertEquals("2", second.get("rows").get(0).get(0).asText());
 
-        assertEquals(400, rawRequest("POST", "/api/sql", token, Map.of("query", "")).statusCode());
-        assertEquals(400, rawRequest("POST", "/api/sql", token, Map.of("query", "a".repeat(5001))).statusCode());
+        HttpResponse<String> missingQuery = rawRequest("POST", "/api/sql", token, Map.of("query", ""));
+        assertEquals(400, missingQuery.statusCode());
+        assertFieldError(missingQuery, 400, "An error occurred while validating the submitted data.", "query", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> tooLongQuery = rawRequest("POST", "/api/sql", token, Map.of("query", "a".repeat(5001)));
+        assertEquals(400, tooLongQuery.statusCode());
+        assertFieldError(tooLongQuery, 400, "An error occurred while validating the submitted data.", "query", "validation_invalid_value", "query must be at most 5000 characters.");
+
+        HttpResponse<String> arrayPayload = rawJsonRequest("POST", "/api/sql", token, "[]");
+        assertEquals(400, arrayPayload.statusCode());
+        assertFieldError(arrayPayload, 400, "An error occurred while loading the submitted data.", "body", "validation_invalid_value", "Request body must be a JSON object.");
 
         JsonNode create = request("POST", "/api/sql", token, Map.of(
                 "query", "create table sql_posts(id text primary key, title text not null, published bool, views int)"
@@ -647,7 +937,14 @@ class LocalPocketBaseServerTest {
                         + "invalid"
         ));
         assertEquals(400, rolledBack.statusCode());
-        assertTrue(rolledBack.body().contains("Raw error"));
+        assertMessageAndFieldErrorStartWith(
+                rolledBack,
+                400,
+                "Failed to execute query. Raw error:\n",
+                "query",
+                "validation_invalid_value",
+                "Failed to execute query. Raw error:\n"
+        );
         assertEquals(404, rawRequest("GET", "/api/collections/sql_tx", token, null).statusCode());
     }
 
@@ -709,11 +1006,78 @@ class LocalPocketBaseServerTest {
                 )
         ));
         assertEquals(400, failed.statusCode());
-        assertTrue(failed.body().contains("\"index\":1"));
+        JsonNode failedBody = mapper.readTree(failed.body());
+        assertEquals(400, failedBody.get("status").asInt());
+        assertFalse(failedBody.has("code"));
+        assertEquals("Batch request failed.", failedBody.get("message").asText());
+        assertEquals(1, failedBody.get("data").get("index").asInt());
+        JsonNode nested = failedBody.get("data").get("response");
+        assertEquals(404, nested.get("status").asInt());
+        assertFalse(nested.has("code"));
+        assertEquals("Record not found.", nested.get("message").asText());
 
         JsonNode afterRollback = request("GET", "/api/collections/batch_posts/records", null, null);
         assertEquals(1, afterRollback.get("totalItems").asInt());
         assertEquals("batch_one", afterRollback.get("items").get(0).get("id").asText());
+    }
+
+    @Test
+    void batchValidationErrorsUseOfficialEnvelope() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> missingRequests = rawRequest("POST", "/api/batch", token, Map.of());
+        assertEquals(400, missingRequests.statusCode());
+        assertFieldError(missingRequests, 400, "Failed to process batch.", "requests", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> invalidMultipartJson = rawMultipartRequest("POST", "/api/batch", token, Map.of(
+                "@jsonPayload", "{bad"
+        ), Map.of());
+        assertEquals(400, invalidMultipartJson.statusCode());
+        assertFieldError(invalidMultipartJson, 400, "Failed to process batch.", "@jsonPayload", "validation_invalid_value", "Invalid JSON payload.");
+
+        HttpResponse<String> missingMethod = rawRequest("POST", "/api/batch", token, Map.of(
+                "requests", List.of(Map.of("url", "/api/collections/posts/records"))
+        ));
+        assertEquals(400, missingMethod.statusCode());
+        JsonNode body = mapper.readTree(missingMethod.body());
+        assertEquals(400, body.get("status").asInt());
+        assertEquals("Batch request failed.", body.get("message").asText());
+        assertEquals(0, body.get("data").get("index").asInt());
+        JsonNode response = body.get("data").get("response");
+        assertEquals(400, response.get("status").asInt());
+        assertEquals("Batch request failed.", response.get("message").asText());
+        assertEquals("validation_required", response.get("data").get("method").get("code").asText());
+        assertEquals("Cannot be blank.", response.get("data").get("method").get("message").asText());
+
+        HttpResponse<String> unsupportedTarget = rawRequest("POST", "/api/batch", token, Map.of(
+                "requests", List.of(Map.of("method", "GET", "url", "/api/settings"))
+        ));
+        assertEquals(400, unsupportedTarget.statusCode());
+        JsonNode unsupportedBody = mapper.readTree(unsupportedTarget.body());
+        assertEquals(400, unsupportedBody.get("status").asInt());
+        assertEquals("Batch request failed.", unsupportedBody.get("message").asText());
+        assertEquals(0, unsupportedBody.get("data").get("index").asInt());
+        JsonNode unsupportedResponse = unsupportedBody.get("data").get("response");
+        assertEquals(400, unsupportedResponse.get("status").asInt());
+        assertEquals("Only record batch requests are supported.", unsupportedResponse.get("message").asText());
+        assertEquals("validation_invalid_value", unsupportedResponse.get("data").get("url").get("code").asText());
+        assertEquals("Only record batch requests are supported.", unsupportedResponse.get("data").get("url").get("message").asText());
+
+        HttpResponse<String> malformedTarget = rawRequest("POST", "/api/batch", token, Map.of(
+                "requests", List.of(Map.of("method", "GET", "url", "%"))
+        ));
+        assertEquals(400, malformedTarget.statusCode());
+        JsonNode malformedBody = mapper.readTree(malformedTarget.body());
+        assertEquals(400, malformedBody.get("status").asInt());
+        assertEquals("Batch request failed.", malformedBody.get("message").asText());
+        assertEquals(0, malformedBody.get("data").get("index").asInt());
+        JsonNode malformedResponse = malformedBody.get("data").get("response");
+        assertEquals(400, malformedResponse.get("status").asInt());
+        assertEquals("Batch request failed.", malformedResponse.get("message").asText());
+        assertEquals("validation_invalid_value", malformedResponse.get("data").get("url").get("code").asText());
+        assertEquals("Invalid batch request URL.", malformedResponse.get("data").get("url").get("message").asText());
     }
 
     @Test
@@ -794,7 +1158,15 @@ class LocalPocketBaseServerTest {
                 )
         ));
         assertEquals(400, failed.statusCode());
-        assertTrue(failed.body().contains("\"index\":1"));
+        JsonNode failedBody = mapper.readTree(failed.body());
+        assertEquals(400, failedBody.get("status").asInt());
+        assertFalse(failedBody.has("code"));
+        assertEquals("Batch request failed.", failedBody.get("message").asText());
+        assertEquals(1, failedBody.get("data").get("index").asInt());
+        JsonNode failedResponse = failedBody.get("data").get("response");
+        assertEquals(404, failedResponse.get("status").asInt());
+        assertEquals("Record not found.", failedResponse.get("message").asText());
+        assertTrue(failedResponse.get("data").isObject());
 
         HttpResponse<String> rolledBackRecord = rawRequest(
                 "GET",
@@ -1037,25 +1409,26 @@ class LocalPocketBaseServerTest {
         ));
         assertTrue(auth.hasNonNull("token"));
         assertFalse(auth.get("record").has("password"));
-        assertEquals(400, rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
+        HttpResponse<String> idAsIdentity = rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
                 "identity", auth.get("record").get("id").asText(),
                 "password", "secret456"
-        )).statusCode());
-        assertEquals(400, rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
+        ));
+        assertEquals(400, idAsIdentity.statusCode());
+        assertErrorEnvelope(idAsIdentity, 400, "Failed to authenticate.");
+        HttpResponse<String> disabledIdentityField = rawRequest("POST", "/api/collections/users/auth-with-password", null, Map.of(
                 "identityField", "username",
                 "identity", "demo@example.com",
                 "password", "secret456"
-        )).statusCode());
+        ));
+        assertEquals(400, disabledIdentityField.statusCode());
+        assertErrorEnvelope(disabledIdentityField, 400, "Failed to authenticate.");
 
-        PocketBaseException duplicate = assertThrows(PocketBaseException.class, () -> {
-            PocketBaseClient authed = PocketBaseClient.builder(server.baseUrl()).bearerToken(token).build();
-            authed.collection("users").create(Map.of(
-                    "email", "demo@example.com",
-                    "password", "another-secret"
-            ));
-        });
+        HttpResponse<String> duplicate = rawRequest("POST", "/api/collections/users/records", token, Map.of(
+                "email", "demo@example.com",
+                "password", "another-secret"
+        ));
         assertEquals(400, duplicate.statusCode());
-        assertTrue(duplicate.responseBody().contains("Value must be unique"));
+        assertFieldError(duplicate, 400, "Failed to create record.", "email", "validation_not_unique", "Value must be unique.");
 
         JsonNode methods = request("GET", "/api/collections/users/auth-methods", null, null);
         assertTrue(methods.get("password").get("enabled").asBoolean());
@@ -1104,10 +1477,12 @@ class LocalPocketBaseServerTest {
         String otpId = otpRequest.get("otpId").asText();
         String otpPassword = otpRequestPassword("otp@example.com", otpId);
 
-        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+        HttpResponse<String> wrongOtpPassword = rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
                 "otpId", otpId,
                 "password", "000000"
-        )).statusCode());
+        ));
+        assertEquals(400, wrongOtpPassword.statusCode());
+        assertFieldError(wrongOtpPassword, 400, "Invalid or expired OTP.", "otpId", "validation_invalid_value", "Invalid or expired OTP.");
 
         JsonNode auth = request("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
                 "otpId", otpId,
@@ -1118,30 +1493,38 @@ class LocalPocketBaseServerTest {
 
         JsonNode verified = request("GET", "/api/collections/otp_users/records/" + user.get("id").asText(), token, null);
         assertTrue(verified.get("verified").asBoolean());
-        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-password", null, Map.of(
+        HttpResponse<String> passwordAfterOtp = rawRequest("POST", "/api/collections/otp_users/auth-with-password", null, Map.of(
                 "identity", "otp@example.com",
                 "password", "secret456"
-        )).statusCode());
+        ));
+        assertEquals(400, passwordAfterOtp.statusCode());
+        assertErrorEnvelope(passwordAfterOtp, 400, "Failed to authenticate.");
 
-        assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+        HttpResponse<String> reusedOtp = rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
                 "otpId", otpId,
                 "password", otpPassword
-        )).statusCode());
+        ));
+        assertEquals(400, reusedOtp.statusCode());
+        assertFieldError(reusedOtp, 400, "Invalid or expired OTP.", "otpId", "validation_invalid_value", "Invalid or expired OTP.");
 
         JsonNode lockedOtp = request("POST", "/api/collections/otp_users/request-otp", null, Map.of(
                 "email", "otp@example.com"
         ));
         String lockedOtpId = lockedOtp.get("otpId").asText();
         for (int i = 0; i < 5; i++) {
-            assertEquals(400, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+            HttpResponse<String> failedOtpAttempt = rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
                     "otpId", lockedOtpId,
                     "password", "00000" + i
-            )).statusCode());
+            ));
+            assertEquals(400, failedOtpAttempt.statusCode());
+            assertFieldError(failedOtpAttempt, 400, "Invalid or expired OTP.", "otpId", "validation_invalid_value", "Invalid or expired OTP.");
         }
-        assertEquals(429, rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
+        HttpResponse<String> lockedOtpAttempt = rawRequest("POST", "/api/collections/otp_users/auth-with-otp", null, Map.of(
                 "otpId", lockedOtpId,
                 "password", "123456"
-        )).statusCode());
+        ));
+        assertEquals(429, lockedOtpAttempt.statusCode());
+        assertFieldError(lockedOtpAttempt, 429, "Too many failed OTP attempts.", "otpId", "validation_invalid_value", "Too many failed OTP attempts.");
     }
 
     @Test
@@ -1190,6 +1573,11 @@ class LocalPocketBaseServerTest {
         assertTrue(methods.get("oauth2").get("providers").get(0).has("displayName"));
         assertTrue(methods.get("oauth2").get("providers").get(0).has("authURL"));
         assertEquals(2, methods.get("authProviders").size());
+
+        JsonNode collections = request("GET", "/api/collections?filter=" + URLEncoder.encode("name = 'auth_config_users'", StandardCharsets.UTF_8), token, null);
+        JsonNode listed = collections.get("items").get(0);
+        assertTrue(listed.get("oauth2").get("enabled").asBoolean());
+        assertEquals("github", listed.get("oauth2").get("providers").get(0).get("name").asText());
     }
 
     @Test
@@ -1337,11 +1725,13 @@ class LocalPocketBaseServerTest {
                 "passwordResetToken", Map.of("duration", 91, "secret", "reset-b"),
                 "fileToken", Map.of("duration", 181, "secret", "file-b")
         ));
-        assertEquals(400, rawRequest("POST", "/api/collections/secret_users/confirm-password-reset", null, Map.of(
+        HttpResponse<String> staleResetToken = rawRequest("POST", "/api/collections/secret_users/confirm-password-reset", null, Map.of(
                 "token", resetToken,
                 "password", "newsecret456",
                 "passwordConfirm", "newsecret456"
-        )).statusCode());
+        ));
+        assertEquals(400, staleResetToken.statusCode());
+        assertFieldError(staleResetToken, 400, "Invalid or expired token.", "token", "validation_invalid_value", "Invalid or expired token.");
     }
 
     @Test
@@ -1382,17 +1772,21 @@ class LocalPocketBaseServerTest {
                 "email", "timed@example.com"
         ));
         String resetToken = authRequestToken("passwordReset", "timed@example.com");
-        assertEquals(400, rawRequest("POST", "/api/collections/other_users/confirm-password-reset", null, Map.of(
+        HttpResponse<String> wrongCollectionReset = rawRequest("POST", "/api/collections/other_users/confirm-password-reset", null, Map.of(
                 "token", resetToken,
                 "password", "newsecret456",
                 "passwordConfirm", "newsecret456"
-        )).statusCode());
+        ));
+        assertEquals(400, wrongCollectionReset.statusCode());
+        assertFieldError(wrongCollectionReset, 400, "Invalid or expired token.", "token", "validation_invalid_value", "Invalid or expired token.");
         Thread.sleep(2100L);
-        assertEquals(400, rawRequest("POST", "/api/collections/timed_users/confirm-password-reset", null, Map.of(
+        HttpResponse<String> expiredReset = rawRequest("POST", "/api/collections/timed_users/confirm-password-reset", null, Map.of(
                 "token", resetToken,
                 "password", "newsecret456",
                 "passwordConfirm", "newsecret456"
-        )).statusCode());
+        ));
+        assertEquals(400, expiredReset.statusCode());
+        assertFieldError(expiredReset, 400, "Invalid or expired token.", "token", "validation_invalid_value", "Invalid or expired token.");
     }
 
     @Test
@@ -1434,7 +1828,7 @@ class LocalPocketBaseServerTest {
                 "mfaId", passwordMfaId
         ));
         assertEquals(400, samePasswordMethod.statusCode());
-        assertTrue(samePasswordMethod.body().contains("different auth method"));
+        assertFieldError(samePasswordMethod, 400, "MFA requires a different auth method.", "mfaId", "validation_invalid_value", "MFA requires a different auth method.");
 
         JsonNode otpRequest = request("POST", "/api/collections/mfa_users/request-otp", null, Map.of(
                 "email", "mfa@example.com"
@@ -1447,11 +1841,13 @@ class LocalPocketBaseServerTest {
                 "mfaId", passwordMfaId
         ));
         assertTrue(passwordCompleted.hasNonNull("token"));
-        assertEquals(400, rawRequest("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
-                "otpId", otpId,
-                "password", otpPassword,
+        HttpResponse<String> reusedMfaId = rawRequest("POST", "/api/collections/mfa_users/auth-with-password", null, Map.of(
+                "identity", "mfa@example.com",
+                "password", "secret456",
                 "mfaId", passwordMfaId
-        )).statusCode());
+        ));
+        assertEquals(400, reusedMfaId.statusCode());
+        assertFieldError(reusedMfaId, 400, "Missing or invalid MFA ID.", "mfaId", "validation_invalid_value", "Missing or invalid MFA ID.");
 
         JsonNode otpRequest2 = request("POST", "/api/collections/mfa_users/request-otp", null, Map.of(
                 "email", "mfa@example.com"
@@ -1465,12 +1861,18 @@ class LocalPocketBaseServerTest {
         assertEquals(401, otpFirst.statusCode());
         String otpMfaId = mapper.readTree(otpFirst.body()).get("mfaId").asText();
 
+        JsonNode otpRequest3 = request("POST", "/api/collections/mfa_users/request-otp", null, Map.of(
+                "email", "mfa@example.com"
+        ));
+        String otpId3 = otpRequest3.get("otpId").asText();
+        String otpPassword3 = otpRequestPassword("mfa@example.com", otpId3);
         HttpResponse<String> sameOtpMethod = rawRequest("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
-                "otpId", otpId2,
-                "password", otpPassword2,
+                "otpId", otpId3,
+                "password", otpPassword3,
                 "mfaId", otpMfaId
         ));
         assertEquals(400, sameOtpMethod.statusCode());
+        assertFieldError(sameOtpMethod, 400, "MFA requires a different auth method.", "mfaId", "validation_invalid_value", "MFA requires a different auth method.");
         JsonNode otpCompleted = request("POST", "/api/collections/mfa_users/auth-with-password?mfaId="
                 + URLEncoder.encode(otpMfaId, StandardCharsets.UTF_8), null, Map.of(
                 "identity", "mfa@example.com",
@@ -1529,6 +1931,7 @@ class LocalPocketBaseServerTest {
                     "mfaId", oauthMfaId
             ));
             assertEquals(400, sameOauthMethod.statusCode());
+            assertFieldError(sameOauthMethod, 400, "MFA requires a different auth method.", "mfaId", "validation_invalid_value", "MFA requires a different auth method.");
 
             JsonNode oauthCompleted = request("POST", "/api/collections/mfa_oauth_users/auth-with-password", null, Map.of(
                     "identity", "oidc@example.com",
@@ -1594,6 +1997,7 @@ class LocalPocketBaseServerTest {
                 "mfaId", passwordMfaId
         ));
         assertEquals(400, sameMethod.statusCode());
+        assertFieldError(sameMethod, 400, "Missing or invalid MFA ID.", "mfaId", "validation_invalid_value", "Missing or invalid MFA ID.");
     }
 
     @Test
@@ -1660,6 +2064,100 @@ class LocalPocketBaseServerTest {
         assertEquals(200, redirect.statusCode());
         assertTrue(redirect.body().contains("postMessage"));
         assertTrue(redirect.body().contains("pocketbase-java-oauth2"));
+    }
+
+    @Test
+    void oauth2ExchangeErrorsUseOfficialEnvelope() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "oauth_missing_token_url_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of(
+                                "name", "github",
+                                "clientId", "client-123",
+                                "authURL", "http://127.0.0.1/authorize"
+                        ))
+                )
+        ));
+        HttpResponse<String> missingTokenUrl = rawRequest("POST", "/api/collections/oauth_missing_token_url_users/auth-with-oauth2", null, Map.of(
+                "provider", "github",
+                "code", "bad-code",
+                "redirectURL", "http://127.0.0.1/callback"
+        ));
+        assertEquals(400, missingTokenUrl.statusCode());
+        assertFieldError(missingTokenUrl, 400, "Failed to authenticate.", "provider", "validation_invalid_value", "OAuth2 provider tokenURL is required.");
+
+        try (FakeOAuth2Server oauth = FakeOAuth2Server.start(400, "{\"error\":\"invalid_grant\"}", 200, "{}")) {
+            request("POST", "/api/collections", token, Map.of(
+                    "name", "oauth_error_users",
+                    "type", "auth",
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "providers", List.of(Map.of(
+                                    "name", "oidc",
+                                    "clientId", "client-123",
+                                    "clientSecret", "secret-456",
+                                    "authURL", oauth.baseUrl() + "/authorize",
+                                    "tokenURL", oauth.baseUrl() + "/token",
+                                    "userInfoURL", oauth.baseUrl() + "/userinfo"
+                            ))
+                    )
+            ));
+
+            HttpResponse<String> missingProvider = rawRequest("POST", "/api/collections/oauth_error_users/auth-with-oauth2", null, Map.of(
+                    "provider", "missing",
+                    "code", "bad-code",
+                    "redirectURL", "http://127.0.0.1/callback"
+            ));
+            assertEquals(400, missingProvider.statusCode());
+            assertFieldError(
+                    missingProvider,
+                    400,
+                    "Failed to authenticate.",
+                    "provider",
+                    "validation_invalid_value",
+                    "Provider with name missing is missing or is not enabled."
+            );
+
+            HttpResponse<String> tokenFailure = rawRequest("POST", "/api/collections/oauth_error_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "bad-code",
+                    "redirectURL", "http://127.0.0.1/callback"
+            ));
+            assertEquals(400, tokenFailure.statusCode());
+            assertFieldError(tokenFailure, 400, "Failed to fetch OAuth2 token.", "provider", "validation_invalid_value", "{\"error\":\"invalid_grant\"}");
+        }
+
+        try (FakeOAuth2Server oauth = FakeOAuth2Server.start(200, "{\"access_token\":\"token-123\"}", 200, "{}")) {
+            request("POST", "/api/collections", token, Map.of(
+                    "name", "oauth_userinfo_error_users",
+                    "type", "auth",
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "providers", List.of(Map.of(
+                                    "name", "oidc",
+                                    "clientId", "client-123",
+                                    "clientSecret", "secret-456",
+                                    "authURL", oauth.baseUrl() + "/authorize",
+                                    "tokenURL", oauth.baseUrl() + "/token",
+                                    "userInfoURL", oauth.baseUrl() + "/userinfo"
+                            ))
+                    )
+            ));
+
+            HttpResponse<String> userInfoFailure = rawRequest("POST", "/api/collections/oauth_userinfo_error_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "bad-userinfo",
+                    "redirectURL", "http://127.0.0.1/callback"
+            ));
+            assertEquals(400, userInfoFailure.statusCode());
+            assertFieldError(userInfoFailure, 400, "Failed to fetch OAuth2 user.", "provider", "validation_invalid_value", "OAuth2 user info is empty.");
+        }
     }
 
     @Test
@@ -1737,7 +2235,8 @@ class LocalPocketBaseServerTest {
                 verificationToken,
                 null
         );
-        assertTrue(requestTokenAsBearer.statusCode() >= 400);
+        assertEquals(404, requestTokenAsBearer.statusCode());
+        assertErrorEnvelope(requestTokenAsBearer, 404, "Record not found.");
 
         HttpResponse<String> verified = rawRequest(
                 "POST",
@@ -1765,6 +2264,7 @@ class LocalPocketBaseServerTest {
                 Map.of("token", resetToken, "password", "newsecret456", "passwordConfirm", "different")
         );
         assertEquals(400, mismatch.statusCode());
+        assertFieldError(mismatch, 400, "passwordConfirm does not match password.", "passwordConfirm", "validation_invalid_value", "Passwords do not match.");
 
         HttpResponse<String> reset = rawRequest(
                 "POST",
@@ -1774,10 +2274,12 @@ class LocalPocketBaseServerTest {
         );
         assertEquals(204, reset.statusCode());
         assertEquals(401, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-refresh", userToken, null).statusCode());
-        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+        HttpResponse<String> oldPassword = rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
                 "identity", "lifecycle@example.com",
                 "password", "secret456"
-        )).statusCode());
+        ));
+        assertEquals(400, oldPassword.statusCode());
+        assertErrorEnvelope(oldPassword, 400, "Failed to authenticate.");
 
         JsonNode newAuth = request("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
                 "identity", "lifecycle@example.com",
@@ -1793,18 +2295,22 @@ class LocalPocketBaseServerTest {
         );
         assertEquals(204, emailChangeRequest.statusCode());
         String emailChangeToken = authRequestToken("emailChange", "lifecycle@example.com");
-        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/confirm-email-change", null, Map.of(
+        HttpResponse<String> wrongEmailChangePassword = rawRequest("POST", "/api/collections/auth_lifecycle_users/confirm-email-change", null, Map.of(
                 "token", emailChangeToken,
                 "password", "wrong-password"
-        )).statusCode());
+        ));
+        assertEquals(400, wrongEmailChangePassword.statusCode());
+        assertFieldError(wrongEmailChangePassword, 400, "Invalid password.", "password", "validation_invalid_value", "Invalid password.");
         assertEquals(204, rawRequest("POST", "/api/collections/auth_lifecycle_users/confirm-email-change", null, Map.of(
                 "token", emailChangeToken,
                 "password", "newsecret456"
         )).statusCode());
-        assertEquals(400, rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
+        HttpResponse<String> oldEmailAuth = rawRequest("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
                 "identity", "lifecycle@example.com",
                 "password", "newsecret456"
-        )).statusCode());
+        ));
+        assertEquals(400, oldEmailAuth.statusCode());
+        assertErrorEnvelope(oldEmailAuth, 400, "Failed to authenticate.");
         JsonNode changedAuth = request("POST", "/api/collections/auth_lifecycle_users/auth-with-password", null, Map.of(
                 "identity", "changed@example.com",
                 "password", "newsecret456"
@@ -1972,7 +2478,7 @@ class LocalPocketBaseServerTest {
                 "public", false
         ));
         assertEquals(400, forgedCreate.statusCode());
-        assertTrue(forgedCreate.body().contains("create rule"));
+        assertErrorEnvelope(forgedCreate, 400, "The record failed the collection create rule.");
 
         JsonNode alicePage = request("GET", "/api/collections/documents/records", aliceToken, null);
         assertEquals(1, alicePage.get("totalItems").asInt());
@@ -2060,6 +2566,15 @@ class LocalPocketBaseServerTest {
         );
         assertEquals(416, unsatisfiableRange.statusCode());
         assertEquals("bytes */20", unsatisfiableRange.headers().firstValue("Content-Range").orElse(""));
+
+        HttpResponse<String> missingFile = rawRequest(
+                "GET",
+                "/api/files/assets/" + created.get("id").asText() + "/missing.txt",
+                null,
+                null
+        );
+        assertEquals(404, missingFile.statusCode());
+        assertErrorEnvelope(missingFile, 404, "File not found.");
     }
 
     @Test
@@ -2149,7 +2664,14 @@ class LocalPocketBaseServerTest {
                 "attachment", new MultipartFile("bad.png", "image/png", "small".getBytes(StandardCharsets.UTF_8))
         ));
         assertEquals(400, badMime.statusCode());
-        assertTrue(badMime.body().contains("MIME type is not allowed"));
+        assertFieldError(
+                badMime,
+                400,
+                "File `bad.png` MIME type is not allowed for field `attachment`.",
+                "attachment",
+                "validation_invalid_value",
+                "File `bad.png` MIME type is not allowed for field `attachment`."
+        );
 
         HttpResponse<String> tooLarge = rawMultipartRequest("POST", "/api/collections/validated_assets/records", token, Map.of(
                 "title", "Too large"
@@ -2157,7 +2679,14 @@ class LocalPocketBaseServerTest {
                 "attachment", new MultipartFile("large.txt", "text/plain", "this payload is too large".getBytes(StandardCharsets.UTF_8))
         ));
         assertEquals(400, tooLarge.statusCode());
-        assertTrue(tooLarge.body().contains("exceeds maxSize"));
+        assertFieldError(
+                tooLarge,
+                400,
+                "File `large.txt` exceeds maxSize for field `attachment`.",
+                "attachment",
+                "validation_invalid_value",
+                "File `large.txt` exceeds maxSize for field `attachment`."
+        );
     }
 
     @Test
@@ -2212,10 +2741,12 @@ class LocalPocketBaseServerTest {
 
         HttpResponse<String> publicFile = rawRequest("GET", filePath, null, null);
         assertEquals(403, publicFile.statusCode());
+        assertFieldError(publicFile, 403, "Protected file token required.", "token", "validation_required", "Cannot be blank.");
 
         JsonNode aliceFileToken = request("POST", "/api/files/token", aliceToken, null);
         HttpResponse<String> fileTokenAsBearer = rawRequest("GET", filePath, aliceFileToken.get("token").asText(), null);
         assertEquals(403, fileTokenAsBearer.statusCode());
+        assertFieldError(fileTokenAsBearer, 403, "Protected file token required.", "token", "validation_required", "Cannot be blank.");
 
         HttpResponse<String> aliceFile = rawRequest("GET", filePath + "?token=" + aliceFileToken.get("token").asText(), null, null);
         assertEquals(200, aliceFile.statusCode());
@@ -2224,6 +2755,7 @@ class LocalPocketBaseServerTest {
         JsonNode bobFileToken = request("POST", "/api/files/token", bobToken, null);
         HttpResponse<String> bobFile = rawRequest("GET", filePath + "?token=" + bobFileToken.get("token").asText(), null, null);
         assertEquals(403, bobFile.statusCode());
+        assertFieldError(bobFile, 403, "Protected file is not accessible.", "token", "validation_invalid_value", "Protected file is not accessible.");
     }
 
     @Test
@@ -2307,6 +2839,44 @@ class LocalPocketBaseServerTest {
                     "subscriptions", List.of("updates/*")
             ));
             assertEquals(403, changedAuth.statusCode());
+        }
+    }
+
+    @Test
+    void realtimeValidationErrorsUseOfficialEnvelope() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> missingClient = rawRequest("POST", "/api/realtime", token, Map.of(
+                "subscriptions", List.of("updates/*")
+        ));
+        assertEquals(400, missingClient.statusCode());
+        assertFieldError(missingClient, 400, "Failed to subscribe.", "clientId", "validation_required", "Cannot be blank.");
+
+        HttpResponse<String> arrayPayload = rawJsonRequest("POST", "/api/realtime", token, "[]");
+        assertEquals(400, arrayPayload.statusCode());
+        assertFieldError(arrayPayload, 400, "Realtime subscription payload must be an object.", "body", "validation_invalid_value", "Request body must be a JSON object.");
+
+        HttpResponse<InputStream> response = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        assertEquals(200, response.statusCode());
+        try (SseReader events = new SseReader(response.body())) {
+            SseEvent connect = events.next("PB_CONNECT");
+            String clientId = mapper.readTree(connect.data()).get("clientId").asText();
+
+            HttpResponse<String> invalidOptions = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("updates/*"),
+                    "options", "[]"
+            ));
+            assertEquals(400, invalidOptions.statusCode());
+            assertFieldError(invalidOptions, 400, "Failed to subscribe.", "options", "validation_invalid_value", "Realtime subscription options must be an object.");
         }
     }
 
@@ -2638,6 +3208,28 @@ class LocalPocketBaseServerTest {
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     }
 
+    private HttpResponse<String> rawJsonRequest(String method, String path, String token, String body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .method(method, HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    private HttpResponse<String> rawBodyRequest(String method, String path, String token, String contentType, byte[] body) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
+                .header("Accept", "application/json")
+                .header("Content-Type", contentType)
+                .method(method, HttpRequest.BodyPublishers.ofByteArray(body));
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
     private JsonNode multipartRequest(
             String method,
             String path,
@@ -2669,6 +3261,87 @@ class LocalPocketBaseServerTest {
             builder.header("Authorization", "Bearer " + token);
         }
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    private void assertFieldError(
+            HttpResponse<String> response,
+            int status,
+            String message,
+            String field,
+            String code,
+            String fieldMessage
+    ) throws IOException {
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(status, body.get("status").asInt());
+        assertFalse(body.has("code"));
+        assertEquals(message, body.get("message").asText());
+        JsonNode fieldError = body.get("data").get(field);
+        assertNotNull(fieldError, "Missing validation error for " + field);
+        assertEquals(code, fieldError.get("code").asText());
+        assertEquals(fieldMessage, fieldError.get("message").asText());
+    }
+
+    private void assertFieldErrorMessageStartsWith(
+            HttpResponse<String> response,
+            int status,
+            String message,
+            String field,
+            String code,
+            String fieldMessagePrefix
+    ) throws IOException {
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(status, body.get("status").asInt());
+        assertFalse(body.has("code"));
+        assertEquals(message, body.get("message").asText());
+        JsonNode fieldError = body.get("data").get(field);
+        assertNotNull(fieldError, "Missing validation error for " + field);
+        assertEquals(code, fieldError.get("code").asText());
+        assertTrue(fieldError.get("message").asText().startsWith(fieldMessagePrefix));
+    }
+
+    private void assertMessageAndFieldErrorStartWith(
+            HttpResponse<String> response,
+            int status,
+            String messagePrefix,
+            String field,
+            String code,
+            String fieldMessagePrefix
+    ) throws IOException {
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(status, body.get("status").asInt());
+        assertFalse(body.has("code"));
+        assertTrue(body.get("message").asText().startsWith(messagePrefix));
+        JsonNode fieldError = body.get("data").get(field);
+        assertNotNull(fieldError, "Missing validation error for " + field);
+        assertEquals(code, fieldError.get("code").asText());
+        assertTrue(fieldError.get("message").asText().startsWith(fieldMessagePrefix));
+    }
+
+    private void assertErrorEnvelope(HttpResponse<String> response, int status, String message) throws IOException {
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(status, body.get("status").asInt());
+        assertFalse(body.has("code"));
+        assertEquals(message, body.get("message").asText());
+        assertTrue(body.get("data").isObject());
+        assertEquals(0, body.get("data").size());
+    }
+
+    private void appendZipEntry(Path source, Path target, String entryName, byte[] entryBytes) throws IOException {
+        try (InputStream input = Files.newInputStream(source);
+             ZipInputStream zipInput = new ZipInputStream(input);
+             ZipOutputStream zipOutput = new ZipOutputStream(Files.newOutputStream(target))) {
+            ZipEntry entry;
+            while ((entry = zipInput.getNextEntry()) != null) {
+                ZipEntry copy = new ZipEntry(entry.getName());
+                zipOutput.putNextEntry(copy);
+                zipInput.transferTo(zipOutput);
+                zipOutput.closeEntry();
+                zipInput.closeEntry();
+            }
+            zipOutput.putNextEntry(new ZipEntry(entryName));
+            zipOutput.write(entryBytes);
+            zipOutput.closeEntry();
+        }
     }
 
     private byte[] multipartBody(String boundary, Map<String, String> fields, Map<String, MultipartFile> files) {
@@ -2788,14 +3461,20 @@ class LocalPocketBaseServerTest {
         private final ExecutorService executor = Executors.newSingleThreadExecutor();
         private final CountDownLatch messageReceived = new CountDownLatch(1);
         private final AtomicReference<String> message = new AtomicReference<>("");
+        private final String greeting;
 
-        private FakeSmtpServer(ServerSocket serverSocket) {
+        private FakeSmtpServer(ServerSocket serverSocket, String greeting) {
             this.serverSocket = serverSocket;
+            this.greeting = greeting;
             executor.submit(this::serveOne);
         }
 
         static FakeSmtpServer start() throws IOException {
-            return new FakeSmtpServer(new ServerSocket(0));
+            return start("220 fake-smtp");
+        }
+
+        static FakeSmtpServer start(String greeting) throws IOException {
+            return new FakeSmtpServer(new ServerSocket(0), greeting);
         }
 
         int port() {
@@ -2811,7 +3490,11 @@ class LocalPocketBaseServerTest {
             try (Socket socket = serverSocket.accept();
                  BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
                  BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
-                write(writer, "220 fake-smtp");
+                write(writer, greeting);
+                if (!greeting.startsWith("220")) {
+                    messageReceived.countDown();
+                    return;
+                }
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String upper = line.toUpperCase();
@@ -2863,30 +3546,34 @@ class LocalPocketBaseServerTest {
         }
 
         static FakeOAuth2Server start() throws IOException {
+            return start(200, """
+                    {"access_token":"token-123","token_type":"Bearer"}
+                    """, 200, """
+                    {
+                      "sub":"oauth-sub-123",
+                      "email":"oidc@example.com",
+                      "name":"OIDC User",
+                      "preferred_username":"oidc-user"
+                    }
+                    """);
+        }
+
+        static FakeOAuth2Server start(int tokenStatus, String tokenBody, int userInfoStatus, String userInfoBody) throws IOException {
             HttpServer server = HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
             FakeOAuth2Server fake = new FakeOAuth2Server(server);
             server.createContext("/token", exchange -> {
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 fake.lastTokenBody.set(body);
-                byte[] bytes = """
-                        {"access_token":"token-123","token_type":"Bearer"}
-                        """.getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = tokenBody.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.sendResponseHeaders(tokenStatus, bytes.length);
                 exchange.getResponseBody().write(bytes);
                 exchange.close();
             });
             server.createContext("/userinfo", exchange -> {
-                byte[] bytes = """
-                        {
-                          "sub":"oauth-sub-123",
-                          "email":"oidc@example.com",
-                          "name":"OIDC User",
-                          "preferred_username":"oidc-user"
-                        }
-                        """.getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = userInfoBody.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.sendResponseHeaders(userInfoStatus, bytes.length);
                 exchange.getResponseBody().write(bytes);
                 exchange.close();
             });

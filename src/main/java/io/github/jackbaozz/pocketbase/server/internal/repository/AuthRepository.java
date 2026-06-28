@@ -135,7 +135,7 @@ public class AuthRepository extends BaseRepository {
                     return Map.of("token", token, "record", rec);
                 }
             }
-            throw new ApiException(400, "Invalid identity or password.");
+            throw invalidAuthCredentials();
         }
 
         CollectionSchema colSchema = storeContext.getCollection(collection);
@@ -158,7 +158,11 @@ public class AuthRepository extends BaseRepository {
                 return handleAuthWithMfa(colSchema, record, query, mfaId(body, query), "password", Map.of());
             }
         }
-        throw new ApiException(400, "Invalid identity or password.");
+        throw invalidAuthCredentials();
+    }
+
+    private ApiException invalidAuthCredentials() {
+        return new ApiException(400, "Failed to authenticate.");
     }
 
     public Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal) {
@@ -178,8 +182,7 @@ public class AuthRepository extends BaseRepository {
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
                 .orElseThrow(() -> new ApiException(400, "Failed to authenticate.",
-                        Map.of("provider", Map.of("code", "validation_invalid_value",
-                                "message", "Provider with name " + providerName + " is missing or is not enabled."))));
+                        ApiErrors.invalidField("provider", "Provider with name " + providerName + " is missing or is not enabled.")));
 
         OAuth2Support.OAuth2User oauthUser = OAuth2Support.authenticate(mapper, provider, code, redirectURL, codeVerifier);
         Map<String, Object> record = findOAuth2LinkedRecord(colSchema, provider.name, oauthUser.providerId());
@@ -288,14 +291,10 @@ public class AuthRepository extends BaseRepository {
         if (colSchema == null || !"auth".equals(colSchema.type)) {
             throw new ApiException(401, "Auth collection not found.");
         }
-        var dbRecord = database.dsl()
-                .selectFrom(qt(colSchema.name))
-                .where(qfs("id").eq(principal.id()))
-                .fetchOne();
-        if (dbRecord == null) {
+        Map<String, Object> record = recordRepository.getRawRecord(colSchema, principal.id());
+        if (record == null) {
             throw new ApiException(401, "Auth record no longer exists.");
         }
-        Map<String, Object> record = dbRecord.intoMap();
         if (!SecuritySupport.constantTimeEquals(String.valueOf(record.getOrDefault("tokenKey", "")), String.valueOf(principal.claims().getOrDefault("tokenKey", "")))) {
             throw new ApiException(401, "Auth record token is no longer valid.");
         }
@@ -493,7 +492,7 @@ public class AuthRepository extends BaseRepository {
         }
         if (password.length() > 71) {
             throw new ApiException(400, "Invalid OTP password.",
-                    Map.of("password", Map.of("code", "validation_invalid_value", "message", "Invalid OTP password.")));
+                    ApiErrors.invalidField("password", "Invalid OTP password."));
         }
 
         // Look up OTP record
@@ -503,7 +502,7 @@ public class AuthRepository extends BaseRepository {
                 .fetchOne();
 
         if (otpRecord == null) {
-            throw new ApiException(400, "Invalid or expired OTP.");
+            throw invalidOtp();
         }
 
         String recordId = otpRecord.getValue(qfs("recordId"), String.class);
@@ -514,10 +513,10 @@ public class AuthRepository extends BaseRepository {
                 : otpRecord.getValue(qfi("failedAttempts"), Integer.class);
 
         if (!colSchema.id.equals(collectionId) && !colSchema.name.equals(collection)) {
-            throw new ApiException(400, "Invalid or expired OTP.");
+            throw invalidOtp();
         }
         if (failedAttempts >= 5) {
-            throw new ApiException(429, "Too many failed OTP attempts.");
+            throw tooManyOtpAttempts();
         }
 
         // Verify OTP password
@@ -527,7 +526,7 @@ public class AuthRepository extends BaseRepository {
                     .set(qfi("failedAttempts"), failedAttempts + 1)
                     .where(qfs("id").eq(otpId))
                     .execute();
-            throw new ApiException(400, "Invalid or expired OTP.");
+            throw invalidOtp();
         }
 
         // OTP verified - delete it (one-time use)
@@ -538,7 +537,7 @@ public class AuthRepository extends BaseRepository {
         // Get the auth record and issue a token
         Map<String, Object> record = storeContext.getRecord(colSchema, recordId);
         if (record == null) {
-            throw new ApiException(400, "Auth record no longer exists.");
+            throw invalidOtp();
         }
 
         String sentTo = otpRecord.getValue(qfs("sentTo"), String.class);
@@ -556,6 +555,16 @@ public class AuthRepository extends BaseRepository {
         }
 
         return handleAuthWithMfa(colSchema, record, query, mfaId(body, query), "otp", Map.of());
+    }
+
+    private ApiException invalidOtp() {
+        return new ApiException(400, "Invalid or expired OTP.",
+                ApiErrors.invalidField("otpId", "Invalid or expired OTP."));
+    }
+
+    private ApiException tooManyOtpAttempts() {
+        return new ApiException(429, "Too many failed OTP attempts.",
+                ApiErrors.invalidField("otpId", "Too many failed OTP attempts."));
     }
 
     public Optional<Map<String, Object>> verifyToken(String token) {
@@ -616,7 +625,7 @@ public class AuthRepository extends BaseRepository {
                 : colSchema.passwordAuth.identityFields;
         if (requestedField != null && !requestedField.isBlank()) {
             if (!configured.contains(requestedField)) {
-                throw new ApiException(400, "Invalid identity field.");
+                throw invalidAuthCredentials();
             }
             return List.of(requestedField);
         }
@@ -630,12 +639,9 @@ public class AuthRepository extends BaseRepository {
         for (String field : new ArrayList<>(identityFields)) {
             String lookup = "email".equals(field) ? identity.trim().toLowerCase() : identity;
             try {
-                var record = database.dsl()
-                        .selectFrom(qt(colSchema.name))
-                        .where(qfs(field).eq(lookup))
-                        .fetchOne();
+                Map<String, Object> record = recordRepository.getRawRecordByField(colSchema, field, lookup);
                 if (record != null) {
-                    return record.intoMap();
+                    return record;
                 }
             } catch (Exception ignored) {
             }
@@ -706,10 +712,10 @@ public class AuthRepository extends BaseRepository {
                 if (mfa != null) {
                     database.dsl().deleteFrom(qt("_mfas")).where(qfs("id").eq(mfaIdParam)).execute();
                 }
-                throw new ApiException(400, "Missing or invalid MFA ID.");
+                throw invalidMfaId("Missing or invalid MFA ID.");
             }
             if (Objects.equals(mfa.get(qfs("method"), String.class), method)) {
-                throw new ApiException(400, "MFA requires a different auth method.");
+                throw invalidMfaId("MFA requires a different auth method.");
             }
             database.dsl().deleteFrom(qt("_mfas")).where(qfs("id").eq(mfaIdParam)).execute();
             return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
@@ -738,6 +744,10 @@ public class AuthRepository extends BaseRepository {
                 .values(id, now, now, String.valueOf(record.get("id")), collection.id, method)
                 .execute();
         throw new ApiException(401, "MFA required.", Map.of("mfaId", id));
+    }
+
+    private ApiException invalidMfaId(String message) {
+        return new ApiException(400, message, ApiErrors.invalidField("mfaId", message));
     }
 
     private Map<String, Object> findOAuth2LinkedRecord(CollectionSchema collection, String provider, String providerId) {

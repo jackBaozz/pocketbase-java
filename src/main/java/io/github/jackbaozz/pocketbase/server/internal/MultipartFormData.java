@@ -27,7 +27,8 @@ final class MultipartFormData {
     static MultipartFormData parse(String contentType, byte[] body, ObjectMapper mapper) {
         String boundary = boundary(contentType);
         if (boundary == null || boundary.isBlank()) {
-            throw new ApiException(400, "multipart/form-data boundary is required.");
+            throw new ApiException(400, "Failed to read request body.",
+                    ApiErrors.requiredField("body"));
         }
 
         ObjectNode fields = mapper.createObjectNode();

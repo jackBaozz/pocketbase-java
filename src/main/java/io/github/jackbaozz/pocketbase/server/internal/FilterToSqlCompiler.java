@@ -38,6 +38,7 @@ public final class FilterToSqlCompiler {
         List<Token> tokens = tokenize(filter);
         Parser parser = new Parser(tokens, quoteIdentifier, bindLiterals, containsRenderer);
         SqlPart part = parser.parseExpression();
+        parser.requireEnd();
         return new CompiledFilter(part.sql(), List.copyOf(part.bindings()));
     }
 
@@ -185,7 +186,7 @@ public final class FilterToSqlCompiler {
                 continue;
             }
 
-            throw new ApiException(400, "Invalid filter syntax near character: " + c);
+            throw invalidFilter("Invalid filter syntax near character: " + c);
         }
         tokens.add(new Token(TokenType.EOF, ""));
         return tokens;
@@ -228,6 +229,12 @@ public final class FilterToSqlCompiler {
             return parseOr();
         }
 
+        private void requireEnd() {
+            if (peek().type != TokenType.EOF) {
+                throw invalidFilter("Unexpected token in filter: " + peek().value);
+            }
+        }
+
         private SqlPart parseOr() {
             SqlPart left = parseAnd();
             while (peek().type == TokenType.OPERATOR && peek().value.equals("OR")) {
@@ -266,7 +273,7 @@ public final class FilterToSqlCompiler {
             if (match(TokenType.LPAREN)) {
                 SqlPart expr = parseExpression();
                 if (!match(TokenType.RPAREN)) {
-                    throw new ApiException(400, "Missing closing parenthesis in filter.");
+                    throw invalidFilter("Missing closing parenthesis in filter.");
                 }
                 return expr.wrap();
             }
@@ -314,7 +321,7 @@ public final class FilterToSqlCompiler {
                 }
                 return new Operand(SqlPart.of(escapeIdentifier(t.value)), false, null, null);
             }
-            throw new ApiException(400, "Unexpected token in filter: " + t.value);
+            throw invalidFilter("Unexpected token in filter: " + t.value);
         }
 
         private SqlPart literal(Object value) {
@@ -332,7 +339,7 @@ public final class FilterToSqlCompiler {
                 case "null" -> SqlPart.of("NULL");
                 case "true" -> bindLiterals ? SqlPart.bind(true) : SqlPart.of("TRUE");
                 case "false" -> bindLiterals ? SqlPart.bind(false) : SqlPart.of("FALSE");
-                default -> throw new ApiException(400, "Unexpected keyword: " + value);
+                default -> throw invalidFilter("Unexpected keyword: " + value);
             };
         }
 
@@ -386,7 +393,13 @@ public final class FilterToSqlCompiler {
                 );
                 return new SqlPart(rendered.sql(), rendered.bindings());
             }
-            SqlPart mapped = new SqlPart((negated ? "NOT LIKE " : "LIKE ") + "'%' || " + right.sql() + " || '%'", right.bindings());
+            SqlPart mapped = new SqlPart(
+                    (negated ? "NOT LIKE " : "LIKE ")
+                            + "'%' || "
+                            + "replace(replace(replace(" + right.sql() + ", '\\', '\\\\'), '%', '\\%'), '_', '\\_')"
+                            + " || '%' ESCAPE '\\'",
+                    right.bindings()
+            );
             List<Object> bindings = new ArrayList<>(left.bindings());
             bindings.addAll(mapped.bindings());
             return new SqlPart(left.sql() + " " + mapped.sql(), bindings);
@@ -403,6 +416,13 @@ public final class FilterToSqlCompiler {
         }
 
         private SqlPart mapOpToSql(String op, SqlPart rightSql) {
+            if ("NULL".equals(rightSql.sql()) && rightSql.bindings().isEmpty()) {
+                return switch (op) {
+                    case "=", "==" -> new SqlPart("IS NULL", List.of());
+                    case "!=" -> new SqlPart("IS NOT NULL", List.of());
+                    default -> throw invalidFilter("Unsupported null comparison operator: " + op);
+                };
+            }
             return switch (op) {
                 case "=", "==" -> new SqlPart("= " + rightSql.sql(), rightSql.bindings());
                 case "!=" -> new SqlPart("!= " + rightSql.sql(), rightSql.bindings());
@@ -410,8 +430,12 @@ public final class FilterToSqlCompiler {
                 case ">=" -> new SqlPart(">= " + rightSql.sql(), rightSql.bindings());
                 case "<" -> new SqlPart("< " + rightSql.sql(), rightSql.bindings());
                 case "<=" -> new SqlPart("<= " + rightSql.sql(), rightSql.bindings());
-                default -> throw new ApiException(400, "Unsupported operator: " + op);
+                default -> throw invalidFilter("Unsupported operator: " + op);
             };
         }
+    }
+
+    private static ApiException invalidFilter(String message) {
+        return new ApiException(400, "Invalid filter.", ApiErrors.invalidField("filter", message));
     }
 }

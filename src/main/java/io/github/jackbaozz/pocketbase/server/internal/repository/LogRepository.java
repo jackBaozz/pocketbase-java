@@ -6,6 +6,8 @@ import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
+import io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator;
+import org.jooq.Field;
 import org.jooq.Record;
 import org.jooq.Result;
 import org.jooq.exception.DataAccessException;
@@ -21,7 +23,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 
 public class LogRepository extends BaseRepository {
 
@@ -45,7 +46,8 @@ public class LogRepository extends BaseRepository {
 
         try {
             Result<? extends Record> records = database.dsl()
-                    .selectFrom(qt("_logs"))
+                    .select(logFields())
+                    .from(qt("_logs"))
                     .fetch();
 
             List<Map<String, Object>> items = new ArrayList<>();
@@ -77,7 +79,8 @@ public class LogRepository extends BaseRepository {
         List<Map<String, Object>> result = new ArrayList<>();
         try {
             Result<? extends Record> records = database.dsl()
-                    .selectFrom(qt("_logs"))
+                    .select(logFields())
+                    .from(qt("_logs"))
                     .fetch();
 
             Map<String, Integer> counts = new LinkedHashMap<>();
@@ -104,7 +107,8 @@ public class LogRepository extends BaseRepository {
     public Map<String, Object> getLog(String id, Map<String, String> query) {
         try {
             Record r = database.dsl()
-                    .selectFrom(qt("_logs"))
+                    .select(logFields())
+                    .from(qt("_logs"))
                     .where(qfs("id").eq(id))
                     .fetchOne();
             if (r != null) {
@@ -135,37 +139,28 @@ public class LogRepository extends BaseRepository {
         return log;
     }
 
+    private List<Field<?>> logFields() {
+        return List.of(
+                qfs("id"),
+                qfs("created"),
+                qfs("updated"),
+                qfi("level"),
+                qfs("message"),
+                qfs("data")
+        );
+    }
+
     private Map<String, Object> withoutInternalFields(Map<String, Object> source) {
         Map<String, Object> copy = new LinkedHashMap<>(source);
         copy.remove(INTERNAL_ROWID);
         return copy;
     }
 
-    @SuppressWarnings("unchecked")
     private boolean matchesLogFilter(Map<String, Object> log, String filter) {
         if (filter == null || filter.isBlank()) {
             return true;
         }
-        String[] parts = filter.trim().split("=", 2);
-        if (parts.length != 2) {
-            return true;
-        }
-        String left = parts[0].trim();
-        String right = stripQuotes(parts[1].trim());
-        Object value = null;
-        if (left.startsWith("data.") && log.get("data") instanceof Map<?, ?> data) {
-            value = ((Map<String, Object>) data).get(left.substring("data.".length()));
-        } else {
-            value = log.get(left);
-        }
-        return Objects.equals(String.valueOf(value), right);
-    }
-
-    private String stripQuotes(String value) {
-        if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith("\"") && value.endsWith("\""))) {
-            return value.substring(1, value.length() - 1);
-        }
-        return value;
+        return RuleEvaluator.matches(filter, RuleEvaluator.context(log, null, Map.of(), "GET", null));
     }
 
     private void sortLogs(List<Map<String, Object>> items, String sort) {

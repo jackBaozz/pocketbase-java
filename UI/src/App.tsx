@@ -243,6 +243,68 @@ type ViewName =
   | "sql"
   | "logs";
 
+type AdminRoute = {
+  view: ViewName;
+  collectionName?: string;
+};
+
+function adminRouteFromHash(hash: string): AdminRoute | null {
+  if (!hash || !hash.startsWith("#/")) return null;
+  const segments = hash
+    .slice(2)
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    });
+  if (segments[0] === "logs") {
+    return { view: "logs" };
+  }
+  if (segments[0] === "settings") {
+    const settingsRoutes: Record<string, ViewName> = {
+      "": "settings",
+      general: "settings",
+      mail: "mail",
+      storage: "storage",
+      backups: "backups",
+      crons: "crons",
+      "export-collections": "export",
+      export: "export",
+      "import-collections": "import",
+      import: "import",
+      sql: "sql"
+    };
+    return { view: settingsRoutes[segments[1] ?? ""] ?? "settings" };
+  }
+  if (segments[0] === "collections") {
+    const collectionName = segments[1];
+    const view = segments[2] === "schema" ? "schema" : "records";
+    return collectionName ? { view, collectionName } : { view: "records" };
+  }
+  return null;
+}
+
+function adminHashFor(view: ViewName, collectionName?: string) {
+  const settingsRoutes: Partial<Record<ViewName, string>> = {
+    settings: "#/settings",
+    mail: "#/settings/mail",
+    storage: "#/settings/storage",
+    backups: "#/settings/backups",
+    crons: "#/settings/crons",
+    export: "#/settings/export-collections",
+    import: "#/settings/import-collections",
+    sql: "#/settings/sql"
+  };
+  if (view === "logs") return "#/logs";
+  if (settingsRoutes[view]) return settingsRoutes[view]!;
+  const base = collectionName ? `#/collections/${encodeURIComponent(collectionName)}` : "#/collections";
+  return view === "schema" ? `${base}/schema` : `${base}/records`;
+}
+
 type CollectionEditorState = {
   mode: "create" | "edit";
   collection?: CollectionSchema;
@@ -335,6 +397,32 @@ function App() {
     [collections, selectedName]
   );
 
+  const navigateTo = useCallback(
+    (nextView: ViewName, collectionName = selectedName) => {
+      if ((nextView === "records" || nextView === "schema") && collectionName) {
+        setSelectedName(collectionName);
+      }
+      setView(nextView);
+      const nextHash = adminHashFor(nextView, collectionName);
+      if (window.location.hash !== nextHash) {
+        window.location.hash = nextHash;
+      }
+    },
+    [selectedName]
+  );
+
+  useEffect(() => {
+    if (!authenticated) return;
+    const route = adminRouteFromHash(hash);
+    if (!route) return;
+    if ((route.view === "records" || route.view === "schema") && route.collectionName) {
+      if (collections.some((collection) => collection.name === route.collectionName)) {
+        setSelectedName(route.collectionName);
+      }
+    }
+    setView(route.view);
+  }, [authenticated, collections, hash]);
+
   const visibleCollections = useMemo(() => {
     const search = collectionSearch.trim().toLowerCase();
     if (!search) return collections;
@@ -374,6 +462,10 @@ function App() {
       const data = await apiRequest<ListResponse<CollectionSchema>>("/api/collections?perPage=500&sort=name", token);
       setCollections(data.items);
       setSelectedName((current) => {
+        const route = adminRouteFromHash(window.location.hash);
+        if (route?.collectionName && data.items.some((collection) => collection.name === route.collectionName)) {
+          return route.collectionName;
+        }
         if (current && data.items.some((collection) => collection.name === current)) return current;
         return data.items.find((collection) => collection.name !== "_superusers")?.name ?? data.items[0]?.name ?? "";
       });
@@ -621,6 +713,9 @@ function App() {
     setSqlError("");
     setSelectedName("");
     setView("records");
+    if (window.location.hash.startsWith("#/")) {
+      window.location.hash = "";
+    }
   }
 
   async function saveCollection(payload: CollectionPayload) {
@@ -995,7 +1090,7 @@ function App() {
         <button
           className="logo"
           onClick={() => {
-            if (selectedName) setView("records");
+            if (selectedName) navigateTo("records");
           }}
           aria-label="Open collections"
         >
@@ -1005,7 +1100,7 @@ function App() {
         <nav className="app-main-nav" aria-label="Primary">
           <button
             className={collectionView ? "header-link active" : "header-link"}
-            onClick={() => setView("records")}
+            onClick={() => navigateTo("records")}
             disabled={!authenticated || !selectedName}
           >
             <Database size={15} />
@@ -1013,7 +1108,7 @@ function App() {
           </button>
           <button
             className={view === "logs" ? "header-link active" : "header-link"}
-            onClick={() => setView("logs")}
+            onClick={() => navigateTo("logs")}
             disabled={!authenticated}
           >
             <Activity size={15} />
@@ -1021,7 +1116,7 @@ function App() {
           </button>
           <button
             className={settingsView ? "header-link active" : "header-link"}
-            onClick={() => setView("settings")}
+            onClick={() => navigateTo("settings")}
             disabled={!authenticated}
           >
             <Settings size={15} />
@@ -1049,15 +1144,14 @@ function App() {
             onSearch={setCollectionSearch}
             onCreate={() => setCollectionEditor({ mode: "create" })}
             onSelect={(collection) => {
-              setSelectedName(collection.name);
-              setView("records");
+              navigateTo("records", collection.name);
             }}
             onTogglePinned={togglePinnedCollection}
           />
         )}
 
         {authenticated && !setupRequired && settingsView && (
-          <SettingsSidebar current={view} onSelect={setView} />
+          <SettingsSidebar current={view} onSelect={navigateTo} />
         )}
 
         <main className={showWorkspaceTopbar ? "workspace" : "workspace workspace-flush"}>
@@ -1085,11 +1179,11 @@ function App() {
             <>
               {collectionView && (
                 <div className="view-tabs" role="tablist" aria-label="Collection views">
-                  <button className={view === "records" ? "active" : ""} onClick={() => setView("records")}>
+                  <button className={view === "records" ? "active" : ""} onClick={() => navigateTo("records")}>
                     <Database size={16} />
                     Records
                   </button>
-                  <button className={view === "schema" ? "active" : ""} onClick={() => setView("schema")}>
+                  <button className={view === "schema" ? "active" : ""} onClick={() => navigateTo("schema")}>
                     <ListFilter size={16} />
                     Schema
                   </button>

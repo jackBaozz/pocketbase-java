@@ -130,10 +130,10 @@ public final class RealtimeHub {
             try {
                 options = mapper.readTree(rawOptions);
             } catch (IOException e) {
-                throw new ApiException(400, "Invalid realtime subscription options.");
+                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Invalid realtime subscription options."));
             }
             if (options == null || !options.isObject()) {
-                throw new ApiException(400, "Realtime subscription options must be an object.");
+                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Realtime subscription options must be an object."));
             }
 
             Map<String, String> query = new LinkedHashMap<>();
@@ -148,7 +148,7 @@ public final class RealtimeHub {
                 return;
             }
             if (!node.isObject()) {
-                throw new ApiException(400, "Realtime subscription options query and headers must be objects.");
+                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Realtime subscription options query and headers must be objects."));
             }
             node.fields().forEachRemaining(entry -> target.put(entry.getKey(), stringify(entry.getValue(), mapper)));
         }
@@ -163,7 +163,7 @@ public final class RealtimeHub {
             try {
                 return mapper.writeValueAsString(value);
             } catch (IOException e) {
-                throw new ApiException(400, "Invalid realtime subscription options.");
+                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Invalid realtime subscription options."));
             }
         }
     }
@@ -181,7 +181,7 @@ public final class RealtimeHub {
             String target = pieces[0];
             int slash = target.indexOf('/');
             if (slash <= 0 || slash == target.length() - 1) {
-                throw new ApiException(400, "Invalid realtime subscription topic: " + topic);
+                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("subscriptions", "Invalid realtime subscription topic."));
             }
             String collection = target.substring(0, slash);
             String record = target.substring(slash + 1);

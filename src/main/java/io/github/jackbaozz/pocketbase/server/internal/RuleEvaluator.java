@@ -404,7 +404,7 @@ public final class RuleEvaluator {
         Object parse() {
             Object value = parseOr();
             if (peek().type != TokenType.END) {
-                throw new ApiException(400, "Invalid filter expression near `" + peek().value + "`.");
+                throw invalidFilter("Invalid filter expression near `" + peek().value + "`.");
             }
             return value;
         }
@@ -450,7 +450,7 @@ public final class RuleEvaluator {
                 case BOOLEAN -> Boolean.parseBoolean(token.value);
                 case NULL -> null;
                 case IDENTIFIER -> context.resolve(token.value);
-                default -> throw new ApiException(400, "Expected filter operand near `" + token.value + "`.");
+                default -> throw invalidFilter("Expected filter operand near `" + token.value + "`.");
             };
         }
 
@@ -466,7 +466,7 @@ public final class RuleEvaluator {
             if (peek().type == type) {
                 return advance();
             }
-            throw new ApiException(400, message);
+            throw invalidFilter(message);
         }
 
         private Token advance() {
@@ -476,5 +476,9 @@ public final class RuleEvaluator {
         private Token peek() {
             return tokens.get(index);
         }
+    }
+
+    private static ApiException invalidFilter(String message) {
+        return new ApiException(400, "Invalid filter.", ApiErrors.invalidField("filter", message));
     }
 }

@@ -18,7 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
-final class S3Probe {
+public final class S3Probe {
     private static final DateTimeFormatter AMZ_DATE = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
             .withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter DATE_SCOPE = DateTimeFormatter.ofPattern("yyyyMMdd")
@@ -31,10 +31,10 @@ final class S3Probe {
     private S3Probe() {
     }
 
-    static void test(String filesystem, Map<String, Object> config) {
+    public static void test(String filesystem, Map<String, Object> config) {
         String target = filesystem == null || filesystem.isBlank() ? "storage" : filesystem;
         if (!"storage".equals(target) && !"backups".equals(target)) {
-            throw validationError("filesystem", "Must be either storage or backups.");
+            throw invalidError("filesystem", "Must be either storage or backups.");
         }
         if (!truthy(config.get("enabled"))) {
             throw rawError("S3 " + target + " filesystem is not enabled");
@@ -200,12 +200,21 @@ final class S3Probe {
         return fallback;
     }
 
-    private static ApiException validationError(String field, String message) {
-        return new ApiException(400, "Failed to test the S3 filesystem.", Map.of(field, Map.of("message", message)));
+    private static ApiException invalidError(String field, String message) {
+        return new ApiException(400, "Failed to test the S3 filesystem.", ApiErrors.invalidField(field, message));
+    }
+
+    private static ApiException requiredError(String field) {
+        return new ApiException(400, "Failed to test the S3 filesystem.", ApiErrors.requiredField(field));
     }
 
     private static ApiException rawError(String message) {
-        return new ApiException(400, "Failed to test the S3 filesystem. Raw error: \n" + message);
+        String detail = message == null || message.isBlank() ? "Unknown S3 error." : message;
+        return new ApiException(
+                400,
+                "Failed to test the S3 filesystem. Raw error: \n" + detail,
+                ApiErrors.invalidField("filesystem", detail)
+        );
     }
 
     private record S3Config(
@@ -222,16 +231,16 @@ final class S3Probe {
             String accessKey = text(config, "accessKey");
             String secret = text(config, "secret");
             if (bucket.isBlank()) {
-                throw validationError("bucket", "Bucket is required.");
+                throw requiredError("bucket");
             }
             if (region.isBlank()) {
-                throw validationError("region", "Region is required.");
+                throw requiredError("region");
             }
             if (accessKey.isBlank()) {
-                throw validationError("accessKey", "Access key is required.");
+                throw requiredError("accessKey");
             }
             if (secret.isBlank()) {
-                throw validationError("secret", "Secret is required.");
+                throw requiredError("secret");
             }
             return new S3Config(
                     bucket,

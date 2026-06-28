@@ -23,7 +23,8 @@ public final class AppleClientSecretGenerator {
 
     public static Map<String, Object> generate(ObjectMapper mapper, JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Invalid client secret data.");
+            throw new ApiException(400, "Invalid client secret data.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
 
         String clientId = requiredText(body, "clientId");
@@ -33,17 +34,17 @@ public final class AppleClientSecretGenerator {
         int duration = requiredInt(body, "duration");
 
         if (teamId.length() != 10) {
-            throw fieldError("teamId", "Must be exactly 10 characters.");
+            throw invalidField("teamId", "Must be exactly 10 characters.");
         }
         if (keyId.length() != 10) {
-            throw fieldError("keyId", "Must be exactly 10 characters.");
+            throw invalidField("keyId", "Must be exactly 10 characters.");
         }
         if (duration < 1 || duration > MAX_DURATION_SECONDS) {
-            throw fieldError("duration", "Must be between 1 and 15777000 seconds.");
+            throw invalidField("duration", "Must be between 1 and 15777000 seconds.");
         }
         if (!privateKey.contains("-----BEGIN PRIVATE KEY-----")
                 || !privateKey.contains("-----END PRIVATE KEY-----")) {
-            throw fieldError("privateKey", "Must be a PKCS#8 EC private key PEM.");
+            throw invalidField("privateKey", "Must be a PKCS#8 EC private key PEM.");
         }
 
         try {
@@ -69,14 +70,14 @@ public final class AppleClientSecretGenerator {
         } catch (ApiException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApiException(400, "Failed to generate client secret. Raw error: \n" + e.getMessage());
+            throw invalidField("privateKey", "Must be a valid PKCS#8 EC private key PEM.");
         }
     }
 
     private static String requiredText(JsonNode body, String field) {
         JsonNode value = body.get(field);
         if (value == null || value.isNull() || value.asText("").isBlank()) {
-            throw fieldError(field, "This field is required.");
+            throw requiredField(field);
         }
         return value.asText().trim();
     }
@@ -84,7 +85,7 @@ public final class AppleClientSecretGenerator {
     private static int requiredInt(JsonNode body, String field) {
         JsonNode value = body.get(field);
         if (value == null || value.isNull()) {
-            throw fieldError(field, "This field is required.");
+            throw requiredField(field);
         }
         if (value.canConvertToInt()) {
             return value.asInt();
@@ -92,12 +93,16 @@ public final class AppleClientSecretGenerator {
         try {
             return Integer.parseInt(value.asText("").trim());
         } catch (NumberFormatException e) {
-            throw fieldError(field, "Must be a valid number.");
+            throw invalidField(field, "Must be a valid number.");
         }
     }
 
-    private static ApiException fieldError(String field, String message) {
-        return new ApiException(400, "Invalid client secret data.", Map.of(field, Map.of("message", message)));
+    private static ApiException requiredField(String field) {
+        return new ApiException(400, "Invalid client secret data.", ApiErrors.requiredField(field));
+    }
+
+    private static ApiException invalidField(String field, String message) {
+        return new ApiException(400, "Invalid client secret data.", ApiErrors.invalidField(field, message));
     }
 
     private static ECPrivateKey parsePrivateKey(String pem) throws Exception {

@@ -52,7 +52,8 @@ public final class OAuth2Support {
             String codeVerifier
     ) {
         if (isBlank(config.tokenURL)) {
-            throw new ApiException(400, "OAuth2 provider tokenURL is required.");
+            throw new ApiException(400, "Failed to authenticate.",
+                    ApiErrors.invalidField("provider", "OAuth2 provider tokenURL is required."));
         }
         Map<String, Object> token = fetchToken(mapper, config, code, redirectURL, codeVerifier);
         Map<String, Object> userInfo = OAuth2ProviderManager.parseUserInfo(config, fetchUserInfo(mapper, config, token));
@@ -61,7 +62,8 @@ public final class OAuth2Support {
             providerId = text(userInfo.get("id"));
         }
         if (providerId.isBlank()) {
-            throw new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("message", "OAuth2 user id is missing.")));
+            throw new ApiException(400, "Failed to authenticate.",
+                    ApiErrors.invalidField("provider", "OAuth2 user id is missing."));
         }
         String email = text(userInfo.get("email"));
         String name = text(userInfo.get("name"));
@@ -104,14 +106,16 @@ public final class OAuth2Support {
         try {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new ApiException(400, "Failed to fetch OAuth2 token.", Map.of("provider", Map.of("message", response.body())));
+                throw new ApiException(400, "Failed to fetch OAuth2 token.",
+                        ApiErrors.invalidField("provider", response.body()));
             }
             return mapper.readValue(response.body(), MAP_TYPE);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new ApiException(400, "Failed to fetch OAuth2 token.", Map.of("provider", Map.of("message", e.getMessage())));
+            throw new ApiException(400, "Failed to fetch OAuth2 token.",
+                    ApiErrors.invalidField("provider", e.getMessage()));
         }
     }
 
@@ -124,12 +128,14 @@ public final class OAuth2Support {
         if (isBlank(config.userInfoURL)) {
             String idToken = text(token.get("id_token"));
             if (idToken.isBlank()) {
-                throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", "userInfoURL or id_token is required.")));
+                throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                        ApiErrors.invalidField("provider", "userInfoURL or id_token is required."));
             }
             return parseJwtClaims(mapper, idToken);
         }
         if (accessToken.isBlank()) {
-            throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", "access_token is missing.")));
+            throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                    ApiErrors.invalidField("provider", "access_token is missing."));
         }
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
         HttpRequest request = HttpRequest.newBuilder(URI.create(config.userInfoURL))
@@ -141,27 +147,31 @@ public final class OAuth2Support {
         try {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", response.body())));
+                throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                        ApiErrors.invalidField("provider", response.body()));
             }
             return mapper.readValue(response.body(), MAP_TYPE);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", e.getMessage())));
+            throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                    ApiErrors.invalidField("provider", e.getMessage()));
         }
     }
 
     private static Map<String, Object> parseJwtClaims(ObjectMapper mapper, String jwt) {
         String[] parts = jwt.split("\\.");
         if (parts.length < 2) {
-            throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", "Invalid id_token.")));
+            throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                    ApiErrors.invalidField("provider", "Invalid id_token."));
         }
         try {
             byte[] bytes = Base64.getUrlDecoder().decode(parts[1]);
             return mapper.readValue(bytes, MAP_TYPE);
         } catch (IOException | IllegalArgumentException e) {
-            throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", "Invalid id_token.")));
+            throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                    ApiErrors.invalidField("provider", "Invalid id_token."));
         }
     }
 

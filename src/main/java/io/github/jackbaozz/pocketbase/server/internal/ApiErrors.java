@@ -24,4 +24,8 @@ public final class ApiErrors {
     public static Map<String, Object> notUniqueField(String field) {
         return fieldError(field, "validation_not_unique", MESSAGE_VALUE_MUST_BE_UNIQUE);
     }
+
+    public static Map<String, Object> invalidField(String field, String message) {
+        return fieldError(field, "validation_invalid_value", message);
+    }
 }

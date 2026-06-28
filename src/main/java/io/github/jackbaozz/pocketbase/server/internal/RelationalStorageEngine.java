@@ -521,14 +521,15 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     @Override
     public Map<String, Object> runSql(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "An error occurred while loading the submitted data.");
+            throw new ApiException(400, "An error occurred while loading the submitted data.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         JsonNode queryNode = body.get("query");
         if (queryNode == null || queryNode.isNull() || queryNode.asText().isBlank()) {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    Map.of("query", Map.of("code", "validation_invalid_value", "message", "query is required."))
+                    ApiErrors.requiredField("query")
             );
         }
         String query = queryNode.asText();
@@ -536,7 +537,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    Map.of("query", Map.of("code", "validation_invalid_value", "message", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters."))
+                    ApiErrors.invalidField("query", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters.")
             );
         }
 
@@ -545,9 +546,12 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         try {
             result = executeSql(query);
         } catch (RuntimeException e) {
+            String message = "Failed to execute query. Raw error:\n"
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             throw new ApiException(
                     400,
-                    "Failed to execute query. Raw error:\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+                    message,
+                    ApiErrors.invalidField("query", message)
             );
         }
 
@@ -586,15 +590,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         if (collection == null) {
             return List.of();
         }
-        try {
-            List<Map<String, Object>> records = new ArrayList<>();
-            for (org.jooq.Record record : database.dsl().selectFrom(DSL.table(DSL.name(collection.name))).fetch()) {
-                records.add(recordRepository.normalizeStoredRecord(collection, record.intoMap()));
-            }
-            return records;
-        } catch (DataAccessException e) {
-            return List.of();
-        }
+        return recordRepository.listRawRecords(collection);
     }
 
 

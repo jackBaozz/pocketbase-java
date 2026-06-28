@@ -1,5 +1,6 @@
 package io.github.jackbaozz.pocketbase.server.internal;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -474,7 +475,7 @@ public final class HttpApi implements HttpHandler {
 
         String clientId = values.get("clientId");
         if (clientId == null || clientId.isBlank()) {
-            throw new ApiException(400, "clientId is required.");
+            throw new ApiException(400, "Failed to subscribe.", ApiErrors.requiredField("clientId"));
         }
 
         Map<String, String> requestQuery = new LinkedHashMap<>();
@@ -515,7 +516,8 @@ public final class HttpApi implements HttpHandler {
             return;
         }
         if (!body.isObject()) {
-            throw new ApiException(400, "Realtime subscription payload must be an object.");
+            throw new ApiException(400, "Realtime subscription payload must be an object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         Iterator<Map.Entry<String, JsonNode>> fields = body.fields();
         while (fields.hasNext()) {
@@ -564,7 +566,7 @@ public final class HttpApi implements HttpHandler {
         JsonNode body = input.body();
         JsonNode requestsNode = body.isArray() ? body : body.get("requests");
         if (requestsNode == null || !requestsNode.isArray()) {
-            throw new ApiException(400, "Batch payload must contain a requests array.");
+            throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("requests"));
         }
         return store.transactional(() -> {
             List<Map<String, Object>> responses = new ArrayList<>();
@@ -575,9 +577,7 @@ public final class HttpApi implements HttpHandler {
                 } catch (ApiException e) {
                     throw new ApiException(400, "Batch request failed.", Map.of(
                             "index", index,
-                            "status", e.status(),
-                            "message", e.getMessage(),
-                            "data", e.data()
+                            "response", errorBody(e.status(), e.getMessage(), e.data())
                     ));
                 }
                 index++;
@@ -594,13 +594,19 @@ public final class HttpApi implements HttpHandler {
                 MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
                 JsonNode payload = multipart.fields().get("@jsonPayload");
                 if (payload == null || payload.isNull()) {
-                    throw new ApiException(400, "Batch multipart payload requires @jsonPayload.");
+                    throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("@jsonPayload"));
                 }
-                JsonNode body = payload.isTextual() ? store.mapper().readTree(payload.asText()) : payload;
+                JsonNode body;
+                try {
+                    body = payload.isTextual() ? store.mapper().readTree(payload.asText()) : payload;
+                } catch (JsonProcessingException e) {
+                    throw new ApiException(400, "Failed to process batch.",
+                            ApiErrors.invalidField("@jsonPayload", "Invalid JSON payload."));
+                }
                 return new BatchInput(body, batchFiles(multipart.files()));
             }
             if (bytes.length == 0) {
-                throw new ApiException(400, "Batch payload must contain a requests array.");
+                throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("requests"));
             }
             return new BatchInput(store.mapper().readTree(bytes), Map.of());
         }
@@ -614,7 +620,7 @@ public final class HttpApi implements HttpHandler {
         files.forEach((name, uploaded) -> {
             BatchFileField field = batchFileField(name);
             if (field == null) {
-                throw new ApiException(400, "Batch file fields must use requests.N.field or requests[N].field.");
+                throw new ApiException(400, "Failed to process batch.", ApiErrors.invalidField("files", "Batch file fields must use requests.N.field or requests[N].field."));
             }
             out.computeIfAbsent(field.index(), ignored -> new LinkedHashMap<>())
                     .computeIfAbsent(field.field(), ignored -> new ArrayList<>())
@@ -664,26 +670,33 @@ public final class HttpApi implements HttpHandler {
             RequestPrincipal principal
     ) {
         if (request == null || !request.isObject()) {
-            throw new ApiException(400, "Batch request must be an object.");
+            throw new ApiException(400, "Batch request failed.", ApiErrors.invalidField("request", "Batch request must be an object."));
         }
         String method = optionalText(request, "method").toUpperCase(Locale.ROOT);
         if (method.isBlank()) {
-            throw new ApiException(400, "Batch request method is required.");
+            throw new ApiException(400, "Batch request failed.", ApiErrors.requiredField("method"));
         }
         String url = optionalText(request, "url");
         if (url.isBlank()) {
             url = optionalText(request, "path");
         }
         if (url.isBlank()) {
-            throw new ApiException(400, "Batch request url is required.");
+            throw new ApiException(400, "Batch request failed.", ApiErrors.requiredField("url"));
         }
         JsonNode body = request.has("body") ? request.get("body") : store.mapper().createObjectNode();
-        BatchTarget target = batchTarget(url);
+        BatchTarget target;
+        try {
+            target = batchTarget(url);
+        } catch (IllegalArgumentException e) {
+            throw new ApiException(400, "Batch request failed.",
+                    ApiErrors.invalidField("url", "Invalid batch request URL."));
+        }
 
         List<String> segments = target.segments();
         if (segments.size() < 4 || !"api".equals(segments.get(0)) || !"collections".equals(segments.get(1))
                 || !"records".equals(segments.get(3))) {
-            throw new ApiException(400, "Only record batch requests are supported.");
+            throw new ApiException(400, "Only record batch requests are supported.",
+                    ApiErrors.invalidField("url", "Only record batch requests are supported."));
         }
         String collection = segments.get(2);
         if (JsonFileStore.SUPERUSERS.equals(collection)) {
@@ -723,7 +736,8 @@ public final class HttpApi implements HttpHandler {
                 default -> throw new ApiException(405, "Method not allowed.");
             }
         } else {
-            throw new ApiException(400, "Only record batch requests are supported.");
+            throw new ApiException(400, "Only record batch requests are supported.",
+                    ApiErrors.invalidField("url", "Only record batch requests are supported."));
         }
 
         Map<String, Object> response = new LinkedHashMap<>();
@@ -751,7 +765,7 @@ public final class HttpApi implements HttpHandler {
         UploadedFile file = input.files().values().stream()
                 .flatMap(List::stream)
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Backup file is required."));
+                .orElseThrow(() -> new ApiException(400, "Backup file is required.", ApiErrors.requiredField("file")));
         return store.uploadBackup(file.originalFilename(), file.bytes());
     }
 
@@ -843,7 +857,7 @@ public final class HttpApi implements HttpHandler {
             if (bytes.length == 0) {
                 return new RecordInput(store.mapper().createObjectNode(), Map.of());
             }
-            return new RecordInput(store.mapper().readTree(bytes), Map.of());
+            return new RecordInput(readJsonBytes(bytes), Map.of());
         }
     }
 
@@ -853,7 +867,16 @@ public final class HttpApi implements HttpHandler {
             if (bytes.length == 0) {
                 return store.mapper().createObjectNode();
             }
+            return readJsonBytes(bytes);
+        }
+    }
+
+    private JsonNode readJsonBytes(byte[] bytes) throws IOException {
+        try {
             return store.mapper().readTree(bytes);
+        } catch (JsonProcessingException e) {
+            throw new ApiException(400, "Failed to read request body.",
+                    ApiErrors.invalidField("body", "Invalid JSON payload."));
         }
     }
 

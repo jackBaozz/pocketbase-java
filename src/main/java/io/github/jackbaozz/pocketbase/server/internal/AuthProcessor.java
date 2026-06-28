@@ -115,18 +115,18 @@ public final class AuthProcessor {
         CollectionSchema colSchema = ctx.getCollection(collection);
         Map<String, Object> record = ctx.getRecord(colSchema, recordId);
         if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw new ApiException(400, "Invalid or expired token.");
+            throw invalidOrExpiredToken();
         }
 
         String password = requireText(body, "password");
         String passwordConfirm = requireText(body, "passwordConfirm");
         if (!password.equals(passwordConfirm)) {
             throw new ApiException(400, "passwordConfirm does not match password.",
-                    Map.of("passwordConfirm", Map.of("code", "validation_invalid_value", "message", "Passwords do not match.")));
+                    ApiErrors.invalidField("passwordConfirm", "Passwords do not match."));
         }
         if (password.length() < 8) {
             throw new ApiException(400, "Password must be at least 8 characters.",
-                    Map.of("password", Map.of("code", "validation_invalid_value", "message", "Password must be at least 8 characters.")));
+                    ApiErrors.invalidField("password", "Password must be at least 8 characters."));
         }
 
         String passwordField = passwordField(colSchema);
@@ -160,7 +160,7 @@ public final class AuthProcessor {
         CollectionSchema colSchema = ctx.getCollection(collection);
         Map<String, Object> record = ctx.getRecord(colSchema, recordId);
         if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw new ApiException(400, "Invalid or expired token.");
+            throw invalidOrExpiredToken();
         }
 
         ctx.updateRecordField(colSchema, recordId, Map.of("verified", true));
@@ -208,18 +208,19 @@ public final class AuthProcessor {
         CollectionSchema colSchema = ctx.getCollection(collection);
         Map<String, Object> record = ctx.getRecord(colSchema, recordId);
         if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw new ApiException(400, "Invalid or expired token.");
+            throw invalidOrExpiredToken();
         }
 
         String password = requireText(body, "password");
         String passwordField = passwordField(colSchema);
         if (!PasswordHasher.verifyOrDummy(password, String.valueOf(record.get(passwordField)))) {
-            throw new ApiException(400, "Invalid password.");
+            throw new ApiException(400, "Invalid password.", ApiErrors.invalidField("password", "Invalid password."));
         }
 
         String newEmail = String.valueOf(claims.getOrDefault("newEmail", ""));
         if (!newEmail.contains("@")) {
-            throw new ApiException(400, "Invalid new email address.");
+            throw new ApiException(400, "Invalid new email address.",
+                    ApiErrors.invalidField("newEmail", "Invalid new email address."));
         }
 
         ctx.updateRecordField(colSchema, recordId, Map.of(
@@ -244,7 +245,8 @@ public final class AuthProcessor {
         colSchema.oauth2.providers.stream()
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", Map.of("provider", Map.of("code", "validation_missing_record", "message", "Provider is missing or is not enabled."))));
+                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.",
+                        ApiErrors.invalidField("provider", "Provider is missing or is not enabled.")));
 
         throw new ApiException(400, "OAuth2 simulated failure for SQLite MVP parity tests.");
     }
@@ -261,14 +263,19 @@ public final class AuthProcessor {
 
     private static Map<String, Object> verifyActionToken(TokenService tokenService, String token, String expectedType, CollectionSchema collection) {
         Map<String, Object> claims = tokenService.verify(token, tokenClaims -> tokenSigningSecret(tokenConfigForAction(expectedType, collection), tokenClaims.get("tokenKey")))
-                .orElseThrow(() -> new ApiException(400, "Invalid or expired token."));
+                .orElseThrow(AuthProcessor::invalidOrExpiredToken);
         if (!expectedType.equals(claims.get("tokenType"))) {
-            throw new ApiException(400, "Invalid or expired token.");
+            throw invalidOrExpiredToken();
         }
         if (!Objects.equals(collection.name, claims.get("collectionName")) && !Objects.equals(collection.id, claims.get("collectionId"))) {
-            throw new ApiException(400, "Invalid or expired token.");
+            throw invalidOrExpiredToken();
         }
         return claims;
+    }
+
+    private static ApiException invalidOrExpiredToken() {
+        return new ApiException(400, "Invalid or expired token.",
+                ApiErrors.invalidField("token", "Invalid or expired token."));
     }
 
     private static String createAuthToken(TokenService tokenService, CollectionSchema collection, Map<String, Object> record, String tokenType, Map<String, Object> extraClaims, Duration ttl) {

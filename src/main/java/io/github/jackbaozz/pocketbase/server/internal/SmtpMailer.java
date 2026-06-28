@@ -40,7 +40,12 @@ public final class SmtpMailer {
             session.expect(250);
             session.command("QUIT", 221, 250);
         } catch (Exception e) {
-            throw new ApiException(400, "Failed to send the test email. Raw error: \n" + e.getMessage());
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new ApiException(
+                    400,
+                    "Failed to send the test email. Raw error: \n" + detail,
+                    ApiErrors.invalidField("smtp", detail)
+            );
         }
     }
 
@@ -56,7 +61,7 @@ public final class SmtpMailer {
     private static String cleanAddress(String value) {
         String text = value == null ? "" : value.trim();
         if (text.isBlank() || text.contains("\r") || text.contains("\n") || !text.contains("@")) {
-            throw new ApiException(400, "Failed to send the test email.", Map.of("email", Map.of("message", "Invalid email address.")));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("email", "Invalid email address."));
         }
         return text;
     }

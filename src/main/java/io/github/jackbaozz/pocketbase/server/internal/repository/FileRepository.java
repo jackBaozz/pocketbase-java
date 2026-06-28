@@ -2,6 +2,7 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
@@ -162,10 +163,11 @@ public class FileRepository extends BaseRepository {
 
     private void requireProtectedFileAccess(CollectionSchema collection, Map<String, Object> record, RequestPrincipal principal) {
         if (principal == null) {
-            throw new ApiException(403, "Protected file token required.");
+            throw new ApiException(403, "Protected file token required.", ApiErrors.requiredField("token"));
         }
         if (!storeContext.canView(collection, record, Map.of(), principal)) {
-            throw new ApiException(403, "Protected file is not accessible.");
+            throw new ApiException(403, "Protected file is not accessible.",
+                    ApiErrors.invalidField("token", "Protected file is not accessible."));
         }
     }
 

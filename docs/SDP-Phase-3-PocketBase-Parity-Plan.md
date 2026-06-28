@@ -1,6 +1,6 @@
 # SDP Phase 3: PocketBase Parity And Release Hardening Plan
 
-Updated: 2026-06-27
+Updated: 2026-06-28
 
 Primary inputs:
 
@@ -54,7 +54,7 @@ Verification run on 2026-06-27:
 - [x] `mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=mysql -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`
 - [x] `mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=postgres -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`
 
-SQLite full-suite result after the relational auth, OAuth2, MFA second-factor flow, realtime, collection import/filter, SQL endpoint, health payload, Admin UI login-path fixes, structured field-value normalization, explicit superuser/auth-collection MFA coverage, relational dry-run view implementation, collection-driven token duration wiring, token secret invalidation coverage, constant-time password/token-key auth checks, and expiry/wrong-collection token fixtures: passed with 129 tests run, 0 failures, and 0 errors.
+Latest JSON and SQLite full-suite result after the relational auth, OAuth2, MFA second-factor flow, realtime, collection import/filter, SQL endpoint, health payload, Admin UI login-path fixes, structured field-value normalization, explicit superuser/auth-collection MFA coverage, relational dry-run view implementation, collection-driven token duration wiring, token secret invalidation coverage, constant-time password/token-key auth checks, Admin UI route/workflow fixtures, explicit jOOQ row reads, and strengthened filter compiler fixtures: each passed with 148 tests run, 0 failures, and 0 errors.
 
 This closes the earlier SQLite runtime blockers that were preventing the relational engine from acting as the Phase 3 parity baseline. MySQL/PostgreSQL targeted gates currently skip on this machine because Testcontainers cannot find a valid Docker environment, so cross-dialect behavior is still unverified here. Phase 3 is still not broadly `Done`, because MySQL/PostgreSQL parity, broader native/runtime validation, and deeper Admin UI workflow parity remain open.
 
@@ -70,7 +70,7 @@ These are the high-value carryovers found in the current tree.
 - `LocalPocketBase` can route `storage=sqlite/mysql/postgres` into the relational storage class.
 - `SqliteStorageEngine` now uses jOOQ for important DDL/CRUD/filter paths, but the class name and behavior are still SQLite/MVP oriented.
 - MySQL/PostgreSQL now have external-DSN/Testcontainers fixture-gate entry points and startup validation for selected database/schema plus session settings, but there is still no confirmed cross-dialect fixture pass on this machine.
-- Several relational paths still use raw SQL or SQLite-specific behavior, especially SQL endpoint, rules cross-collection reads, log list, collection schema loading, record get, view creation, and request JSON helpers.
+- Several relational paths still use raw SQL or SQLite-specific behavior, especially SQL endpoint, SQLite schema snapshot/restore metadata, view creation, and request JSON helpers. Dynamic record reads, collection schema loading, rule cross-collection reads, log list/detail, and backup row export now use explicit field lists instead of `SELECT *`.
 - SQLite storage still has visible partial areas and simplified behavior:
   - Apple client secret returns `{ }`
   - import/truncate diff semantics and broader migration planning are still incomplete
@@ -114,16 +114,46 @@ Work these first before adding new broad features.
   - Scope: Testcontainers or external DSN profiles for behavior fixtures.
   - Acceptance: skipped only when DSN/container is unavailable, failed when behavior differs.
 
-- [ ] **P3-005 Complete official error envelope and validation text audit**
+- [x] **P3-005 Complete official error envelope and validation text audit**
   - Scope: auth, collection, record, file, settings, SQL, backup, batch, realtime errors.
   - Progress: top-level HTTP error bodies now use the current official `status/message/data` envelope instead of the legacy top-level `code`; field-level validation entries still use `code/message`.
   - Progress: auth password required fields, collection create/update identifier validation, record create/update validation, JSON storage, SQLite/jOOQ storage, and cross-dialect unique constraint normalization now share the same field-level validation helpers for the covered paths.
+  - Progress: settings test-email/test-S3 validation, SQL and dry-run SQL `query` validation, batch payload/subrequest errors, and realtime subscribe validation now have explicit JSON/SQLite fixtures for top-level envelope and field-level codes.
+  - Progress: OAuth2 token/userinfo exchange failures and Apple client secret required/invalid fields now use the shared field-level `validation_*` envelope and have JSON/SQLite fixtures.
+  - Progress: backup upload missing/corrupt archive errors, file upload MIME/max-size validation, collection import `collections` validation, and view dry-run invalid `query` validation now have JSON/SQLite fixtures.
+  - Progress: protected file token/view-rule failures, backup missing download/delete errors, and auth lifecycle password reset/email-change invalid token/password errors now have JSON/SQLite fixtures.
+  - Progress: unsupported method and malformed JSON request-body failures now use the official top-level envelope and have JSON/SQLite fixtures.
+  - Progress: OTP invalid/reused/locked attempts and OAuth2 missing-provider failures now use field-level `validation_invalid_value` envelopes with JSON/SQLite fixtures.
+  - Progress: file missing responses, invalid thumb fallback behavior, and backup restore zip traversal/recovery failures now have JSON/SQLite fixtures; relational restore now validates storage entries before replacing storage files.
+  - Progress: S3 storage/backups provider validation now uses the same probe path for JSON and relational storage, including disabled provider and required `bucket`/`secret` validation fixtures.
+  - Progress: non-object JSON payload errors for settings, collections, records, SQL, dry-run view, batch unsupported URLs, and realtime subscribe now use field-level envelopes with JSON/SQLite fixtures.
+  - Progress: collection, record, and log invalid filter parser errors now return field-level `filter` envelopes and have JSON/SQLite fixtures; relational log filtering now reuses the shared rule evaluator instead of silently accepting malformed filters.
+  - Progress: missing multipart boundaries now return a field-level `body` envelope, and OIDC provider configuration errors now expose required `authURL`/`tokenURL` fields with JSON/SQLite fixtures.
+  - Progress: OAuth2 auth exchange missing `tokenURL` and Apple client secret private key parse failures now return field-level `provider`/`privateKey` envelopes with JSON/SQLite fixtures.
+  - Progress: system collection delete/truncate, view collection record writes, and non-auth collection auth actions now have top-level envelope fixtures; relational storage now rejects system collection delete/truncate and JSON storage now rejects view collection writes like SQLite.
+  - Progress: MFA same-method and stale `mfaId` failures now return field-level `mfaId` envelopes with JSON/SQLite fixtures.
+  - Progress: invalid password credentials and disabled `identityField` auth attempts now return the official top-level `Failed to authenticate.` envelope with JSON/SQLite fixtures.
+  - Progress: duplicate backup creation/upload now return shared `validation_not_unique` envelopes on JSON and SQLite instead of falling through to backend IO errors; relational duplicate upload no longer deletes the existing backup during rejected upload cleanup.
+  - Progress: SMTP test-email transport/protocol failures now include a field-level `smtp` envelope with JSON/SQLite fixtures instead of returning only a top-level raw backend error.
+  - Progress: SQL execution failures now include a field-level `query` envelope with JSON/SQLite fixtures while preserving the raw top-level execution error text.
+  - Progress: multipart batch rollback failures now assert the structured `index` and nested `response` envelope on JSON and SQLite instead of relying on raw body substring checks.
+  - Progress: collection create-rule failures now assert the full top-level error envelope on JSON and SQLite instead of relying on body substring checks.
+  - Progress: malformed batch subrequest URLs now return a nested `url` `validation_invalid_value` envelope on JSON and SQLite instead of escaping through the top-level `IllegalArgumentException` fallback.
+  - Progress: invalid multipart batch `@jsonPayload` values now return a field-level `@jsonPayload` `validation_invalid_value` envelope on JSON and SQLite instead of escaping through raw JSON parsing errors.
+  - Progress: duplicate auth record emails now assert the structured `email` `validation_not_unique` envelope on JSON and SQLite instead of relying on raw response text.
+  - Progress: OTP password-auth rejection, stale password-reset tokens, request-token-as-bearer rejection, and old email login after email-change now assert full top-level or field-level envelopes on JSON and SQLite instead of status-only checks.
+  - Progress: JSON single-record viewRule denials now return the same `404 Record not found.` envelope as relational storage instead of leaking a `403 Only superusers can view this record.` response.
   - Acceptance: fixtures assert HTTP status, response `status`, `message`, `data`, nested field `code`, nested field keys, route-specific messages, and route-specific status codes.
-  - Remaining: continue the same audit for file upload/download errors, settings test endpoints, SQL/dry-run SQL errors, backup restore/upload errors, batch subresponse errors, and realtime subscribe errors.
+  - Verification: JSON and SQLite full suites pass; remaining naked backend IO/initialization fallbacks are not stable public official fixtures and should be revisited only when a reachable route drift is found.
 
-- [ ] **P3-006 Make Admin UI route and workflow parity measurable**
+- [x] **P3-006 Make Admin UI route and workflow parity measurable**
   - Scope: Playwright smoke for hash routes, login, collection edit, record edit, settings, logs, OAuth popup, backups, import/export, SQL.
   - Acceptance: browser smoke fails when a major official workflow becomes unreachable.
+  - Progress: Admin UI now synchronizes core hash routes for collection records/schema, logs, and settings subsections; Playwright covers direct hash navigation for records, schema, settings, mail, storage, backups, crons, import/export, SQL, and logs.
+  - Progress: Playwright now covers cold-start hash deep links, collection schema editor reachability, record editor save flow, auth collection OAuth2 provider surface, and auth record provider tab reachability.
+  - Progress: relational collection list responses now expose `fields` and top-level auth options such as `oauth2.providers`, so Admin UI record columns and auth-provider tabs work from the same collection contract as JSON storage.
+  - Progress: Playwright now covers the OAuth2 popup tester with a fake provider `/authorize` redirect, `/api/oauth2-redirect` `postMessage`, `auth-with-oauth2`, and result modal assertion.
+  - Verification: `npm run build`, `mvn -gs settings.xml -s settings.xml -Dtest=AdminUiPlaywrightTest test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=AdminUiPlaywrightTest test`, `mvn -gs settings.xml -s settings.xml test`, and `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite test` pass.
 
 ## 5. Workstreams
 
@@ -135,16 +165,19 @@ Acceptance:
 
 #### P3-A02: jOOQ Query Builder Coverage
 
-- [ ] Convert remaining dynamic record reads to jOOQ: `getRecord`, `getCollectionSchema`, rule cross-collection record reads, and log list/detail.
-- [ ] Replace raw `SELECT *` helpers with explicit jOOQ field/table helpers where response shape matters.
+- [x] Convert remaining dynamic record reads to jOOQ: `getRecord`, `auth-refresh`, auth identity lookup, `getCollectionSchema`, rule cross-collection record reads, and log list/detail.
+- [x] Replace raw `SELECT *` helpers with explicit jOOQ field/table helpers where response shape matters.
 - [ ] Keep raw SQL only for official SQL endpoint and user-defined view SQL, with explicit validation.
 - [x] Extend `FilterToSqlCompiler` so equality, comparison, contains, logical operators, and `@request.*` values are all bound safely.
 - [ ] Replace SQLite-only `json_extract(...)` request context handling with a dialect-aware abstraction or documented fallback.
-- [ ] Add tests for string escaping, `%/_` LIKE escaping, null comparisons, booleans, numbers, dates, nested parentheses, and malicious filter input.
+- [x] Add tests for string escaping, `%/_` LIKE escaping, null comparisons, booleans, numbers, dates, nested parentheses, and malicious filter input.
+- Progress: `RecordRepository`, `AuthRepository`, `RelationalStorageEngine.recordsForRule`, and `LogRepository` now select explicit jOOQ field lists instead of dynamic `selectFrom(*)` for runtime record/log/rule reads. Backup export now reads table columns from JDBC metadata and exports explicit quoted columns instead of `SELECT *`.
+- Progress: filter compilation now rejects trailing tokens instead of ignoring them, maps `= null`/`!= null` to `IS NULL`/`IS NOT NULL`, rejects unsupported null comparisons, and escapes `%`, `_`, and `\` inside default `LIKE` contains filters.
+- Verification: `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#sdkCanUseEmbeddedServerCollectionsAndRecords test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#accessRulesCanReferenceOtherCollectionFields test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#settingsAndLogsApisRequireSuperuserPersistAndOmitSecrets test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#authRefreshReissuesTokenForMatchingAuthRecord test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#backupsCanBeCreatedDownloadedRestoredAndDeleted test`, `mvn -gs settings.xml -s settings.xml -Dtest=FilterToSqlCompilerTest test`, `mvn -gs settings.xml -s settings.xml -Dtest=BehaviorFixturesTest test`, `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=BehaviorFixturesTest test`, `mvn -gs settings.xml -s settings.xml test`, and `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite test` pass.
 
 Acceptance:
 
-- [ ] Filter tests pass on JSON and SQLite.
+- [x] Filter tests pass on JSON and SQLite.
 - [ ] MySQL/PostgreSQL generated SQL uses dialect-appropriate quoting, concatenation, pagination, and JSON extraction.
 
 #### P3-A03: SQL Type Mapping

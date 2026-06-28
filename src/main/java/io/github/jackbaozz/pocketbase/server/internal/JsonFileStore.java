@@ -179,7 +179,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> updateSettings(JsonNode body, Map<String, String> query) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Settings payload must be a JSON object.");
+            throw new ApiException(400, "Settings payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         deepMerge(settings, mapper.convertValue(body, STRING_OBJECT_MAP));
         normalizeSettings();
@@ -189,25 +190,34 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized void testS3(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Failed to test the S3 filesystem.", fieldError("filesystem", "validation_invalid_value", "filesystem is required."));
+            throw new ApiException(400, "Failed to test the S3 filesystem.", ApiErrors.requiredField("filesystem"));
         }
         String filesystem = bodyText(body, "filesystem", "");
+        if (filesystem.isBlank()) {
+            throw new ApiException(400, "Failed to test the S3 filesystem.", ApiErrors.requiredField("filesystem"));
+        }
         Map<String, Object> config = s3SettingsFor(filesystem, body);
         S3Probe.test(filesystem, config);
     }
 
     public synchronized void testEmail(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "validation_invalid_value", "email is required."));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("email"));
         }
         String email = bodyText(body, "email", "").toLowerCase(Locale.ROOT);
         String template = bodyText(body, "template", "");
         String collectionName = bodyText(body, "collection", SUPERUSERS);
+        if (email.isBlank()) {
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("email"));
+        }
+        if (template.isBlank()) {
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("template"));
+        }
         if (!EMAIL_PATTERN.matcher(email).matches()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("email", "validation_invalid_value", "Invalid email address."));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("email", "Invalid email address."));
         }
         if (!TEST_EMAIL_TEMPLATES.contains(template)) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("template", "validation_invalid_value", "Invalid email template."));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("template", "Invalid email template."));
         }
         CollectionSchema collection = findCollectionOrNull(collectionName);
         if (collection == null || !"auth".equals(collection.type)) {
@@ -336,14 +346,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> runSql(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "An error occurred while loading the submitted data.");
+            throw new ApiException(400, "An error occurred while loading the submitted data.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         JsonNode queryNode = body.get("query");
         if (queryNode == null || queryNode.isNull() || queryNode.asText().isBlank()) {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_invalid_value", "query is required.")
+                    ApiErrors.requiredField("query")
             );
         }
         String query = queryNode.asText();
@@ -351,7 +362,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_invalid_value", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters.")
+                    ApiErrors.invalidField("query", "query must be at most " + SQL_MAX_QUERY_LENGTH + " characters.")
             );
         }
 
@@ -360,9 +371,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         try {
             result = executeSql(query);
         } catch (RuntimeException e) {
+            String message = "Failed to execute query. Raw error:\n"
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             throw new ApiException(
                     400,
-                    "Failed to execute query. Raw error:\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+                    message,
+                    ApiErrors.invalidField("query", message)
             );
         }
 
@@ -376,14 +390,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> dryRunView(JsonNode body) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "An error occurred while loading the submitted data.");
+            throw new ApiException(400, "An error occurred while loading the submitted data.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         JsonNode queryNode = body.get("query");
         if (queryNode == null || queryNode.isNull() || queryNode.asText().isBlank()) {
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_invalid_value", "query is required.")
+                    ApiErrors.requiredField("query")
             );
         }
         String query = queryNode.asText();
@@ -391,7 +406,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(
                     400,
                     "An error occurred while validating the submitted data.",
-                    fieldError("query", "validation_invalid_value", "query must be at most 5000 characters.")
+                    ApiErrors.invalidField("query", "query must be at most 5000 characters.")
             );
         }
 
@@ -414,9 +429,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 result = executeSqlSelect(statement);
             }
         } catch (RuntimeException e) {
+            String message = "Invalid view query. Raw error:\n"
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
             throw new ApiException(
                     400,
-                    "Invalid view query. Raw error:\n" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+                    message,
+                    ApiErrors.invalidField("query", message)
             );
         }
 
@@ -1382,7 +1400,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized CollectionSchema createCollection(JsonNode body) {
         if (!body.isObject()) {
-            throw new ApiException(400, "Collection payload must be a JSON object.");
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         CollectionSchema collection = mapper.convertValue(body, CollectionSchema.class);
         normalizeCollection(collection, false);
@@ -1401,7 +1420,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     public synchronized CollectionSchema updateCollection(String idOrName, JsonNode body) {
         CollectionSchema existing = findCollection(idOrName);
         if (!body.isObject()) {
-            throw new ApiException(400, "Collection payload must be a JSON object.");
+            throw new ApiException(400, "Collection payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         String oldName = existing.name;
         if (body.hasNonNull("name")) {
@@ -1532,11 +1552,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     @Override
     public synchronized Map<String, Object> importCollections(JsonNode body, boolean dryRun) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Collections import payload must be a JSON object.");
+            throw new ApiException(400, "Failed to import collections.",
+                    ApiErrors.invalidField("collections", "Collections import payload must be a JSON object."));
         }
         JsonNode collectionsNode = body.get("collections");
         if (collectionsNode == null || !collectionsNode.isArray() || collectionsNode.isEmpty()) {
-            throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "collections is required."));
+            throw new ApiException(400, "Failed to import collections.", ApiErrors.requiredField("collections"));
         }
 
         boolean deleteMissing = body.path("deleteMissing").asBoolean(false);
@@ -1649,7 +1670,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema collection = findCollection(collectionName);
         Map<String, Object> record = findRecord(collection, id);
         Map<String, String> safeQuery = query == null ? Map.of() : query;
-        requireRecordRule(collection, collection.viewRule, record, null, safeQuery, "GET", principal, "view");
+        if (!canViewExpandedRecord(collection, record, safeQuery, principal)) {
+            throw new ApiException(404, "Record not found.");
+        }
         return RecordProcessor.process(this, collection, record, isSuperuser(principal), safeQuery, principal);
     }
 
@@ -1675,6 +1698,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     ) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
         CollectionSchema collection = findCollection(collectionName);
+        requireWritableRecordCollection(collection);
         if (collection.system && !SUPERUSERS.equals(collection.name)) {
             throw new ApiException(403, "System collection is read-only.");
         }
@@ -1721,9 +1745,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             RequestPrincipal principal
     ) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Record payload must be a JSON object.");
+            throw new ApiException(400, "Record payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         CollectionSchema collection = findCollection(collectionName);
+        requireWritableRecordCollection(collection);
         String recordId = id == null || id.isBlank() ? requiredText(body, "id") : id;
         ObjectNode upsertBody = body.deepCopy();
         if (!upsertBody.hasNonNull("id")) {
@@ -1755,6 +1781,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     ) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
         CollectionSchema collection = findCollection(collectionName);
+        requireWritableRecordCollection(collection);
         Map<String, Object> existing = findRecord(collection, id);
         requireRecordRule(collection, collection.updateRule, existing, jsonToMap(body), safeQuery, "PATCH", principal, "update");
         Map<String, Object> patch = buildRecord(collection, bodyWithFileMarkers(collection, body, files), existing);
@@ -1770,6 +1797,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized void deleteRecord(String collectionName, String id, RequestPrincipal principal) {
         CollectionSchema collection = findCollection(collectionName);
+        requireWritableRecordCollection(collection);
         Map<String, Object> existing = findRecord(collection, id);
         requireRecordRule(collection, collection.deleteRule, existing, null, Map.of(), "DELETE", principal, "delete");
         List<Map<String, Object>> records = records(collection);
@@ -1779,6 +1807,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         saveRecords(collection);
         publishRealtime(collection, "delete", existing);
+    }
+
+    private void requireWritableRecordCollection(CollectionSchema collection) {
+        if ("view".equals(collection.type)) {
+            throw new ApiException(400, "View collections are read-only.");
+        }
     }
 
     public synchronized <T> T transactional(java.util.function.Supplier<T> operation) {
@@ -1855,6 +1889,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String requested = body == null || !body.hasNonNull("name") ? "" : body.get("name").asText();
         String key = backupKey(requested.isBlank() ? "backup_" + BACKUP_TIMESTAMP.format(Instant.now()) + ".zip" : requested);
         Path backup = backupPath(key);
+        if (Files.exists(backup)) {
+            throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
+        }
         try {
             Files.createDirectories(backupsDir);
             try (OutputStream output = Files.newOutputStream(backup, StandardOpenOption.CREATE_NEW);
@@ -1869,10 +1906,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> uploadBackup(String filename, byte[] bytes) {
         if (bytes == null || bytes.length == 0) {
-            throw new ApiException(400, "Backup file is required.");
+            throw new ApiException(400, "Backup file is required.", ApiErrors.requiredField("file"));
         }
         String key = backupKey(filename);
         Path backup = backupPath(key);
+        if (Files.exists(backup)) {
+            throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
+        }
         try {
             Files.createDirectories(backupsDir);
             Files.write(backup, bytes, StandardOpenOption.CREATE_NEW);
@@ -1944,7 +1984,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     public synchronized Map<String, Object> authMethods(String collectionName) {
         CollectionSchema collection = findCollection(collectionName);
         if (!"auth".equals(collection.type)) {
-            throw new ApiException(400, "Collection is not an auth collection.");
+            throw new ApiException(400, "The collection is not an auth collection.");
         }
         Map<String, Object> password = new LinkedHashMap<>();
         password.put("enabled", collection.passwordAuth.enabled);
@@ -2026,7 +2066,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema.OAuth2ProviderConfig provider = collection.oauth2.providers.stream()
                 .filter(item -> providerName.equalsIgnoreCase(item.name))
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.", fieldError("provider", "validation_invalid_value", "Provider with name " + providerName + " is missing or is not enabled.")));
+                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.",
+                        ApiErrors.invalidField("provider", "Provider with name " + providerName + " is missing or is not enabled.")));
 
         OAuth2Support.OAuth2User oauthUser = OAuth2Support.authenticate(mapper, provider, code, redirectURL, codeVerifier);
         Map<String, Object> record = findOAuth2LinkedRecord(collection, providerName, oauthUser.providerId());
@@ -2247,7 +2288,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         AuthAction action = verifyAuthAction(collectionName, requiredText(body, "token"), "emailChange");
         String password = requiredText(body, "password");
         if (!PasswordHasher.verifyOrDummy(password, String.valueOf(action.record().get(passwordField(action.collection()))))) {
-            throw new ApiException(400, "Invalid password.");
+            throw new ApiException(400, "Invalid password.", ApiErrors.invalidField("password", "Invalid password."));
         }
         String newEmail = normalizedEmail(String.valueOf(action.claims().getOrDefault("newEmail", "")));
         ensureEmailAvailable(action.collection(), newEmail, String.valueOf(action.record().get("id")));
@@ -2361,10 +2402,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 .findFirst()
                 .orElse(null);
         if (!PasswordHasher.verifyOrDummy(password, record == null ? null : String.valueOf(record.get(passwordField)))) {
-            throw new ApiException(400, "Invalid identity or password.");
+            throw invalidAuthCredentials();
         }
         if (record == null) {
-            throw new ApiException(400, "Invalid identity or password.");
+            throw invalidAuthCredentials();
         }
 
         String mfaId = bodyOrQueryText(body, query, "mfaId", null);
@@ -2419,10 +2460,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 if (mfa != null) {
                     mfas.remove(mfa);
                 }
-                throw new ApiException(400, "Missing or invalid MFA ID.");
+                throw invalidMfaId("Missing or invalid MFA ID.");
             }
             if (Objects.equals(mfa.get("method"), method)) {
-                throw new ApiException(400, "MFA requires a different auth method.");
+                throw invalidMfaId("MFA requires a different auth method.");
             }
             mfas.remove(mfa);
             return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
@@ -2451,6 +2492,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String method
     ) {
         return handleAuthWithMfa(collection, record, query, mfaIdParam, method, Map.of());
+    }
+
+    private ApiException invalidMfaId(String message) {
+        return new ApiException(400, message, ApiErrors.invalidField("mfaId", message));
     }
 
     private boolean mfaExpired(CollectionSchema collection, Map<String, Object> mfa) {
@@ -2514,7 +2559,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private CollectionSchema authCollection(String collectionName) {
         CollectionSchema collection = findCollection(collectionName);
         if (!"auth".equals(collection.type)) {
-            throw new ApiException(400, "Collection is not an auth collection.");
+            throw new ApiException(400, "The collection is not an auth collection.");
         }
         return collection;
     }
@@ -2547,18 +2592,23 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private AuthAction verifyAuthAction(String collectionName, String token, String expectedType) {
         CollectionSchema collection = authCollection(collectionName);
         Map<String, Object> claims = tokenService.verify(token, tokenClaims -> tokenSigningSecret(tokenConfigForAction(expectedType, collection), tokenClaims.get("tokenKey")))
-                .orElseThrow(() -> new ApiException(400, "Invalid or expired auth token."));
+                .orElseThrow(this::invalidOrExpiredAuthActionToken);
         if (!expectedType.equals(claims.get("tokenType"))) {
-            throw new ApiException(400, "Invalid or expired auth token.");
+            throw invalidOrExpiredAuthActionToken();
         }
         if (!Objects.equals(collection.id, claims.get("collectionId")) && !Objects.equals(collection.name, claims.get("collectionName"))) {
-            throw new ApiException(400, "Invalid or expired auth token.");
+            throw invalidOrExpiredAuthActionToken();
         }
         Map<String, Object> record = findRecordOrNull(collection, String.valueOf(claims.getOrDefault("sub", "")));
         if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw new ApiException(400, "Invalid or expired auth token.");
+            throw invalidOrExpiredAuthActionToken();
         }
         return new AuthAction(collection, record, claims);
+    }
+
+    private ApiException invalidOrExpiredAuthActionToken() {
+        return new ApiException(400, "Invalid or expired token.",
+                ApiErrors.invalidField("token", "Invalid or expired token."));
     }
 
     private String appendAuthRequest(
@@ -2632,6 +2682,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             return authIdentityValueMatches(record, identityField, identity);
         }
         return fields.stream().anyMatch(field -> authIdentityValueMatches(record, field, identity));
+    }
+
+    private ApiException invalidAuthCredentials() {
+        return new ApiException(400, "Failed to authenticate.");
     }
 
     private boolean authIdentityValueMatches(Map<String, Object> record, String field, String identity) {
@@ -2714,7 +2768,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             return;
         }
         if (withinOtpAttemptWindow(otp.get("lastFailed"))) {
-            throw new ApiException(429, "Too many failed OTP attempts. Please request a new code.");
+            throw new ApiException(429, "Too many failed OTP attempts.",
+                    ApiErrors.invalidField("otpId", "Too many failed OTP attempts."));
         }
         otp.put("failedAttempts", 0);
         otp.remove("lastFailed");
@@ -2750,7 +2805,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private ApiException invalidOtp() {
-        return new ApiException(400, "Invalid or expired OTP");
+        return new ApiException(400, "Invalid or expired OTP.",
+                ApiErrors.invalidField("otpId", "Invalid or expired OTP."));
     }
 
     private void ensureEmailAvailable(CollectionSchema collection, String email, String currentId) {
@@ -2928,7 +2984,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private Map<String, Object> createRecordInternal(CollectionSchema collection, JsonNode body, boolean update, String currentId) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Record payload must be a JSON object.");
+            throw new ApiException(400, "Record payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         Map<String, Object> values = new LinkedHashMap<>();
         Map<String, Object> errors = new LinkedHashMap<>();
@@ -3091,7 +3148,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             }
             int maxSelect = maxSelect(field);
             if (maxSelect > 0 && next.size() > maxSelect) {
-                throw new ApiException(400, "Too many files uploaded for field `" + field.name + "`.");
+                String message = "Too many files uploaded for field `" + field.name + "`.";
+                throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
             }
             if (replace || !appendUploads.isEmpty() || !removeNames.isEmpty()) {
                 fieldValues.put(field.name, fileFieldValue(field, next));
@@ -3111,7 +3169,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
                 Path target = recordDir.resolve(entry.getKey()).normalize();
                 if (!target.startsWith(recordDir.normalize())) {
-                    throw new ApiException(400, "Invalid upload filename.");
+                    throw new ApiException(400, "Invalid upload filename.",
+                            ApiErrors.invalidField("file", "Invalid upload filename."));
                 }
                 Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
             }
@@ -3151,13 +3210,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             return;
         }
         if (principal == null) {
-            throw new ApiException(403, "Protected file token required.");
+            throw new ApiException(403, "Protected file token required.", ApiErrors.requiredField("token"));
         }
         if (collection.viewRule == null) {
-            throw new ApiException(403, "Protected file is not accessible.");
+            throw new ApiException(403, "Protected file is not accessible.",
+                    ApiErrors.invalidField("token", "Protected file is not accessible."));
         }
         if (!matchesRule(collection.viewRule, record, null, Map.of(), "GET", principal)) {
-            throw new ApiException(403, "Protected file is not accessible.");
+            throw new ApiException(403, "Protected file is not accessible.",
+                    ApiErrors.invalidField("token", "Protected file is not accessible."));
         }
     }
 
@@ -3287,11 +3348,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private void validateUploadedFile(FieldSchema field, UploadedFile file) {
         long maxSize = maxSize(field);
         if (maxSize > 0 && file.bytes().length > maxSize) {
-            throw new ApiException(400, "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.");
+            String message = "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.";
+            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
         }
         List<String> mimeTypes = mimeTypes(field);
         if (!mimeTypes.isEmpty() && mimeTypes.stream().noneMatch(pattern -> matchesMimeType(pattern, file.contentType()))) {
-            throw new ApiException(400, "File `" + file.originalFilename() + "` MIME type is not allowed for field `" + field.name + "`.");
+            String message = "File `" + file.originalFilename() + "` MIME type is not allowed for field `" + field.name + "`.";
+            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
         }
     }
 
@@ -3512,7 +3575,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         int port = intSetting(smtp.get("port"), 587);
         String host = textSetting(smtp.get("host"));
         if (host.isBlank()) {
-            throw new ApiException(400, "Failed to send the test email.", fieldError("host", "validation_invalid_value", "SMTP host is required."));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("host"));
         }
         return new SmtpMailer.Settings(
                 host,
@@ -4559,7 +4622,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String safeKey = backupKey(key);
         Path path = backupsDir.resolve(safeKey).normalize();
         if (!path.startsWith(backupsDir.normalize())) {
-            throw new ApiException(400, "Invalid backup key.");
+            throw new ApiException(400, "Invalid backup key.", ApiErrors.invalidField("key", "Invalid backup key."));
         }
         return path;
     }
@@ -4608,7 +4671,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
              ZipInputStream zip = new ZipInputStream(input)) {
             validateZipEntries(zip, Path.of(".").toAbsolutePath().normalize());
         } catch (IOException e) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
     }
 
@@ -4635,25 +4698,34 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private void validateZipEntries(ZipInputStream zip, Path target) throws IOException {
         ZipEntry entry;
+        boolean foundEntry = false;
         while ((entry = zip.getNextEntry()) != null) {
+            foundEntry = true;
             safeZipTarget(target, entry);
             zip.closeEntry();
+        }
+        if (!foundEntry) {
+            throw invalidBackupArchive();
         }
     }
 
     private Path safeZipTarget(Path target, ZipEntry entry) {
         String name = entry.getName();
-        if (name == null || name.isBlank() || name.startsWith("/") || name.contains("\\")) {
-            throw new ApiException(400, "Invalid backup archive.");
+        if (name == null || name.isBlank() || name.startsWith("/") || name.contains("\\") || name.contains("..")) {
+            throw invalidBackupArchive();
         }
         if ("pb_secret".equals(name) || name.startsWith("backups/")) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
         Path out = target.resolve(name).normalize();
         if (!out.startsWith(target)) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
         return out;
+    }
+
+    private ApiException invalidBackupArchive() {
+        return new ApiException(400, "Invalid backup archive.", ApiErrors.invalidField("file", "Invalid backup archive."));
     }
 
     private void clearDataDirForRestore() throws IOException {

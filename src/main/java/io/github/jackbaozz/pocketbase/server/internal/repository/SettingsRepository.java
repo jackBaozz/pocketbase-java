@@ -3,11 +3,13 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
+import io.github.jackbaozz.pocketbase.server.internal.S3Probe;
 import io.github.jackbaozz.pocketbase.server.internal.SmtpMailer;
 
 import java.nio.file.Files;
@@ -40,7 +42,8 @@ public class SettingsRepository extends BaseRepository {
 
     public Map<String, Object> updateSettings(JsonNode body, Map<String, String> query) {
         if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Settings payload must be a JSON object.");
+            throw new ApiException(400, "Settings payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         Map<String, Object> current = loadRawSettings();
         try {
@@ -86,31 +89,28 @@ public class SettingsRepository extends BaseRepository {
     }
 
     public void testS3(JsonNode body) {
-        if (body == null || !body.isObject() || !body.hasNonNull("filesystem") || "invalid".equals(body.get("filesystem").asText())) {
-            throw new ApiException(400, "Failed to test the S3 filesystem.", Map.of(
-                    "filesystem", Map.of("code", "validation_invalid_filesystem", "message", "filesystem is required or invalid.")
-            ));
+        if (body == null || !body.isObject() || !body.hasNonNull("filesystem") || body.get("filesystem").asText().isBlank()) {
+            throw new ApiException(400, "Failed to test the S3 filesystem.", ApiErrors.requiredField("filesystem"));
         }
+        String filesystem = body.get("filesystem").asText().trim();
+        S3Probe.test(filesystem, s3SettingsFor(loadRawSettings(), filesystem, body));
     }
 
     public void testEmail(JsonNode body) {
-        if (body == null || !body.isObject() || !body.hasNonNull("email") || !body.hasNonNull("template")) {
-            throw new ApiException(400, "Failed to send the test email.", Map.of(
-                    "email", Map.of("code", "validation_required", "message", "email is required.")
-            ));
+        if (body == null || !body.isObject() || !body.hasNonNull("email") || body.get("email").asText().isBlank()) {
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("email"));
+        }
+        if (!body.hasNonNull("template") || body.get("template").asText().isBlank()) {
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("template"));
         }
         Map<String, Object> settings = loadRawSettings();
         String email = body.get("email").asText().trim().toLowerCase(Locale.ROOT);
         if (!EMAIL_PATTERN.matcher(email).matches()) {
-            throw new ApiException(400, "Failed to send the test email.", Map.of(
-                    "email", Map.of("code", "validation_invalid_value", "message", "Invalid email address.")
-            ));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("email", "Invalid email address."));
         }
         String template = body.get("template").asText();
         if (!TEST_EMAIL_TEMPLATES.contains(template)) {
-            throw new ApiException(400, "Failed to send the test email.", Map.of(
-                    "template", Map.of("code", "validation_invalid_template", "message", "Invalid email template.")
-            ));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("template", "Invalid email template."));
         }
 
         EmailContent content = testEmailContent(template);
@@ -255,12 +255,33 @@ public class SettingsRepository extends BaseRepository {
         return merged;
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> s3SettingsFor(Map<String, Object> settings, String filesystem, JsonNode body) {
+        String target = filesystem == null || filesystem.isBlank() ? "storage" : filesystem.trim();
+        Map<String, Object> base;
+        if ("backups".equals(target)) {
+            Object nested = section(settings, "backups").get("s3");
+            base = nested instanceof Map<?, ?> map
+                    ? mapper.convertValue(map, new TypeReference<Map<String, Object>>() {})
+                    : new LinkedHashMap<>();
+            JsonNode backupsOverride = body == null ? null : body.get("backups");
+            if (backupsOverride != null && backupsOverride.isObject() && backupsOverride.get("s3") != null) {
+                deepMerge(base, mapper.convertValue(backupsOverride.get("s3"), new TypeReference<Map<String, Object>>() {}));
+            }
+        } else {
+            base = mapper.convertValue(section(settings, "s3"), new TypeReference<Map<String, Object>>() {});
+        }
+        JsonNode directOverride = body == null ? null : body.get("s3");
+        if (directOverride != null && directOverride.isObject()) {
+            deepMerge(base, mapper.convertValue(directOverride, new TypeReference<Map<String, Object>>() {}));
+        }
+        return base;
+    }
+
     private SmtpMailer.Settings smtpSettings(Map<String, Object> smtp) {
         String host = textSetting(smtp.get("host"));
         if (host.isBlank()) {
-            throw new ApiException(400, "Failed to send the test email.", Map.of(
-                    "host", Map.of("code", "validation_invalid_value", "message", "SMTP host is required.")
-            ));
+            throw new ApiException(400, "Failed to send the test email.", ApiErrors.requiredField("host"));
         }
         return new SmtpMailer.Settings(
                 host,
@@ -285,9 +306,7 @@ public class SettingsRepository extends BaseRepository {
             case "email-change" -> new EmailContent("Confirm new email", "Confirm new email request for this PocketBase Java instance.", "<p>Confirm new email request for this PocketBase Java instance.</p>");
             case "otp" -> new EmailContent("Your one-time password", "Your test one-time password is 123456.", "<p>Your test one-time password is <strong>123456</strong>.</p>");
             case "login-alert" -> new EmailContent("New login alert", "This is a test login alert from a new location.", "<p>This is a test login alert from a new location.</p>");
-            default -> throw new ApiException(400, "Failed to send the test email.", Map.of(
-                    "template", Map.of("code", "validation_invalid_template", "message", "Invalid email template.")
-            ));
+            default -> throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("template", "Invalid email template."));
         };
     }
 

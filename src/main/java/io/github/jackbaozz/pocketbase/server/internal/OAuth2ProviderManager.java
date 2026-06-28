@@ -65,10 +65,18 @@ public final class OAuth2ProviderManager {
 
     public static void validateConfig(OAuth2ProviderConfig config) {
         if (config == null || config.name == null || config.name.isBlank()) {
-            throw new ApiException(400, "OAuth2 provider name is required.");
+            throw new ApiException(400, "OAuth2 provider name is required.",
+                    ApiErrors.requiredField("name"));
         }
         if ("oidc".equalsIgnoreCase(config.name) && (isBlank(config.authURL) || isBlank(config.tokenURL))) {
-            throw new ApiException(400, "OIDC requires authURL and tokenURL.");
+            Map<String, Object> errors = new LinkedHashMap<>();
+            if (isBlank(config.authURL)) {
+                errors.putAll(ApiErrors.requiredField("authURL"));
+            }
+            if (isBlank(config.tokenURL)) {
+                errors.putAll(ApiErrors.requiredField("tokenURL"));
+            }
+            throw new ApiException(400, "OIDC requires authURL and tokenURL.", errors);
         }
     }
 
@@ -82,7 +90,8 @@ public final class OAuth2ProviderManager {
 
     public static Map<String, Object> parseUserInfo(OAuth2ProviderConfig config, Map<String, Object> userInfo) {
         if (userInfo == null || userInfo.isEmpty()) {
-            throw new ApiException(400, "Failed to fetch OAuth2 user.", Map.of("provider", Map.of("message", "OAuth2 user info is empty.")));
+            throw new ApiException(400, "Failed to fetch OAuth2 user.",
+                    ApiErrors.invalidField("provider", "OAuth2 user info is empty."));
         }
         return userInfo;
     }

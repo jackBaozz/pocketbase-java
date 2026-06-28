@@ -272,6 +272,31 @@ public class BehaviorFixturesTest {
         assertEquals(1, containsList.get("totalItems").asInt());
         assertEquals("Bob's Post", containsList.get("items").get(0).get("title").asText());
 
+        String wildcardTitleJson = "{\"title\":\"100%_literal\",\"views\":8}";
+        HttpRequest createWildcardRecordReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(wildcardTitleJson))
+                .build();
+        assertEquals(200, httpClient.send(createWildcardRecordReq, HttpResponse.BodyHandlers.ofString()).statusCode());
+        String wildcardDecoyJson = "{\"title\":\"100xxliteral\",\"views\":9}";
+        HttpRequest createWildcardDecoyReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(wildcardDecoyJson))
+                .build();
+        assertEquals(200, httpClient.send(createWildcardDecoyReq, HttpResponse.BodyHandlers.ofString()).statusCode());
+        String escapedContainsFilter = URLEncoder.encode("title ~ '100%_literal'", StandardCharsets.UTF_8);
+        HttpRequest escapedContainsReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/posts/records?filter=" + escapedContainsFilter))
+                .GET()
+                .build();
+        HttpResponse<String> escapedContainsRes = httpClient.send(escapedContainsReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, escapedContainsRes.statusCode());
+        JsonNode escapedContainsList = mapper.readTree(escapedContainsRes.body());
+        assertEquals(1, escapedContainsList.get("totalItems").asInt());
+        assertEquals("100%_literal", escapedContainsList.get("items").get(0).get("title").asText());
+
         // 7. Delete the record
         HttpRequest deleteReq = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/collections/posts/records/" + recordId))

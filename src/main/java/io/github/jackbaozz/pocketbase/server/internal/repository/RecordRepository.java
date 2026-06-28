@@ -30,10 +30,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class RecordRepository extends BaseRepository {
@@ -69,14 +71,31 @@ public class RecordRepository extends BaseRepository {
     }
 
     public Map<String, Object> getRawRecord(CollectionSchema collection, String id) {
+        return getRawRecordByField(collection, "id", id);
+    }
+
+    public Map<String, Object> getRawRecordByField(CollectionSchema collection, String field, Object value) {
         try {
             org.jooq.Record record = database.dsl()
-                    .selectFrom(qt(collection.name))
-                    .where(qfs("id").eq(id))
+                    .select(recordSelectFields(collection))
+                    .from(qt(collection.name))
+                    .where(qf(field).eq(value))
                     .fetchOne();
             return record == null ? null : normalizeStoredRecord(collection, record.intoMap());
         } catch (DataAccessException e) {
             return null;
+        }
+    }
+
+    public List<Map<String, Object>> listRawRecords(CollectionSchema collection) {
+        try {
+            return database.dsl()
+                    .select(recordSelectFields(collection))
+                    .from(qt(collection.name))
+                    .fetch()
+                    .map(record -> normalizeStoredRecord(collection, record.intoMap()));
+        } catch (DataAccessException e) {
+            return List.of();
         }
     }
 
@@ -134,8 +153,8 @@ public class RecordRepository extends BaseRepository {
 
         // Build and execute query
         org.jooq.SelectConditionStep<?> selectWithCondition = condition != null
-                ? database.dsl().selectFrom(qt(colSchema.name)).where(condition)
-                : database.dsl().selectFrom(qt(colSchema.name)).where(DSL.trueCondition());
+                ? database.dsl().select(recordSelectFields(colSchema)).from(qt(colSchema.name)).where(condition)
+                : database.dsl().select(recordSelectFields(colSchema)).from(qt(colSchema.name)).where(DSL.trueCondition());
 
         org.jooq.SelectSeekStepN<?> selectWithSort = sortFields.isEmpty()
                 ? selectWithCondition.orderBy(sortFields)
@@ -161,6 +180,10 @@ public class RecordRepository extends BaseRepository {
         CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
         if ("view".equals(colSchema.type)) {
             throw new ApiException(400, "View collections are read-only.");
+        }
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "Record payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         Map<String, String> safeQuery = query == null ? Map.of() : query;
 
@@ -246,6 +269,10 @@ public class RecordRepository extends BaseRepository {
         if ("view".equals(colSchema.type)) {
             throw new ApiException(400, "View collections are read-only.");
         }
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "Record payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
+        }
         Map<String, Object> existing = getRawRecord(colSchema, id);
         if (existing == null) {
             throw new ApiException(404, "Record not found.");
@@ -319,6 +346,10 @@ public class RecordRepository extends BaseRepository {
     }
 
     public Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
+        if (body == null || !body.isObject()) {
+            throw new ApiException(400, "Record payload must be a JSON object.",
+                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
+        }
         String collectionName = collectionRepository.getCollectionSchema(collection).name;
         boolean exists = false;
         try {
@@ -364,16 +395,7 @@ public class RecordRepository extends BaseRepository {
         if (!"auth".equals(colSchema.type)) {
             throw new ApiException(400, "The collection is not an auth collection.");
         }
-        try {
-            var record = database.dsl()
-                    .selectFrom(qt(colSchema.name))
-                    .where(qfs("email").eq(email))
-                    .fetchOne();
-            if (record == null) return null;
-            return normalizeStoredRecord(colSchema, record.intoMap());
-        } catch (DataAccessException e) {
-            return null;
-        }
+        return getRawRecordByField(colSchema, "email", email);
     }
 
     /**
@@ -415,6 +437,28 @@ public class RecordRepository extends BaseRepository {
             }
         }
         return copy;
+    }
+
+    private List<Field<Object>> recordSelectFields(CollectionSchema collection) {
+        Set<String> names = new LinkedHashSet<>();
+        names.add("id");
+        if ("_superusers".equals(collection.name)) {
+            names.add("email");
+            names.add("passwordHash");
+            names.add("tokenKey");
+            names.add("created");
+            names.add("updated");
+            return names.stream().map(this::qf).toList();
+        }
+        names.add("created");
+        names.add("updated");
+        for (FieldSchema field : collection.fields) {
+            names.add(field.name);
+        }
+        if ("auth".equals(collection.type)) {
+            names.add("tokenKey");
+        }
+        return names.stream().map(this::qf).toList();
     }
 
     private FileChanges prepareFileChanges(
@@ -463,7 +507,8 @@ public class RecordRepository extends BaseRepository {
             }
             int maxSelect = maxSelect(field);
             if (maxSelect > 0 && next.size() > maxSelect) {
-                throw new ApiException(400, "Too many files uploaded for field `" + field.name + "`.");
+                String message = "Too many files uploaded for field `" + field.name + "`.";
+                throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
             }
             if (replace || !appendUploads.isEmpty() || !removeNames.isEmpty()) {
                 fieldValues.put(field.name, fileFieldValue(field, next));
@@ -484,7 +529,8 @@ public class RecordRepository extends BaseRepository {
             for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
                 Path target = recordDir.resolve(entry.getKey()).normalize();
                 if (!target.startsWith(recordDir)) {
-                    throw new ApiException(400, "Invalid upload filename.");
+                    throw new ApiException(400, "Invalid upload filename.",
+                            ApiErrors.invalidField("file", "Invalid upload filename."));
                 }
                 Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
                 written.add(target);
@@ -592,11 +638,13 @@ public class RecordRepository extends BaseRepository {
     private void validateUploadedFile(FieldSchema field, UploadedFile file) {
         long maxSize = maxSize(field);
         if (maxSize > 0 && file.bytes().length > maxSize) {
-            throw new ApiException(400, "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.");
+            String message = "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.";
+            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
         }
         List<String> mimeTypes = mimeTypes(field);
         if (!mimeTypes.isEmpty() && mimeTypes.stream().noneMatch(pattern -> matchesMimeType(pattern, file.contentType()))) {
-            throw new ApiException(400, "File `" + file.originalFilename() + "` MIME type is not allowed for field `" + field.name + "`.");
+            String message = "File `" + file.originalFilename() + "` MIME type is not allowed for field `" + field.name + "`.";
+            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
         }
     }
 

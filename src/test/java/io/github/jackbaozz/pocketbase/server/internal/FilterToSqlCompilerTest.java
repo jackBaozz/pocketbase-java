@@ -2,6 +2,8 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class FilterToSqlCompilerTest {
@@ -39,7 +41,8 @@ class FilterToSqlCompilerTest {
     void logicalOperators() {
         String sql = FilterToSqlCompiler.compile("title = 'hello' AND status = 'published'");
         assertTrue(sql.contains("AND"));
-        assertTrue(sql.contains("OR") || !sql.contains("OR")); // just ensure it compiles
+        assertTrue(sql.contains("\"title\""));
+        assertTrue(sql.contains("\"status\""));
     }
 
     @Test
@@ -59,19 +62,24 @@ class FilterToSqlCompilerTest {
     @Test
     void containsOperator() {
         String sql = FilterToSqlCompiler.compile("title ~ 'hello'");
-        assertTrue(sql.contains("LIKE") || sql.contains("contains"));
+        assertTrue(sql.contains("LIKE"));
+        assertTrue(sql.contains("ESCAPE"));
+        assertTrue(sql.contains("replace("));
     }
 
     @Test
     void notContainsOperator() {
         String sql = FilterToSqlCompiler.compile("title !~ 'spam'");
-        assertTrue(sql.contains("NOT") || sql.contains("LIKE"));
+        assertTrue(sql.contains("NOT LIKE"));
+        assertTrue(sql.contains("ESCAPE"));
     }
 
     @Test
     void nullComparison() {
         String sql = FilterToSqlCompiler.compile("title = null");
-        assertTrue(sql.contains("NULL") || sql.contains("null"));
+        assertEquals("\"title\" IS NULL", sql);
+        assertEquals("\"title\" IS NOT NULL", FilterToSqlCompiler.compile("title != null"));
+        assertThrows(ApiException.class, () -> FilterToSqlCompiler.compile("title > null"));
     }
 
     @Test
@@ -88,6 +96,14 @@ class FilterToSqlCompilerTest {
     }
 
     @Test
+    void dateStringComparisonUsesBinding() {
+        var result = FilterToSqlCompiler.compileBound("created >= '2026-06-28 10:30:00.000Z'",
+                id -> "\"" + id + "\"");
+        assertEquals("\"created\" >= ?", result.sql());
+        assertEquals(List.of("2026-06-28 10:30:00.000Z"), result.bindings());
+    }
+
+    @Test
     void decimalNumber() {
         String sql = FilterToSqlCompiler.compile("price <= 9.99");
         assertTrue(sql.contains("9.99") || sql.contains("9,99"));
@@ -101,11 +117,26 @@ class FilterToSqlCompilerTest {
 
     @Test
     void stringWithSingleQuote() {
-        // The tokenizer uses \ as escape inside strings, not SQL-style ''
-        // So the filter would be: title = 'Bob\'s Post'
-        // But in Java we write the backslash escaped
         String sql = FilterToSqlCompiler.compile("title = 'Bob\\'s Post'");
-        assertTrue(sql.contains("Bob") && sql.contains("s Post"));
+        assertEquals("\"title\" = 'Bob''s Post'", sql);
+    }
+
+    @Test
+    void boundStringDoesNotInlineLiteral() {
+        var result = FilterToSqlCompiler.compileBound("title = 'Bob\\'s Post' AND count >= 10",
+                id -> "\"" + id + "\"");
+        assertEquals("(\"title\" = ? AND \"count\" >= ?)", result.sql());
+        assertEquals(List.of("Bob's Post", 10L), result.bindings());
+        assertFalse(result.sql().contains("Bob"));
+    }
+
+    @Test
+    void containsEscapesLikeWildcards() {
+        var result = FilterToSqlCompiler.compileBound("title ~ '100%_\\\\match'",
+                id -> "\"" + id + "\"");
+        assertTrue(result.sql().contains("replace(replace(replace(?"));
+        assertTrue(result.sql().contains("ESCAPE"));
+        assertEquals(List.of("100%_\\match"), result.bindings());
     }
 
     @Test
@@ -164,6 +195,12 @@ class FilterToSqlCompilerTest {
     @Test
     void invalidFilterSyntax() {
         assertThrows(ApiException.class, () -> FilterToSqlCompiler.compile("!!!"));
+    }
+
+    @Test
+    void rejectsTrailingTokens() {
+        assertThrows(ApiException.class, () -> FilterToSqlCompiler.compile("title = 'hello' status = 'draft'"));
+        assertThrows(ApiException.class, () -> FilterToSqlCompiler.compile("title = 'hello' OR"));
     }
 
     @Test

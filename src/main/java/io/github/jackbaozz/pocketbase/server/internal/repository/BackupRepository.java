@@ -3,6 +3,7 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
+import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 
@@ -14,11 +15,11 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
@@ -85,6 +86,7 @@ public class BackupRepository extends BaseRepository {
     public Map<String, Object> restoreBackup(String key) {
         Path backup = backupFileRequired(key);
         Map<String, Object> snapshot = readSnapshot(backup);
+        validateStorageEntries(backup);
         database.transactional(() -> {
             restoreDatabase(snapshot);
             return null;
@@ -103,7 +105,7 @@ public class BackupRepository extends BaseRepository {
                 name = body.get("name").asText().trim();
                 if (!name.matches("^(@auto_pb_backup_)?[a-z0-9_-]+\\.zip$")) {
                     throw new ApiException(400, "Invalid backup name. Must match: [a-z0-9_-].zip",
-                            Map.of("name", Map.of("code", "validation_invalid_format", "message", "Must be in the format [a-z0-9_-].zip")));
+                            ApiErrors.fieldError("name", "validation_invalid_format", "Must be in the format [a-z0-9_-].zip"));
                 }
             } else {
                 name = "pb_backup_" + Instant.now().toString().replace(":", "-").replace(".", "-") + ".zip";
@@ -112,7 +114,7 @@ public class BackupRepository extends BaseRepository {
             Path backupFile = backupsDir.resolve(name);
             if (Files.exists(backupFile)) {
                 throw new ApiException(400, "Backup already exists.",
-                        Map.of("name", Map.of("code", "validation_not_unique", "message", "Backup already exists.")));
+                        ApiErrors.notUniqueField("name"));
             }
 
             writeBackupZip(backupFile);
@@ -131,8 +133,9 @@ public class BackupRepository extends BaseRepository {
 
     public Map<String, Object> uploadBackup(String filename, byte[] bytes) {
         if (bytes == null || bytes.length == 0) {
-            throw new ApiException(400, "Backup file is required.");
+            throw new ApiException(400, "Backup file is required.", ApiErrors.requiredField("file"));
         }
+        Path backupFile = null;
         try {
             Path backupsDir = dataDir.resolve("backups");
             Files.createDirectories(backupsDir);
@@ -146,7 +149,11 @@ public class BackupRepository extends BaseRepository {
                 name = name + ".zip";
             }
 
-            Path backupFile = backupsDir.resolve(name);
+            Path targetBackupFile = backupsDir.resolve(name);
+            if (Files.exists(targetBackupFile)) {
+                throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
+            }
+            backupFile = targetBackupFile;
             Files.write(backupFile, bytes, StandardOpenOption.CREATE_NEW);
             validateBackupZip(backupFile);
 
@@ -156,9 +163,22 @@ public class BackupRepository extends BaseRepository {
             result.put("modified", Files.getLastModifiedTime(backupFile).toMillis());
             return result;
         } catch (ApiException e) {
+            deleteUploadedBackupIfPresent(backupFile);
             throw e;
         } catch (IOException e) {
+            deleteUploadedBackupIfPresent(backupFile);
             throw new ApiException(400, "Failed to upload backup: " + e.getMessage());
+        }
+    }
+
+    private void deleteUploadedBackupIfPresent(Path backupFile) {
+        if (backupFile == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(backupFile);
+        } catch (IOException ignored) {
+            // best effort cleanup for rejected uploads
         }
     }
 
@@ -181,10 +201,10 @@ public class BackupRepository extends BaseRepository {
 
     private void validateBackupKey(String key) {
         if (key == null || key.isBlank()) {
-            throw new ApiException(400, "Backup key is required.");
+            throw new ApiException(400, "Backup key is required.", ApiErrors.requiredField("key"));
         }
         if (key.contains("..") || key.contains("/") || key.contains("\\")) {
-            throw new ApiException(400, "Invalid backup key.");
+            throw new ApiException(400, "Invalid backup key.", ApiErrors.invalidField("key", "Invalid backup key."));
         }
     }
 
@@ -257,20 +277,36 @@ public class BackupRepository extends BaseRepository {
 
     private List<Map<String, Object>> readRows(Connection conn, String table) throws SQLException {
         validateSqlIdentifier(table);
+        List<String> columns = readTableColumns(conn, table);
+        if (columns.isEmpty()) {
+            return List.of();
+        }
+        String columnSql = columns.stream().map(database::quoteIdentifier).collect(Collectors.joining(", "));
         List<Map<String, Object>> rows = new ArrayList<>();
         try (Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM " + database.quoteIdentifier(table))) {
-            ResultSetMetaData meta = rs.getMetaData();
-            int columnCount = meta.getColumnCount();
+             ResultSet rs = stmt.executeQuery("SELECT " + columnSql + " FROM " + database.quoteIdentifier(table))) {
             while (rs.next()) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                for (int i = 1; i <= columnCount; i++) {
-                    row.put(meta.getColumnName(i), rs.getObject(i));
+                for (String column : columns) {
+                    row.put(column, rs.getObject(column));
                 }
                 rows.add(row);
             }
         }
         return rows;
+    }
+
+    private List<String> readTableColumns(Connection conn, String table) throws SQLException {
+        validateSqlIdentifier(table);
+        List<String> columns = new ArrayList<>();
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, table, null)) {
+            while (rs.next()) {
+                String column = rs.getString("COLUMN_NAME");
+                validateSqlIdentifier(column);
+                columns.add(column);
+            }
+        }
+        return columns;
     }
 
     @SuppressWarnings("unchecked")
@@ -284,7 +320,7 @@ public class BackupRepository extends BaseRepository {
                     zip.transferTo(bytes);
                     Map<String, Object> snapshot = mapper.readValue(new ByteArrayInputStream(bytes.toByteArray()), Map.class);
                     if (!"pocketbase-java-relational-backup-v1".equals(snapshot.get("format"))) {
-                        throw new ApiException(400, "Invalid backup archive.");
+                        throw invalidBackupArchive();
                     }
                     return snapshot;
                 }
@@ -293,9 +329,9 @@ public class BackupRepository extends BaseRepository {
         } catch (ApiException e) {
             throw e;
         } catch (IOException e) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
-        throw new ApiException(400, "Invalid backup archive.");
+        throw invalidBackupArchive();
     }
 
     @SuppressWarnings("unchecked")
@@ -374,7 +410,7 @@ public class BackupRepository extends BaseRepository {
         validateSqlIdentifier(name);
         String sql = String.valueOf(object.get("sql")).trim();
         if (!sql.toUpperCase(java.util.Locale.ROOT).startsWith(expectedPrefix)) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
         stmt.execute(sql);
     }
@@ -434,16 +470,17 @@ public class BackupRepository extends BaseRepository {
 
     private void restoreStorageFiles(Path backup) {
         Path storage = dataDir.resolve("storage");
-        deleteRecursively(storage);
+        Path staging = null;
         try {
-            Files.createDirectories(storage);
+            Files.createDirectories(dataDir);
+            staging = Files.createTempDirectory(dataDir, ".restore-storage-");
             try (InputStream input = Files.newInputStream(backup);
                  ZipInputStream zip = new ZipInputStream(input)) {
                 ZipEntry entry;
                 while ((entry = zip.getNextEntry()) != null) {
                     String name = entry.getName();
                     if (name != null && name.startsWith("storage/")) {
-                        Path out = safeStorageTarget(storage, name.substring("storage/".length()));
+                        Path out = safeStorageTarget(staging, name.substring("storage/".length()));
                         if (entry.isDirectory()) {
                             Files.createDirectories(out);
                         } else {
@@ -454,20 +491,48 @@ public class BackupRepository extends BaseRepository {
                     zip.closeEntry();
                 }
             }
+            deleteRecursively(storage);
+            Files.move(staging, storage, StandardCopyOption.REPLACE_EXISTING);
+            staging = null;
         } catch (IOException e) {
             throw new ApiException(400, "Failed to restore backup storage: " + e.getMessage());
+        } finally {
+            deleteRecursively(staging);
+        }
+    }
+
+    private void validateStorageEntries(Path backup) {
+        Path storage = dataDir.resolve("storage");
+        try (InputStream input = Files.newInputStream(backup);
+             ZipInputStream zip = new ZipInputStream(input)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                String name = entry.getName();
+                if (name != null && name.startsWith("storage/")) {
+                    safeStorageTarget(storage, name.substring("storage/".length()));
+                }
+                zip.closeEntry();
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (IOException e) {
+            throw invalidBackupArchive();
         }
     }
 
     private Path safeStorageTarget(Path storage, String relative) {
         if (relative == null || relative.isBlank() || relative.startsWith("/") || relative.contains("\\")) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
         Path out = storage.resolve(relative).normalize();
         if (!out.startsWith(storage.normalize())) {
-            throw new ApiException(400, "Invalid backup archive.");
+            throw invalidBackupArchive();
         }
         return out;
+    }
+
+    private ApiException invalidBackupArchive() {
+        return new ApiException(400, "Invalid backup archive.", ApiErrors.invalidField("file", "Invalid backup archive."));
     }
 
     private void validateBackupZip(Path backup) {
