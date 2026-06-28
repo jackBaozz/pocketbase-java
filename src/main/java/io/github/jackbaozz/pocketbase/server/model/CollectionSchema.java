@@ -11,6 +11,12 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class CollectionSchema {
+    public static final long DEFAULT_AUTH_TOKEN_DURATION = 1_209_600L;
+    public static final long DEFAULT_PASSWORD_RESET_TOKEN_DURATION = 1_800L;
+    public static final long DEFAULT_VERIFICATION_TOKEN_DURATION = 604_800L;
+    public static final long DEFAULT_EMAIL_CHANGE_TOKEN_DURATION = 1_800L;
+    public static final long DEFAULT_FILE_TOKEN_DURATION = 180L;
+
     public String id;
     public String name;
     public String type = "base";
@@ -26,6 +32,11 @@ public class CollectionSchema {
     public OtpConfig otp = new OtpConfig();
     public MfaConfig mfa = new MfaConfig();
     public OAuth2Config oauth2 = new OAuth2Config();
+    public TokenConfig authToken = new TokenConfig(DEFAULT_AUTH_TOKEN_DURATION);
+    public TokenConfig passwordResetToken = new TokenConfig(DEFAULT_PASSWORD_RESET_TOKEN_DURATION);
+    public TokenConfig verificationToken = new TokenConfig(DEFAULT_VERIFICATION_TOKEN_DURATION);
+    public TokenConfig emailChangeToken = new TokenConfig(DEFAULT_EMAIL_CHANGE_TOKEN_DURATION);
+    public TokenConfig fileToken = new TokenConfig(DEFAULT_FILE_TOKEN_DURATION);
 
     public List<String> indexes = new ArrayList<>();
 
@@ -71,5 +82,18 @@ public class CollectionSchema {
         public String userInfoURL;
         public List<String> scopes = new ArrayList<>();
         public boolean pkce = true;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TokenConfig {
+        public long duration;
+        public String secret;
+
+        public TokenConfig() {
+        }
+
+        public TokenConfig(long duration) {
+            this.duration = duration;
+        }
     }
 }

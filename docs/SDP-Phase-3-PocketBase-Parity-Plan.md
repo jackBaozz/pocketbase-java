@@ -1,6 +1,6 @@
 # SDP Phase 3: PocketBase Parity And Release Hardening Plan
 
-Updated: 2026-06-23
+Updated: 2026-06-27
 
 Primary inputs:
 
@@ -36,6 +36,30 @@ Checklist convention:
 - `[ ]`: Phase 3 work remaining.
 - `[x]`: Phase 3 work completed and verified after this document was created.
 
+## 2.1 Completion Audit On 2026-06-27
+
+Current completion status: Phase 3 is still mostly `Partial`, not broadly `Done`.
+
+Verification run on 2026-06-27:
+
+- [x] `git diff --check`
+- [x] `mvn -gs settings.xml -s settings.xml test`
+- [x] `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`
+- [x] `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#authCollectionsHashPasswordsAndRejectDuplicateEmail,LocalPocketBaseServerTest#authMethodsReflectConfiguredPasswordOtpMfaAndOauth2,LocalPocketBaseServerTest#authRefreshReissuesTokenForMatchingAuthRecord,LocalPocketBaseServerTest#otpEndpointsIssueCodeAndAuthenticateAuthRecord,LocalPocketBaseServerTest#authLifecycleEndpointsVerifyResetChangeEmailAndImpersonate,LocalPocketBaseServerTest#authResponsesHonorQueryFieldsAndExpand test`
+- [x] `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#settingsAndLogsApisRequireSuperuserPersistAndOmitSecrets,LocalPocketBaseServerTest#settingsTestEmailCanSendThroughConfiguredSmtp,LocalPocketBaseServerTest#cronsApisListBuiltInsAndRunAutoBackup,LocalPocketBaseServerTest#backupsCanBeCreatedDownloadedRestoredAndDeleted,LocalPocketBaseServerTest#multipartFileUploadsAreStoredAndServedFromApiFiles,LocalPocketBaseServerTest#imageFileThumbsAreGeneratedOnlyForConfiguredSizes,LocalPocketBaseServerTest#fileFieldsValidateMimeTypesAndMaxSize,LocalPocketBaseServerTest#protectedFilesRequireFileTokenAndViewRuleAccess,LocalPocketBaseServerTest#multipartBatchUploadsFilesAndRollsBackStorageOnFailure,LocalPocketBaseServerTest#recordsPersistAcrossServerRestart test`
+- [x] `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite -Dtest=LocalPocketBaseServerTest#accessRulesCanReferenceOtherCollectionFields,LocalPocketBaseServerTest#recordsPersistAcrossServerRestart test`
+- [x] `mvn -gs settings.xml -s settings.xml clean -Pnative -DskipTests package`
+- [x] Native smoke: JSON health, SQLite health, bootstrap, auth, collection create, record create, record list.
+- [x] `mvn -gs settings.xml -s settings.xml -Dstorage=sqlite test`
+- [x] `mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=mysql -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`
+- [x] `mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=postgres -Dtest=BehaviorFixturesTest,AdminUiSmokeTest test`
+
+SQLite full-suite result after the relational auth, OAuth2, MFA second-factor flow, realtime, collection import/filter, SQL endpoint, health payload, Admin UI login-path fixes, structured field-value normalization, explicit superuser/auth-collection MFA coverage, relational dry-run view implementation, collection-driven token duration wiring, token secret invalidation coverage, constant-time password/token-key auth checks, and expiry/wrong-collection token fixtures: passed with 129 tests run, 0 failures, and 0 errors.
+
+This closes the earlier SQLite runtime blockers that were preventing the relational engine from acting as the Phase 3 parity baseline. MySQL/PostgreSQL targeted gates currently skip on this machine because Testcontainers cannot find a valid Docker environment, so cross-dialect behavior is still unverified here. Phase 3 is still not broadly `Done`, because MySQL/PostgreSQL parity, broader native/runtime validation, and deeper Admin UI workflow parity remain open.
+
+Do not treat an `[x]` in old Phase 2 docs as completion for Phase 3. A Phase 3 task stays open until the Phase 3 Definition Of Done and the relevant storage/UI/native gate pass.
+
 ## 3. Current Carryover Snapshot
 
 These are the high-value carryovers found in the current tree.
@@ -45,19 +69,12 @@ These are the high-value carryovers found in the current tree.
 - `JooqDatabase` exists and selects SQLite/MySQL/PostgreSQL dialects.
 - `LocalPocketBase` can route `storage=sqlite/mysql/postgres` into the relational storage class.
 - `SqliteStorageEngine` now uses jOOQ for important DDL/CRUD/filter paths, but the class name and behavior are still SQLite/MVP oriented.
-- MySQL/PostgreSQL are driver/config/dialect entry points only. There is no confirmed MySQL/PostgreSQL fixture pass.
+- MySQL/PostgreSQL now have external-DSN/Testcontainers fixture-gate entry points and startup validation for selected database/schema plus session settings, but there is still no confirmed cross-dialect fixture pass on this machine.
 - Several relational paths still use raw SQL or SQLite-specific behavior, especially SQL endpoint, rules cross-collection reads, log list, collection schema loading, record get, view creation, and request JSON helpers.
-- SQLite storage still has visible stubs and placeholders:
-  - settings return static `pocketbase-java`
-  - S3/email test methods are no-op
+- SQLite storage still has visible partial areas and simplified behavior:
   - Apple client secret returns `{ }`
-  - log stats and log detail are empty/not found
-  - cron list/run are empty/no-op
-  - file token returns `file-token-dummy`
-  - backups return empty/no-op results
-  - OTP request/auth return `{ }`
-  - impersonation returns `dummy-impersonate`
-  - `upsertRecord`, `filePath`, and `backupFile` throw `UnsupportedOperationException`
+  - import/truncate diff semantics and broader migration planning are still incomplete
+  - OAuth2 provider validation and exchange/linking are still simplified compared to official breadth
 
 ### 3.2 Auth
 
@@ -76,6 +93,7 @@ These are the high-value carryovers found in the current tree.
 - Native image metadata exists under `src/main/resources/META-INF/native-image`.
 - jOOQ/JDBC driver usage must be revalidated in native image mode.
 - MySQL/PostgreSQL should be optional runtime engines without bloating or breaking the default SQLite native binary.
+- External MySQL/PostgreSQL JDBC drivers now live behind the `external-db-drivers` Maven profile so the default SQLite/native classpath does not include them.
 
 ## 4. Immediate Priority Queue
 
@@ -89,17 +107,21 @@ Work these first before adding new broad features.
   - Scope: `RelationalStorageEngine`, update initialization.
 - [x] **P3-003 Make SQLite storage non-stub for core system endpoints**
   - Scope: settings, logs detail/stats, crons, backups, file token, OTP, impersonation, `upsertRecord`, `filePath`, `backupFile`.
-  - Acceptance: no dummy token strings, no empty successful responses for official routes, no `UnsupportedOperationException` for reachable API routes.
+  - Acceptance: no dummy token strings, no empty successful responses for these official routes, no `UnsupportedOperationException` for reachable API routes.
+  - Verification: targeted SQLite route coverage listed in section 2.1 passes. Broader SQLite parity remains open under P3-004+ and Stream B-F.
 
 - [x] **P3-004 Add real MySQL/PostgreSQL fixture gates**
   - Scope: Testcontainers or external DSN profiles for behavior fixtures.
   - Acceptance: skipped only when DSN/container is unavailable, failed when behavior differs.
 
-- [x] **P3-005 Complete official error envelope and validation text audit**
+- [ ] **P3-005 Complete official error envelope and validation text audit**
   - Scope: auth, collection, record, file, settings, SQL, backup, batch, realtime errors.
-  - Acceptance: fixtures assert `code`, `status`, `message`, `data`, nested field keys, and route-specific status codes.
+  - Progress: top-level HTTP error bodies now use the current official `status/message/data` envelope instead of the legacy top-level `code`; field-level validation entries still use `code/message`.
+  - Progress: auth password required fields, collection create/update identifier validation, record create/update validation, JSON storage, SQLite/jOOQ storage, and cross-dialect unique constraint normalization now share the same field-level validation helpers for the covered paths.
+  - Acceptance: fixtures assert HTTP status, response `status`, `message`, `data`, nested field `code`, nested field keys, route-specific messages, and route-specific status codes.
+  - Remaining: continue the same audit for file upload/download errors, settings test endpoints, SQL/dry-run SQL errors, backup restore/upload errors, batch subresponse errors, and realtime subscribe errors.
 
-- [x] **P3-006 Make Admin UI route and workflow parity measurable**
+- [ ] **P3-006 Make Admin UI route and workflow parity measurable**
   - Scope: Playwright smoke for hash routes, login, collection edit, record edit, settings, logs, OAuth popup, backups, import/export, SQL.
   - Acceptance: browser smoke fails when a major official workflow becomes unreachable.
 
@@ -116,7 +138,7 @@ Acceptance:
 - [ ] Convert remaining dynamic record reads to jOOQ: `getRecord`, `getCollectionSchema`, rule cross-collection record reads, and log list/detail.
 - [ ] Replace raw `SELECT *` helpers with explicit jOOQ field/table helpers where response shape matters.
 - [ ] Keep raw SQL only for official SQL endpoint and user-defined view SQL, with explicit validation.
-- [ ] Extend `FilterToSqlCompiler` so equality, comparison, contains, logical operators, and `@request.*` values are all bound safely.
+- [x] Extend `FilterToSqlCompiler` so equality, comparison, contains, logical operators, and `@request.*` values are all bound safely.
 - [ ] Replace SQLite-only `json_extract(...)` request context handling with a dialect-aware abstraction or documented fallback.
 - [ ] Add tests for string escaping, `%/_` LIKE escaping, null comparisons, booleans, numbers, dates, nested parentheses, and malicious filter input.
 
@@ -127,8 +149,8 @@ Acceptance:
 
 #### P3-A03: SQL Type Mapping
 
-- [ ] Define the storage type mapping for every official field type: text, editor, email, url, number, bool, date, autodate, select, json, file, relation, password, geoPoint.
-- [ ] Decide what remains text/blob metadata versus typed DB columns.
+- [x] Define the storage type mapping for every official field type: text, editor, email, url, number, bool, date, autodate, select, json, file, relation, password, geoPoint.
+- [x] Decide what remains text/blob metadata versus typed DB columns.
 - [ ] Add migration tests for each field type.
 - [ ] Normalize read values back into official record JSON types.
 - [ ] Ensure select/json/relation arrays roundtrip consistently across SQLite/MySQL/PostgreSQL.
@@ -155,12 +177,13 @@ Acceptance:
 
 #### P3-A05: MySQL And PostgreSQL Profiles
 
-- [ ] Add Maven profiles or properties for external DSNs.
-- [ ] Add Testcontainers path if local Docker is available.
+- [x] Add Maven profiles or properties for external DSNs.
+- [x] Add Testcontainers path if local Docker is available.
 - [ ] Validate DSN, schema/database existence, permissions, timezone, charset, and collation on startup.
-- [ ] Normalize duplicate key/unique constraint errors into official validation errors.
+  Current state: DSN presence, selected database/schema, timezone, charset/collation, and client encoding are now checked during external-engine startup; broader permission probes remain open.
+- [x] Normalize duplicate key/unique constraint errors into official validation errors.
 - [ ] Add MySQL and PostgreSQL CI jobs as optional first, then required once stable.
-- [ ] Document local commands for both engines.
+- [x] Document local commands for both engines.
 
 Acceptance:
 
@@ -227,7 +250,7 @@ Goal: remove dummy auth paths and make official auth workflows durable.
 
 #### P3-C01: Auth Action Persistence
 
-- [ ] Replace dummy password reset, verification, and email change handlers.
+- [x] Replace dummy password reset, verification, and email change handlers.
 - [ ] Persist auth request tokens with expiry and one-time-use semantics.
 - [ ] Implement token validation, record lookup, and mutation in one transaction.
 - [ ] Render official-compatible response bodies and validation errors.
@@ -240,10 +263,10 @@ Acceptance:
 #### P3-C02: OTP And MFA
 
 - [ ] Persist `_otps` records for SQLite/MySQL/PostgreSQL.
-- [ ] Persist `_mfas` records and cleanup expired records.
-- [ ] Implement MFA second factor for password, OTP, and OAuth2.
-- [ ] Enforce one-time-use, expiry, collection/record match, and method match.
-- [ ] Add tests for superuser and auth collection MFA paths.
+- [x] Persist `_mfas` records and cleanup expired records.
+- [x] Implement MFA second factor for password, OTP, and OAuth2.
+- [x] Enforce one-time-use, expiry, collection/record match, and method match.
+- [x] Add tests for superuser and auth collection MFA paths.
 
 Acceptance:
 
@@ -266,12 +289,12 @@ Acceptance:
 
 #### P3-C04: Token Semantics
 
-- [ ] Use settings-driven durations for auth, file, OTP, reset, verification, email change, and impersonation tokens.
-- [ ] Implement token key rotation invalidation.
-- [ ] Implement real file token generation and verification.
-- [ ] Implement real impersonation token flow.
-- [ ] Add constant-time password/auth checks where relevant.
-- [ ] Add fixtures for expired tokens, rotated token keys, wrong collection, and auth refresh edge cases.
+- [x] Use settings-driven durations for auth, file, OTP, reset, verification, email change, and impersonation tokens.
+- [x] Implement token key rotation invalidation.
+- [x] Implement real file token generation and verification.
+- [x] Implement real impersonation token flow.
+- [x] Add constant-time password/auth checks where relevant.
+- [x] Add fixtures for expired tokens, rotated token keys, wrong collection, and auth refresh edge cases.
 
 Acceptance:
 
@@ -535,13 +558,13 @@ cd UI && npm ci && npm run build
 MySQL external DSN gate:
 
 ```bash
-mvn -gs settings.xml -s settings.xml -Dstorage=mysql -Ddb.url="$PB_MYSQL_TEST_URL" -Ddb.user="$PB_MYSQL_TEST_USER" -Ddb.password="$PB_MYSQL_TEST_PASSWORD" test
+mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=mysql -Ddb.url="$PB_MYSQL_TEST_URL" -Ddb.user="$PB_MYSQL_TEST_USER" -Ddb.password="$PB_MYSQL_TEST_PASSWORD" test
 ```
 
 PostgreSQL external DSN gate:
 
 ```bash
-mvn -gs settings.xml -s settings.xml -Dstorage=postgres -Ddb.url="$PB_POSTGRES_TEST_URL" -Ddb.user="$PB_POSTGRES_TEST_USER" -Ddb.password="$PB_POSTGRES_TEST_PASSWORD" test
+mvn -gs settings.xml -s settings.xml -Pexternal-db-drivers -Dstorage=postgres -Ddb.url="$PB_POSTGRES_TEST_URL" -Ddb.user="$PB_POSTGRES_TEST_USER" -Ddb.password="$PB_POSTGRES_TEST_PASSWORD" test
 ```
 
 Native gate:
@@ -559,7 +582,7 @@ git diff --check
 ## 8. Suggested Execution Order
 
 1. [ ] Commit current jOOQ/filter hardening once reviewed.
-2. [ ] Make SQLite relational storage non-stub for settings/logs/crons/backups/file token/OTP/upsert.
+2. [x] Make SQLite relational storage non-stub for settings/logs/crons/backups/file token/OTP/upsert.
 3. [ ] Split relational engine naming and repositories.
 4. [ ] Add MySQL/PostgreSQL fixture gates with external DSN or Testcontainers.
 5. [ ] Complete field type storage mapping and constraint error normalization.
@@ -568,4 +591,3 @@ git diff --check
 8. [ ] Upgrade Admin UI hash routing, collection editor, record editor, settings, and OAuth tester.
 9. [ ] Add native image validation after each new dependency/provider.
 10. [ ] Refresh official PocketBase baseline and regenerate route/behavior manifests.
-

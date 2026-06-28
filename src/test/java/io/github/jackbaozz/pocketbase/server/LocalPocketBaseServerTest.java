@@ -172,6 +172,30 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void dryRunViewPreviewsSelectQueriesAndRejectsWriteStatements() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        assertEquals(401, rawRequest("POST", "/api/collections/meta/dry-run-view", null, Map.of(
+                "query", "select 1"
+        )).statusCode());
+
+        JsonNode preview = request("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select 1 as one; select 'last' as final_value"
+        ));
+        assertEquals("final_value", preview.get("columns").get(0).get("name").asText());
+        assertEquals("last", preview.get("rows").get(0).get(0).asText());
+
+        assertEquals(400, rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "insert into t values (1)"
+        )).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", ""
+        )).statusCode());
+    }
+
+    @Test
     void collectionImportAndTruncateApisMatchOfficialRoutes() throws Exception {
         start();
         bootstrapSuperuser();
@@ -819,6 +843,70 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void structuredFieldValuesRoundtripAsOfficialJsonTypes() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode people = request("POST", "/api/collections", token, Map.of(
+                "name", "typed_people",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "name", "type", "text", "required", true))
+        ));
+        request("POST", "/api/collections", token, Map.of(
+                "name", "typed_posts",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text", "required", true),
+                        Map.of("name", "labels", "type", "select", "options", Map.of(
+                                "values", List.of("alpha", "beta", "gamma"),
+                                "maxSelect", 3
+                        )),
+                        Map.of("name", "authors", "type", "relation", "collectionId", people.get("id").asText(), "maxSelect", 3),
+                        Map.of("name", "meta", "type", "json"),
+                        Map.of("name", "location", "type", "geoPoint"),
+                        Map.of("name", "published", "type", "bool")
+                )
+        ));
+        JsonNode ada = request("POST", "/api/collections/typed_people/records", token, Map.of("name", "Ada"));
+        JsonNode linus = request("POST", "/api/collections/typed_people/records", token, Map.of("name", "Linus"));
+
+        JsonNode created = request("POST", "/api/collections/typed_posts/records", token, Map.of(
+                "title", "Typed payload",
+                "labels", List.of("alpha", "beta"),
+                "authors", List.of(ada.get("id").asText(), linus.get("id").asText()),
+                "meta", Map.of("rating", 5, "tags", List.of("x", "y")),
+                "location", Map.of("lat", 12.34, "lon", 56.78),
+                "published", true
+        ));
+
+        assertTrue(created.get("labels").isArray());
+        assertEquals(2, created.get("labels").size());
+        assertEquals("alpha", created.get("labels").get(0).asText());
+        assertTrue(created.get("authors").isArray());
+        assertEquals(2, created.get("authors").size());
+        assertTrue(created.get("meta").isObject());
+        assertEquals(5, created.get("meta").get("rating").asInt());
+        assertTrue(created.get("location").isObject());
+        assertEquals(12.34, created.get("location").get("lat").asDouble(), 0.0001);
+        assertTrue(created.get("published").asBoolean());
+
+        JsonNode listed = request("GET", "/api/collections/typed_posts/records", null, null);
+        JsonNode item = listed.get("items").get(0);
+        assertTrue(item.get("labels").isArray());
+        assertEquals("beta", item.get("labels").get(1).asText());
+        assertTrue(item.get("authors").isArray());
+        assertEquals(linus.get("id").asText(), item.get("authors").get(1).asText());
+        assertTrue(item.get("meta").isObject());
+        assertEquals("y", item.get("meta").get("tags").get(1).asText());
+        assertTrue(item.get("location").isObject());
+        assertEquals(56.78, item.get("location").get("lon").asDouble(), 0.0001);
+        assertTrue(item.get("published").asBoolean());
+    }
+
+    @Test
     void recordResponsesHonorFieldsQueryIncludingExpandedRelations() throws Exception {
         start();
         bootstrapSuperuser();
@@ -1102,6 +1190,410 @@ class LocalPocketBaseServerTest {
         assertTrue(methods.get("oauth2").get("providers").get(0).has("displayName"));
         assertTrue(methods.get("oauth2").get("providers").get(0).has("authURL"));
         assertEquals(2, methods.get("authProviders").size());
+    }
+
+    @Test
+    void authCollectionTokenDurationsDriveIssuedJwtTtls() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "token_users",
+                "type", "auth",
+                "authToken", Map.of("duration", 61),
+                "passwordResetToken", Map.of("duration", 91),
+                "verificationToken", Map.of("duration", 121),
+                "emailChangeToken", Map.of("duration", 151),
+                "fileToken", Map.of("duration", 181)
+        ));
+        JsonNode user = request("POST", "/api/collections/token_users/records", superuserToken, Map.of(
+                "email", "token-user@example.com",
+                "password", "secret456",
+                "verified", false
+        ));
+
+        JsonNode auth = request("POST", "/api/collections/token_users/auth-with-password", null, Map.of(
+                "identity", "token-user@example.com",
+                "password", "secret456"
+        ));
+        assertTokenLifetime(auth.get("token").asText(), 61);
+
+        JsonNode refreshed = request("POST", "/api/collections/token_users/auth-refresh", auth.get("token").asText(), null);
+        assertTokenLifetime(refreshed.get("token").asText(), 61);
+
+        JsonNode fileToken = request("POST", "/api/files/token", auth.get("token").asText(), null);
+        assertTokenLifetime(fileToken.get("token").asText(), 181);
+
+        request("POST", "/api/collections/token_users/request-password-reset", null, Map.of(
+                "email", "token-user@example.com"
+        ));
+        assertTokenLifetime(authRequestToken("passwordReset", "token-user@example.com"), 91);
+
+        request("POST", "/api/collections/token_users/request-verification", null, Map.of(
+                "email", "token-user@example.com"
+        ));
+        assertTokenLifetime(authRequestToken("verification", "token-user@example.com"), 121);
+
+        JsonNode verifiedAuth = request("POST", "/api/collections/token_users/auth-with-password", null, Map.of(
+                "identity", "token-user@example.com",
+                "password", "secret456"
+        ));
+        request("POST", "/api/collections/token_users/request-email-change", verifiedAuth.get("token").asText(), Map.of(
+                "newEmail", "token-user-next@example.com"
+        ));
+        assertTokenLifetime(authRequestToken("emailChange", "token-user@example.com"), 151);
+
+        JsonNode impersonated = request("POST", "/api/collections/token_users/impersonate/" + user.get("id").asText(),
+                superuserToken,
+                Map.of());
+        assertTokenLifetime(impersonated.get("token").asText(), 61);
+    }
+
+    @Test
+    void rotatingCollectionTokenSecretsInvalidatesIssuedAuthFileAndResetTokens() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "secret_users",
+                "type", "auth",
+                "authToken", Map.of("duration", 61, "secret", "auth-a"),
+                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
+                "fileToken", Map.of("duration", 181, "secret", "file-a")
+        ));
+        JsonNode user = request("POST", "/api/collections/secret_users/records", superuserToken, Map.of(
+                "email", "secret-user@example.com",
+                "password", "secret456",
+                "verified", true
+        ));
+
+        JsonNode auth = request("POST", "/api/collections/secret_users/auth-with-password", null, Map.of(
+                "identity", "secret-user@example.com",
+                "password", "secret456"
+        ));
+        String authToken = auth.get("token").asText();
+
+        request("PATCH", "/api/collections/secret_users", superuserToken, Map.of(
+                "id", auth.get("record").get("collectionId").asText(),
+                "name", "secret_users",
+                "type", "auth",
+                "fields", List.of(),
+                "authToken", Map.of("duration", 61, "secret", "auth-b"),
+                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
+                "fileToken", Map.of("duration", 181, "secret", "file-a")
+        ));
+        assertEquals(401, rawRequest("POST", "/api/collections/secret_users/auth-refresh", authToken, null).statusCode());
+
+        JsonNode freshAuth = request("POST", "/api/collections/secret_users/auth-with-password", null, Map.of(
+                "identity", "secret-user@example.com",
+                "password", "secret456"
+        ));
+        String freshToken = freshAuth.get("token").asText();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "secret_assets",
+                "listRule", "owner = @request.auth.id",
+                "viewRule", "owner = @request.auth.id",
+                "fields", List.of(
+                        Map.of("name", "owner", "type", "text", "required", true),
+                        Map.of("name", "attachment", "type", "file", "required", true, "protected", true)
+                )
+        ));
+        JsonNode asset = multipartRequest("POST", "/api/collections/secret_assets/records", superuserToken, Map.of(
+                "owner", user.get("id").asText()
+        ), Map.of(
+                "attachment", new MultipartFile("secret.txt", "text/plain", "secret payload".getBytes(StandardCharsets.UTF_8))
+        ));
+        String filename = asset.get("attachment").asText();
+        String filePath = "/api/files/secret_assets/" + asset.get("id").asText() + "/" + filename;
+
+        JsonNode fileToken = request("POST", "/api/files/token", freshToken, null);
+        assertEquals(200, rawRequest("GET", filePath + "?token=" + fileToken.get("token").asText(), null, null).statusCode());
+
+        request("PATCH", "/api/collections/secret_users", superuserToken, Map.of(
+                "id", freshAuth.get("record").get("collectionId").asText(),
+                "name", "secret_users",
+                "type", "auth",
+                "fields", List.of(),
+                "authToken", Map.of("duration", 61, "secret", "auth-b"),
+                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
+                "fileToken", Map.of("duration", 181, "secret", "file-b")
+        ));
+        assertEquals(403, rawRequest("GET", filePath + "?token=" + fileToken.get("token").asText(), null, null).statusCode());
+
+        request("POST", "/api/collections/secret_users/request-password-reset", null, Map.of(
+                "email", "secret-user@example.com"
+        ));
+        String resetToken = authRequestToken("passwordReset", "secret-user@example.com");
+
+        request("PATCH", "/api/collections/secret_users", superuserToken, Map.of(
+                "id", freshAuth.get("record").get("collectionId").asText(),
+                "name", "secret_users",
+                "type", "auth",
+                "fields", List.of(),
+                "authToken", Map.of("duration", 61, "secret", "auth-b"),
+                "passwordResetToken", Map.of("duration", 91, "secret", "reset-b"),
+                "fileToken", Map.of("duration", 181, "secret", "file-b")
+        ));
+        assertEquals(400, rawRequest("POST", "/api/collections/secret_users/confirm-password-reset", null, Map.of(
+                "token", resetToken,
+                "password", "newsecret456",
+                "passwordConfirm", "newsecret456"
+        )).statusCode());
+    }
+
+    @Test
+    void expiredAndWrongCollectionTokensAreRejected() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "timed_users",
+                "type", "auth",
+                "authToken", Map.of("duration", 1),
+                "passwordResetToken", Map.of("duration", 1)
+        ));
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "other_users",
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/timed_users/records", superuserToken, Map.of(
+                "email", "timed@example.com",
+                "password", "secret456",
+                "verified", true
+        ));
+        request("POST", "/api/collections/other_users/records", superuserToken, Map.of(
+                "email", "other@example.com",
+                "password", "secret456",
+                "verified", true
+        ));
+
+        JsonNode auth = request("POST", "/api/collections/timed_users/auth-with-password", null, Map.of(
+                "identity", "timed@example.com",
+                "password", "secret456"
+        ));
+        Thread.sleep(2100L);
+        assertEquals(401, rawRequest("POST", "/api/collections/timed_users/auth-refresh", auth.get("token").asText(), null).statusCode());
+
+        request("POST", "/api/collections/timed_users/request-password-reset", null, Map.of(
+                "email", "timed@example.com"
+        ));
+        String resetToken = authRequestToken("passwordReset", "timed@example.com");
+        assertEquals(400, rawRequest("POST", "/api/collections/other_users/confirm-password-reset", null, Map.of(
+                "token", resetToken,
+                "password", "newsecret456",
+                "passwordConfirm", "newsecret456"
+        )).statusCode());
+        Thread.sleep(2100L);
+        assertEquals(400, rawRequest("POST", "/api/collections/timed_users/confirm-password-reset", null, Map.of(
+                "token", resetToken,
+                "password", "newsecret456",
+                "passwordConfirm", "newsecret456"
+        )).statusCode());
+    }
+
+    @Test
+    void mfaRequiresADifferentSecondAuthMethodAcrossPasswordOtpAndOauth2() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "mfa_users",
+                "type", "auth",
+                "mfa", Map.of(
+                        "enabled", true,
+                        "duration", 900,
+                        "rule", "true"
+                ),
+                "otp", Map.of(
+                        "enabled", true,
+                        "duration", 300,
+                        "length", 6
+                )
+        ));
+        request("POST", "/api/collections/mfa_users/records", token, Map.of(
+                "email", "mfa@example.com",
+                "password", "secret456",
+                "verified", true
+        ));
+
+        HttpResponse<String> passwordFirst = rawRequest("POST", "/api/collections/mfa_users/auth-with-password", null, Map.of(
+                "identity", "mfa@example.com",
+                "password", "secret456"
+        ));
+        assertEquals(401, passwordFirst.statusCode());
+        String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
+
+        HttpResponse<String> samePasswordMethod = rawRequest("POST", "/api/collections/mfa_users/auth-with-password", null, Map.of(
+                "identity", "mfa@example.com",
+                "password", "secret456",
+                "mfaId", passwordMfaId
+        ));
+        assertEquals(400, samePasswordMethod.statusCode());
+        assertTrue(samePasswordMethod.body().contains("different auth method"));
+
+        JsonNode otpRequest = request("POST", "/api/collections/mfa_users/request-otp", null, Map.of(
+                "email", "mfa@example.com"
+        ));
+        String otpId = otpRequest.get("otpId").asText();
+        String otpPassword = otpRequestPassword("mfa@example.com", otpId);
+        JsonNode passwordCompleted = request("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", otpPassword,
+                "mfaId", passwordMfaId
+        ));
+        assertTrue(passwordCompleted.hasNonNull("token"));
+        assertEquals(400, rawRequest("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", otpPassword,
+                "mfaId", passwordMfaId
+        )).statusCode());
+
+        JsonNode otpRequest2 = request("POST", "/api/collections/mfa_users/request-otp", null, Map.of(
+                "email", "mfa@example.com"
+        ));
+        String otpId2 = otpRequest2.get("otpId").asText();
+        String otpPassword2 = otpRequestPassword("mfa@example.com", otpId2);
+        HttpResponse<String> otpFirst = rawRequest("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
+                "otpId", otpId2,
+                "password", otpPassword2
+        ));
+        assertEquals(401, otpFirst.statusCode());
+        String otpMfaId = mapper.readTree(otpFirst.body()).get("mfaId").asText();
+
+        HttpResponse<String> sameOtpMethod = rawRequest("POST", "/api/collections/mfa_users/auth-with-otp", null, Map.of(
+                "otpId", otpId2,
+                "password", otpPassword2,
+                "mfaId", otpMfaId
+        ));
+        assertEquals(400, sameOtpMethod.statusCode());
+        JsonNode otpCompleted = request("POST", "/api/collections/mfa_users/auth-with-password?mfaId="
+                + URLEncoder.encode(otpMfaId, StandardCharsets.UTF_8), null, Map.of(
+                "identity", "mfa@example.com",
+                "password", "secret456"
+        ));
+        assertTrue(otpCompleted.hasNonNull("token"));
+
+        try (FakeOAuth2Server oauth = FakeOAuth2Server.start()) {
+            request("POST", "/api/collections", token, Map.of(
+                    "name", "mfa_oauth_users",
+                    "type", "auth",
+                    "mfa", Map.of(
+                            "enabled", true,
+                            "duration", 900,
+                            "rule", "true"
+                    ),
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "providers", List.of(
+                                    Map.of(
+                                            "name", "oidc",
+                                            "clientId", "client-123",
+                                            "clientSecret", "secret-456",
+                                            "authURL", oauth.baseUrl() + "/authorize",
+                                            "tokenURL", oauth.baseUrl() + "/token",
+                                            "userInfoURL", oauth.baseUrl() + "/userinfo",
+                                            "scopes", List.of("openid", "email", "profile"),
+                                            "pkce", true
+                                    )
+                            )
+                    )
+            ));
+            request("POST", "/api/collections/mfa_oauth_users/records", token, Map.of(
+                    "email", "oidc@example.com",
+                    "password", "secret456",
+                    "verified", true
+            ));
+
+            JsonNode methods = request("GET", "/api/collections/mfa_oauth_users/auth-methods", null, null);
+            JsonNode provider = methods.get("oauth2").get("providers").get(0);
+
+            HttpResponse<String> oauthFirst = rawRequest("POST", "/api/collections/mfa_oauth_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "first-code",
+                    "codeVerifier", provider.get("codeVerifier").asText(),
+                    "redirectURL", "http://127.0.0.1/callback"
+            ));
+            assertEquals(401, oauthFirst.statusCode());
+            String oauthMfaId = mapper.readTree(oauthFirst.body()).get("mfaId").asText();
+
+            HttpResponse<String> sameOauthMethod = rawRequest("POST", "/api/collections/mfa_oauth_users/auth-with-oauth2", null, Map.of(
+                    "provider", "oidc",
+                    "code", "second-code",
+                    "codeVerifier", provider.get("codeVerifier").asText(),
+                    "redirectURL", "http://127.0.0.1/callback",
+                    "mfaId", oauthMfaId
+            ));
+            assertEquals(400, sameOauthMethod.statusCode());
+
+            JsonNode oauthCompleted = request("POST", "/api/collections/mfa_oauth_users/auth-with-password", null, Map.of(
+                    "identity", "oidc@example.com",
+                    "password", "secret456",
+                    "mfaId", oauthMfaId
+            ));
+            assertTrue(oauthCompleted.hasNonNull("token"));
+        }
+    }
+
+    @Test
+    void superuserMfaCanEscalateFromPasswordToOtp() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("PATCH", "/api/collections/_superusers", token, Map.of(
+                "id", "pbc_superusers",
+                "name", "_superusers",
+                "type", "auth",
+                "fields", List.of(),
+                "options", Map.of(
+                        "passwordAuth", Map.of(
+                                "enabled", true,
+                                "identityFields", List.of("email")
+                        ),
+                        "otp", Map.of(
+                                "enabled", true,
+                                "duration", 300,
+                                "length", 6
+                        ),
+                        "mfa", Map.of(
+                                "enabled", true,
+                                "duration", 900,
+                                "rule", "true"
+                        )
+                )
+        ));
+
+        HttpResponse<String> passwordFirst = rawRequest("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "root@example.com",
+                "password", "secret123"
+        ));
+        assertEquals(401, passwordFirst.statusCode());
+        String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
+
+        JsonNode otpRequest = request("POST", "/api/collections/_superusers/request-otp", null, Map.of(
+                "email", "root@example.com"
+        ));
+        String otpId = otpRequest.get("otpId").asText();
+        String otpPassword = otpRequestPassword("root@example.com", otpId);
+
+        JsonNode completed = request("POST", "/api/collections/_superusers/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", otpPassword,
+                "mfaId", passwordMfaId
+        ));
+        assertTrue(completed.hasNonNull("token"));
+
+        HttpResponse<String> sameMethod = rawRequest("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "root@example.com",
+                "password", "secret123",
+                "mfaId", passwordMfaId
+        ));
+        assertEquals(400, sameMethod.statusCode());
     }
 
     @Test
@@ -2272,6 +2764,17 @@ class LocalPocketBaseServerTest {
         assertEquals("com.example.service", payload.get("sub").asText());
         assertEquals("https://appleid.apple.com", payload.get("aud").asText());
         assertTrue(parts[2].length() > 80);
+    }
+
+    private void assertTokenLifetime(String token, long expectedSeconds) throws IOException {
+        JsonNode payload = jwtPayload(token);
+        assertEquals(expectedSeconds, payload.get("exp").asLong() - payload.get("iat").asLong());
+    }
+
+    private JsonNode jwtPayload(String token) throws IOException {
+        String[] parts = token.split("\\.");
+        assertEquals(3, parts.length);
+        return mapper.readTree(Base64.getUrlDecoder().decode(parts[1]));
     }
 
     private record MultipartFile(String name, String contentType, byte[] bytes) {

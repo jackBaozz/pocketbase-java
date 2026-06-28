@@ -15,11 +15,11 @@ import java.util.function.Function;
 /**
  * Small PocketBase filter/rule evaluator for the common server-side API rule subset.
  */
-final class RuleEvaluator {
+public final class RuleEvaluator {
     private RuleEvaluator() {
     }
 
-    static boolean matches(String expression, Context context) {
+    public static boolean matches(String expression, Context context) {
         if (expression == null || expression.isBlank()) {
             return true;
         }
@@ -27,7 +27,7 @@ final class RuleEvaluator {
         return truthy(parser.parse());
     }
 
-    static Context context(
+    public static Context context(
             Map<String, Object> record,
             Map<String, Object> body,
             Map<String, String> query,
@@ -37,7 +37,7 @@ final class RuleEvaluator {
         return context(record, body, query, method, principal, ignored -> List.of());
     }
 
-    static Context context(
+    public static Context context(
             Map<String, Object> record,
             Map<String, Object> body,
             Map<String, String> query,
@@ -293,7 +293,7 @@ final class RuleEvaluator {
     private record Token(TokenType type, String value) {
     }
 
-    record Context(
+    public record Context(
             Map<String, Object> record,
             Map<String, Object> body,
             Map<String, String> query,
@@ -301,7 +301,7 @@ final class RuleEvaluator {
             RequestPrincipal principal,
             Function<String, List<Map<String, Object>>> collectionResolver
     ) {
-        Context {
+        public Context {
             record = record == null ? Map.of() : record;
             body = body == null ? Map.of() : body;
             query = query == null ? Map.of() : query;

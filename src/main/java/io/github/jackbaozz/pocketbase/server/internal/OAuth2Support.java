@@ -18,14 +18,14 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
-final class OAuth2Support {
+public final class OAuth2Support {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
     private OAuth2Support() {
     }
 
-    static AuthMethodProviderInfo authMethodInfo(CollectionSchema.OAuth2ProviderConfig config, String displayName, String logo) {
+    public static AuthMethodProviderInfo authMethodInfo(CollectionSchema.OAuth2ProviderConfig config, String displayName, String logo) {
         String state = IdGenerator.prefixed("oauth_");
         String codeVerifier = config.pkce ? randomVerifier() : "";
         String codeChallenge = config.pkce ? s256Challenge(codeVerifier) : "";
@@ -44,7 +44,7 @@ final class OAuth2Support {
         );
     }
 
-    static OAuth2User authenticate(
+    public static OAuth2User authenticate(
             ObjectMapper mapper,
             CollectionSchema.OAuth2ProviderConfig config,
             String code,
@@ -243,7 +243,7 @@ final class OAuth2Support {
         return value == null || value.trim().isBlank();
     }
 
-    record AuthMethodProviderInfo(
+    public record AuthMethodProviderInfo(
             String name,
             String displayName,
             String logo,
@@ -256,7 +256,7 @@ final class OAuth2Support {
     ) {
     }
 
-    record OAuth2User(
+    public record OAuth2User(
             String providerId,
             String email,
             String name,

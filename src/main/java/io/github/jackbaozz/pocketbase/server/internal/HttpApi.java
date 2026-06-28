@@ -997,8 +997,12 @@ public final class HttpApi implements HttpHandler {
     }
 
     private Map<String, Object> errorBody(int status, String message, Object data) {
+        if (status == 401 && data instanceof Map<?, ?> map && map.containsKey("mfaId")) {
+            Map<String, Object> raw = new LinkedHashMap<>();
+            raw.put("mfaId", map.get("mfaId"));
+            return raw;
+        }
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("code", status);
         body.put("status", status);
         body.put("message", message == null || message.isBlank() ? "Request failed." : message);
         body.put("data", data == null ? Map.of() : data);

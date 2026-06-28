@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -79,7 +80,8 @@ public class BehaviorFixturesTest {
         HttpResponse<String> response1 = httpClient.send(anonymousRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(401, response1.statusCode());
         JsonNode errNode = mapper.readTree(response1.body());
-        assertEquals(401, errNode.get("code").asInt());
+        assertEquals(401, errNode.get("status").asInt());
+        assertFalse(errNode.has("code"));
         assertEquals("Missing or invalid auth token.", errNode.get("message").asText());
 
         // 2. Authenticated superuser request should succeed
@@ -111,10 +113,13 @@ public class BehaviorFixturesTest {
         HttpResponse<String> response1 = httpClient.send(request1, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, response1.statusCode());
         JsonNode body1 = mapper.readTree(response1.body());
-        assertEquals(400, body1.get("code").asInt());
+        assertEquals(400, body1.get("status").asInt());
+        assertFalse(body1.has("code"));
+        assertEquals("Failed to create collection.", body1.get("message").asText());
         JsonNode nameError = body1.get("data").get("name");
         assertNotNull(nameError, "Missing validation error for name field");
-        assertEquals("validation_invalid_format", nameError.get("code").asText());
+        assertEquals("validation_required", nameError.get("code").asText());
+        assertEquals("Cannot be blank.", nameError.get("message").asText());
 
         // 2. Test valid name with invalid type
         String invalidTypeJson = "{\"name\":\"valid_name\",\"type\":\"invalid_type\"}";
@@ -128,10 +133,31 @@ public class BehaviorFixturesTest {
         HttpResponse<String> response2 = httpClient.send(request2, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, response2.statusCode());
         JsonNode body2 = mapper.readTree(response2.body());
-        assertEquals(400, body2.get("code").asInt());
+        assertEquals(400, body2.get("status").asInt());
+        assertFalse(body2.has("code"));
         JsonNode typeError = body2.get("data").get("type");
         assertNotNull(typeError, "Missing validation error for type field");
         assertEquals("validation_invalid_value", typeError.get("code").asText());
+    }
+
+    @Test
+    void testAuthValidationErrorResponseFormat() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/_superusers/auth-with-password"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"password\":\"password123\"}"))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode());
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals(400, body.get("status").asInt());
+        assertFalse(body.has("code"));
+        assertEquals("Failed to authenticate.", body.get("message").asText());
+        JsonNode identityError = body.get("data").get("identity");
+        assertNotNull(identityError, "Missing validation error for identity field");
+        assertEquals("validation_required", identityError.get("code").asText());
+        assertEquals("Cannot be blank.", identityError.get("message").asText());
     }
 
     @Test
@@ -171,8 +197,12 @@ public class BehaviorFixturesTest {
         HttpResponse<String> createInvalidRes = httpClient.send(createInvalidRecordReq, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, createInvalidRes.statusCode());
         JsonNode invalidBody = mapper.readTree(createInvalidRes.body());
+        assertEquals(400, invalidBody.get("status").asInt());
+        assertFalse(invalidBody.has("code"));
+        assertEquals("Failed to create record.", invalidBody.get("message").asText());
         assertTrue(invalidBody.get("data").has("title"));
         assertEquals("validation_required", invalidBody.get("data").get("title").get("code").asText());
+        assertEquals("Cannot be blank.", invalidBody.get("data").get("title").get("message").asText());
 
         // 3. Create a valid record
         String validRecordJson = "{\"title\":\"My First Post\",\"views\":100}";

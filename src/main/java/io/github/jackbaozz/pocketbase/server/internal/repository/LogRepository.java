@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
+import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import org.jooq.Record;
 import org.jooq.Result;
@@ -11,14 +12,23 @@ import org.jooq.exception.DataAccessException;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 public class LogRepository extends BaseRepository {
 
     private static final String SUPERUSERS = "_superusers";
+    private static final String INTERNAL_ROWID = "@rowid";
+    private static final DateTimeFormatter LOG_STATS_HOUR_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00.000'Z'").withZone(ZoneOffset.UTC);
 
     public LogRepository(JooqDatabase database, ObjectMapper mapper) {
         super(database, mapper);
@@ -34,23 +44,30 @@ public class LogRepository extends BaseRepository {
         } catch (NumberFormatException ignored) {}
 
         try {
-            int total = database.dsl().fetchCount(qt("_logs"));
-
-            int offset = (page - 1) * perPage;
             Result<? extends Record> records = database.dsl()
                     .selectFrom(qt("_logs"))
-                    .orderBy(qfs("created").desc())
-                    .limit(perPage)
-                    .offset(offset)
                     .fetch();
 
             List<Map<String, Object>> items = new ArrayList<>();
+            int rowid = 1;
             for (Record r : records) {
-                items.add(recordToLogMap(r));
+                Map<String, Object> log = recordToLogMap(r);
+                log.put(INTERNAL_ROWID, rowid++);
+                if (matchesLogFilter(log, safeQuery.get("filter"))) {
+                    items.add(log);
+                }
             }
 
+            sortLogs(items, safeQuery.getOrDefault("sort", "-created"));
+            int total = items.size();
+            int offset = Math.min(total, (page - 1) * perPage);
+            int to = Math.min(total, offset + perPage);
+            List<Map<String, Object>> pageItems = items.subList(offset, to).stream()
+                    .map(this::withoutInternalFields)
+                    .map(log -> RecordProcessor.selectFields(log, safeQuery.get("fields")))
+                    .toList();
             int totalPages = (int) Math.ceil((double) total / perPage);
-            return Map.of("items", items, "page", page, "perPage", perPage, "totalItems", total, "totalPages", totalPages);
+            return Map.of("items", pageItems, "page", page, "perPage", perPage, "totalItems", total, "totalPages", totalPages);
         } catch (DataAccessException e) {
             return Map.of("items", List.of(), "page", 1, "perPage", 30, "totalItems", 0, "totalPages", 0);
         }
@@ -60,15 +77,14 @@ public class LogRepository extends BaseRepository {
         List<Map<String, Object>> result = new ArrayList<>();
         try {
             Result<? extends Record> records = database.dsl()
-                    .select(qfs("created"))
-                    .from(qt("_logs"))
+                    .selectFrom(qt("_logs"))
                     .fetch();
 
             Map<String, Integer> counts = new LinkedHashMap<>();
             for (Record r : records) {
-                String created = r.get(qfs("created"));
-                if (created != null && created.length() >= 13) {
-                    String hour = created.substring(0, 13) + ":00:00.000Z";
+                Map<String, Object> log = recordToLogMap(r);
+                if (matchesLogFilter(log, query == null ? null : query.get("filter"))) {
+                    String hour = logHour(log.get("created"));
                     counts.put(hour, counts.getOrDefault(hour, 0) + 1);
                 }
             }
@@ -117,6 +133,73 @@ public class LogRepository extends BaseRepository {
             log.put("data", Map.of());
         }
         return log;
+    }
+
+    private Map<String, Object> withoutInternalFields(Map<String, Object> source) {
+        Map<String, Object> copy = new LinkedHashMap<>(source);
+        copy.remove(INTERNAL_ROWID);
+        return copy;
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean matchesLogFilter(Map<String, Object> log, String filter) {
+        if (filter == null || filter.isBlank()) {
+            return true;
+        }
+        String[] parts = filter.trim().split("=", 2);
+        if (parts.length != 2) {
+            return true;
+        }
+        String left = parts[0].trim();
+        String right = stripQuotes(parts[1].trim());
+        Object value = null;
+        if (left.startsWith("data.") && log.get("data") instanceof Map<?, ?> data) {
+            value = ((Map<String, Object>) data).get(left.substring("data.".length()));
+        } else {
+            value = log.get(left);
+        }
+        return Objects.equals(String.valueOf(value), right);
+    }
+
+    private String stripQuotes(String value) {
+        if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith("\"") && value.endsWith("\""))) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private void sortLogs(List<Map<String, Object>> items, String sort) {
+        String key = sort == null || sort.isBlank() ? "-created" : sort.trim();
+        boolean desc = key.startsWith("-");
+        if (desc || key.startsWith("+")) {
+            key = key.substring(1);
+        }
+        String sortKey = key;
+        Comparator<Map<String, Object>> comparator = (left, right) ->
+                comparableLogValue(left, sortKey).compareTo(comparableLogValue(right, sortKey));
+        if (desc) {
+            comparator = comparator.reversed();
+        }
+        items.sort(comparator);
+    }
+
+    private String comparableLogValue(Map<String, Object> log, String key) {
+        Object value = INTERNAL_ROWID.equals(key) ? log.get(INTERNAL_ROWID) : log.get(key);
+        if (value instanceof Number number) {
+            return String.format("%020d", number.longValue());
+        }
+        return value == null ? "" : String.valueOf(value).toLowerCase(Locale.ROOT);
+    }
+
+    private String logHour(Object created) {
+        if (created == null) {
+            return "";
+        }
+        try {
+            return LOG_STATS_HOUR_FORMAT.format(Instant.parse(String.valueOf(created)).truncatedTo(ChronoUnit.HOURS));
+        } catch (Exception ignored) {
+            return String.valueOf(created);
+        }
     }
 
     public void recordActivityLog(String method, String url, int status, long duration, RequestPrincipal principal, Map<String, String> headers, String remoteIp) {

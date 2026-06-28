@@ -148,13 +148,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public Optional<Map<String, Object>> verifyToken(String token) {
-        return tokenService.verify(token)
+        return tokenService.verify(token, this::bearerTokenSigningSecret)
                 .filter(this::isBearerToken)
                 .filter(this::authTokenClaimsValid);
     }
 
     public Optional<RequestPrincipal> verifyFileToken(String token) {
-        return tokenService.verify(token)
+        return tokenService.verify(token, this::fileTokenSigningSecret)
                 .filter(claims -> "file".equals(claims.get("tokenType")))
                 .filter(this::authTokenClaimsValid)
                 .map(RequestPrincipal::fromClaims);
@@ -1387,10 +1387,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         CollectionSchema collection = mapper.convertValue(body, CollectionSchema.class);
         normalizeCollection(collection, false);
         if (collectionsByName.containsKey(collection.name)) {
-            throw new ApiException(400, "Collection name already exists.", fieldError("name", "validation_invalid_value", "Collection name already exists."));
+            throw new ApiException(400, "Failed to create collection.", ApiErrors.notUniqueField("name"));
         }
         if (findCollectionOrNull(collection.id) != null) {
-            throw new ApiException(400, "Collection id already exists.", fieldError("id", "validation_invalid_value", "Collection id already exists."));
+            throw new ApiException(400, "Failed to create collection.", ApiErrors.notUniqueField("id"));
         }
         collectionsByName.put(collection.name, copyCollection(collection));
         recordsByCollectionId.put(collection.id, new ArrayList<>());
@@ -1433,10 +1433,47 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (body.has("indexes") && body.get("indexes").isArray()) {
             existing.indexes = mapper.convertValue(body.get("indexes"), new TypeReference<>() {});
         }
+        JsonNode options = body.get("options");
+        if (body.has("passwordAuth") || options != null && options.has("passwordAuth")) {
+            JsonNode node = body.has("passwordAuth") ? body.get("passwordAuth") : options.get("passwordAuth");
+            existing.passwordAuth = mapper.convertValue(node, CollectionSchema.PasswordAuthConfig.class);
+        }
+        if (body.has("otp") || options != null && options.has("otp")) {
+            JsonNode node = body.has("otp") ? body.get("otp") : options.get("otp");
+            existing.otp = mapper.convertValue(node, CollectionSchema.OtpConfig.class);
+        }
+        if (body.has("mfa") || options != null && options.has("mfa")) {
+            JsonNode node = body.has("mfa") ? body.get("mfa") : options.get("mfa");
+            existing.mfa = mapper.convertValue(node, CollectionSchema.MfaConfig.class);
+        }
+        if (body.has("oauth2") || options != null && options.has("oauth2")) {
+            JsonNode node = body.has("oauth2") ? body.get("oauth2") : options.get("oauth2");
+            existing.oauth2 = mapper.convertValue(node, CollectionSchema.OAuth2Config.class);
+        }
+        if (body.has("authToken") || options != null && options.has("authToken")) {
+            JsonNode node = body.has("authToken") ? body.get("authToken") : options.get("authToken");
+            existing.authToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
+        }
+        if (body.has("passwordResetToken") || options != null && options.has("passwordResetToken")) {
+            JsonNode node = body.has("passwordResetToken") ? body.get("passwordResetToken") : options.get("passwordResetToken");
+            existing.passwordResetToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
+        }
+        if (body.has("verificationToken") || options != null && options.has("verificationToken")) {
+            JsonNode node = body.has("verificationToken") ? body.get("verificationToken") : options.get("verificationToken");
+            existing.verificationToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
+        }
+        if (body.has("emailChangeToken") || options != null && options.has("emailChangeToken")) {
+            JsonNode node = body.has("emailChangeToken") ? body.get("emailChangeToken") : options.get("emailChangeToken");
+            existing.emailChangeToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
+        }
+        if (body.has("fileToken") || options != null && options.has("fileToken")) {
+            JsonNode node = body.has("fileToken") ? body.get("fileToken") : options.get("fileToken");
+            existing.fileToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
+        }
         normalizeCollection(existing, true);
         if (!oldName.equals(existing.name) && collectionsByName.containsKey(existing.name)) {
             existing.name = oldName;
-            throw new ApiException(400, "Collection name already exists.", fieldError("name", "validation_invalid_value", "Collection name already exists."));
+            throw new ApiException(400, "Failed to update collection.", ApiErrors.notUniqueField("name"));
         }
         if (!oldName.equals(existing.name)) {
             collectionsByName.remove(oldName);
@@ -2053,8 +2090,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         Map<String, Object> meta = new LinkedHashMap<>(oauthUser.raw());
         meta.put("isNew", isNew);
 
-        String mfaId = bodyText(body, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId, meta);
+        String mfaId = bodyOrQueryText(body, query, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId, "oauth2", meta);
     }
 
     public synchronized Map<String, Object> requestOtp(String collectionName, JsonNode body) {
@@ -2125,7 +2162,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw invalidOtp();
         }
         ensureOtpAttemptsAllowed(otp);
-        if (!PasswordHasher.verify(password, String.valueOf(otp.get("passwordHash")))) {
+        if (!PasswordHasher.verifyOrDummy(password, String.valueOf(otp.get("passwordHash")))) {
             recordOtpFailure(otp);
             throw invalidOtp();
         }
@@ -2144,8 +2181,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             saveRecords(collection);
         }
 
-        String mfaId = bodyText(body, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId);
+        String mfaId = bodyOrQueryText(body, query, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId, "otp");
     }
 
     public synchronized void requestPasswordReset(String collectionName, JsonNode body) {
@@ -2153,7 +2190,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String email = normalizedEmail(requiredText(body, "email"));
         Map<String, Object> record = findAuthRecordByEmail(collection, email);
         if (record != null) {
-            appendAuthRequest(collection, record, "passwordReset", Map.of(), Duration.ofHours(2));
+            appendAuthRequest(collection, record, "passwordReset", Map.of(), tokenDuration(collection.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION));
         }
     }
 
@@ -2181,7 +2218,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         String email = normalizedEmail(requiredText(body, "email"));
         Map<String, Object> record = findAuthRecordByEmail(collection, email);
         if (record != null && !truthyObject(record.get("verified"))) {
-            appendAuthRequest(collection, record, "verification", Map.of(), Duration.ofHours(24));
+            appendAuthRequest(collection, record, "verification", Map.of(), tokenDuration(collection.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION));
         }
     }
 
@@ -2203,13 +2240,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         Map<String, Object> record = findRecord(collection, principal.id());
         String newEmail = normalizedEmail(requiredText(body, "newEmail"));
         ensureEmailAvailable(collection, newEmail, String.valueOf(record.get("id")));
-        appendAuthRequest(collection, record, "emailChange", Map.of("newEmail", newEmail), Duration.ofHours(2));
+        appendAuthRequest(collection, record, "emailChange", Map.of("newEmail", newEmail), tokenDuration(collection.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION));
     }
 
     public synchronized void confirmEmailChange(String collectionName, JsonNode body) {
         AuthAction action = verifyAuthAction(collectionName, requiredText(body, "token"), "emailChange");
         String password = requiredText(body, "password");
-        if (!PasswordHasher.verify(password, String.valueOf(action.record().get(passwordField(action.collection()))))) {
+        if (!PasswordHasher.verifyOrDummy(password, String.valueOf(action.record().get(passwordField(action.collection()))))) {
             throw new ApiException(400, "Invalid password.");
         }
         String newEmail = normalizedEmail(String.valueOf(action.claims().getOrDefault("newEmail", "")));
@@ -2229,7 +2266,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     ) {
         CollectionSchema collection = authCollection(collectionName);
         Map<String, Object> record = findRecord(collection, id);
-        long seconds = Math.max(60L, Math.min(604_800L, optionalLong(body, "duration", 3600L)));
+        long defaultDuration = tokenDurationSeconds(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
+        long requestedDuration = optionalLong(body, "duration", defaultDuration);
+        long seconds = Math.max(60L, Math.min(604_800L, requestedDuration));
         return authResponse(collection, record, query, Duration.ofSeconds(seconds), "impersonate");
     }
 
@@ -2241,7 +2280,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         claims.remove("iat");
         claims.remove("exp");
         claims.put("tokenType", "file");
-        return Map.of("token", tokenService.create(claims, Duration.ofMinutes(2)));
+        CollectionSchema collection = findCollectionOrNull(principal.collectionId());
+        if (collection == null && principal.collectionName() != null && !principal.collectionName().isBlank()) {
+            collection = findCollectionOrNull(principal.collectionName());
+        }
+        Duration ttl = tokenDuration(collection == null ? null : collection.fileToken, CollectionSchema.DEFAULT_FILE_TOKEN_DURATION);
+        return Map.of("token", tokenService.create(claims, ttl, tokenSigningSecret(collection == null ? null : collection.fileToken, claims.get("tokenKey"))));
     }
 
     public synchronized Path filePath(String collectionIdOrName, String recordId, String filename, RequestPrincipal principal) {
@@ -2308,20 +2352,23 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (!collection.passwordAuth.enabled) {
             throw new ApiException(403, "The collection is not configured to allow password authentication.");
         }
-        String identity = requiredText(body, "identity");
+        String identity = requiredText(body, "identity", "Failed to authenticate.");
         String identityField = bodyText(body, "identityField", "");
-        String password = requiredText(body, "password");
+        String password = requiredText(body, "password", "Failed to authenticate.");
         String passwordField = passwordField(collection);
         Map<String, Object> record = records(collection).stream()
                 .filter(item -> passwordIdentityMatches(collection, item, identity, identityField))
                 .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Invalid identity or password."));
-        if (!PasswordHasher.verify(password, String.valueOf(record.get(passwordField)))) {
+                .orElse(null);
+        if (!PasswordHasher.verifyOrDummy(password, record == null ? null : String.valueOf(record.get(passwordField)))) {
+            throw new ApiException(400, "Invalid identity or password.");
+        }
+        if (record == null) {
             throw new ApiException(400, "Invalid identity or password.");
         }
 
-        String mfaId = bodyText(body, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId);
+        String mfaId = bodyOrQueryText(body, query, "mfaId", null);
+        return handleAuthWithMfa(collection, record, query, mfaId, "password");
     }
 
     public synchronized Map<String, Object> authRefresh(String collectionName, RequestPrincipal principal) {
@@ -2355,24 +2402,35 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, Object> record,
             Map<String, String> query,
             String mfaIdParam,
+            String method,
             Map<String, Object> meta
     ) {
         if (!collection.mfa.enabled) {
-            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
         }
         if (mfaIdParam != null && !mfaIdParam.isBlank()) {
-            boolean found = mfas.removeIf(mfa -> Objects.equals(mfa.get("id"), mfaIdParam) &&
-                    Objects.equals(mfa.get("recordId"), record.get("id")) &&
-                    Objects.equals(mfa.get("collectionId"), collection.id));
-            if (!found) {
+            Map<String, Object> mfa = mfas.stream()
+                    .filter(item -> Objects.equals(item.get("id"), mfaIdParam))
+                    .filter(item -> Objects.equals(item.get("recordId"), record.get("id")))
+                    .filter(item -> Objects.equals(item.get("collectionId"), collection.id))
+                    .findFirst()
+                    .orElse(null);
+            if (mfa == null || mfaExpired(collection, mfa)) {
+                if (mfa != null) {
+                    mfas.remove(mfa);
+                }
                 throw new ApiException(400, "Missing or invalid MFA ID.");
             }
-            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+            if (Objects.equals(mfa.get("method"), method)) {
+                throw new ApiException(400, "MFA requires a different auth method.");
+            }
+            mfas.remove(mfa);
+            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
         }
         boolean requireMfa = collection.mfa.rule != null && !collection.mfa.rule.isBlank() &&
                 RuleEvaluator.matches(collection.mfa.rule, ruleContext(record, null, query, "POST", null));
         if (!requireMfa) {
-            return authResponse(collection, record, query, Duration.ofDays(7), "auth", meta);
+            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
         }
         String newMfaId = IdGenerator.id();
         Map<String, Object> mfaRecord = new LinkedHashMap<>();
@@ -2380,17 +2438,29 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         mfaRecord.put("created", now());
         mfaRecord.put("collectionId", collection.id);
         mfaRecord.put("recordId", record.get("id"));
+        mfaRecord.put("method", method);
         mfas.add(mfaRecord);
-        return Map.of("mfaId", newMfaId);
+        throw new ApiException(401, "MFA required.", Map.of("mfaId", newMfaId));
     }
 
     private Map<String, Object> handleAuthWithMfa(
             CollectionSchema collection,
             Map<String, Object> record,
             Map<String, String> query,
-            String mfaIdParam
+            String mfaIdParam,
+            String method
     ) {
-        return handleAuthWithMfa(collection, record, query, mfaIdParam, Map.of());
+        return handleAuthWithMfa(collection, record, query, mfaIdParam, method, Map.of());
+    }
+
+    private boolean mfaExpired(CollectionSchema collection, Map<String, Object> mfa) {
+        try {
+            long durationSeconds = collection.mfa.duration > 0 ? collection.mfa.duration : 1800;
+            Instant cutoff = Instant.now().minusSeconds(durationSeconds);
+            return Instant.parse(String.valueOf(mfa.get("created"))).isBefore(cutoff);
+        } catch (Exception e) {
+            return true;
+        }
     }
 
     private Map<String, Object> authResponse(
@@ -2398,7 +2468,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, Object> record,
             Map<String, String> query
     ) {
-        return authResponse(collection, record, query, Duration.ofDays(7), "auth", Map.of());
+        return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", Map.of());
     }
 
     private Map<String, Object> authResponse(
@@ -2434,7 +2504,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         Map<String, String> recordQuery = new LinkedHashMap<>(safeQuery);
         recordQuery.remove("fields");
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("token", tokenService.create(claims, ttl == null ? Duration.ofDays(7) : ttl));
+        Duration actualTtl = ttl == null ? tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION) : ttl;
+        response.put("token", tokenService.create(claims, actualTtl, tokenSigningSecret(collection.authToken, record.get("tokenKey"))));
         response.put("record", RecordProcessor.process(this, collection, record, false, recordQuery, authPrincipal));
         response.put("meta", meta == null ? Map.of() : meta);
         return selectFields(response, safeQuery.get("fields"));
@@ -2470,21 +2541,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             return false;
         }
         Object tokenKey = claims.get("tokenKey");
-        return tokenKey == null || Objects.equals(String.valueOf(tokenKey), String.valueOf(record.get("tokenKey")));
+        return tokenKey == null || SecuritySupport.constantTimeEquals(String.valueOf(tokenKey), String.valueOf(record.get("tokenKey")));
     }
 
     private AuthAction verifyAuthAction(String collectionName, String token, String expectedType) {
-        Map<String, Object> claims = tokenService.verify(token)
+        CollectionSchema collection = authCollection(collectionName);
+        Map<String, Object> claims = tokenService.verify(token, tokenClaims -> tokenSigningSecret(tokenConfigForAction(expectedType, collection), tokenClaims.get("tokenKey")))
                 .orElseThrow(() -> new ApiException(400, "Invalid or expired auth token."));
         if (!expectedType.equals(claims.get("tokenType"))) {
             throw new ApiException(400, "Invalid or expired auth token.");
         }
-        CollectionSchema collection = authCollection(collectionName);
         if (!Objects.equals(collection.id, claims.get("collectionId")) && !Objects.equals(collection.name, claims.get("collectionName"))) {
             throw new ApiException(400, "Invalid or expired auth token.");
         }
         Map<String, Object> record = findRecordOrNull(collection, String.valueOf(claims.getOrDefault("sub", "")));
-        if (record == null || !Objects.equals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
+        if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
             throw new ApiException(400, "Invalid or expired auth token.");
         }
         return new AuthAction(collection, record, claims);
@@ -2509,7 +2580,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (extraClaims != null) {
             claims.putAll(extraClaims);
         }
-        String token = tokenService.create(claims, ttl == null ? Duration.ofHours(2) : ttl);
+        String token = tokenService.create(claims, ttl == null ? Duration.ofHours(2) : ttl, tokenSigningSecret(tokenConfigForAction(tokenType, collection), record.get("tokenKey")));
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("id", IdGenerator.id());
         request.put("type", tokenType);
@@ -2866,7 +2937,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode value = body.get(field.name);
             if (value == null || value.isMissingNode()) {
                 if (!update && field.required) {
-                    errors.put(field.name, validationError("validation_required", "Cannot be blank."));
+                    errors.put(field.name, ApiErrors.validationError("validation_required", ApiErrors.MESSAGE_CANNOT_BE_BLANK));
                 }
                 continue;
             }
@@ -2885,7 +2956,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
         enforceUnique(collection, values, update ? currentId : null, errors);
         if (!errors.isEmpty()) {
-            throw new ApiException(400, "Record validation failed.", errors);
+            throw new ApiException(400, update ? "Failed to update record." : "Failed to create record.", errors);
         }
 
         if (!update) {
@@ -2913,7 +2984,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     continue;
                 }
                 if (Objects.equals(candidate, record.get(field.name))) {
-                    errors.put(field.name, validationError("validation_not_unique", "Value must be unique."));
+                    errors.put(field.name, ApiErrors.validationError("validation_not_unique", ApiErrors.MESSAGE_VALUE_MUST_BE_UNIQUE));
                     break;
                 }
             }
@@ -4041,8 +4112,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (collection.id == null || collection.id.isBlank()) {
             collection.id = IdGenerator.prefixed("pbc_");
         }
-        if (collection.name == null || collection.name.isBlank() || !NAME_PATTERN.matcher(collection.name).matches()) {
-            throw new ApiException(400, "Invalid collection name.", fieldError("name", "validation_invalid_format", "Use letters, numbers and underscore."));
+        String message = existing ? "Failed to update collection." : "Failed to create collection.";
+        if (collection.name == null || collection.name.isBlank()) {
+            throw new ApiException(400, message, ApiErrors.requiredField("name"));
+        }
+        if (!NAME_PATTERN.matcher(collection.name).matches()) {
+            throw new ApiException(400, message, fieldError("name", "validation_invalid_format", "Use letters, numbers and underscore."));
         }
         collection.type = normalizeType(collection.type == null || collection.type.isBlank() ? "base" : collection.type);
         if (!"base".equals(collection.type) && !"auth".equals(collection.type) && !"view".equals(collection.type)) {
@@ -4190,6 +4265,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         collection.mfa.duration = Math.max(60L, collection.mfa.duration <= 0 ? 1800L : collection.mfa.duration);
 
+        collection.authToken = normalizeTokenConfig(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
+        collection.passwordResetToken = normalizeTokenConfig(collection.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION);
+        collection.verificationToken = normalizeTokenConfig(collection.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION);
+        collection.emailChangeToken = normalizeTokenConfig(collection.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION);
+        collection.fileToken = normalizeTokenConfig(collection.fileToken, CollectionSchema.DEFAULT_FILE_TOKEN_DURATION);
+
         if (collection.oauth2 == null) {
             collection.oauth2 = new CollectionSchema.OAuth2Config();
         }
@@ -4226,6 +4307,72 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             }
             collection.oauth2.providers = providers;
         }
+    }
+
+    private CollectionSchema.TokenConfig normalizeTokenConfig(CollectionSchema.TokenConfig config, long fallbackDuration) {
+        CollectionSchema.TokenConfig normalized = config == null ? new CollectionSchema.TokenConfig() : config;
+        normalized.duration = normalized.duration > 0 ? normalized.duration : fallbackDuration;
+        if (normalized.secret == null) {
+            normalized.secret = "";
+        }
+        return normalized;
+    }
+
+    private Duration tokenDuration(CollectionSchema.TokenConfig config, long fallbackSeconds) {
+        return Duration.ofSeconds(tokenDurationSeconds(config, fallbackSeconds));
+    }
+
+    private long tokenDurationSeconds(CollectionSchema.TokenConfig config, long fallbackSeconds) {
+        if (config == null || config.duration <= 0) {
+            return fallbackSeconds;
+        }
+        return config.duration;
+    }
+
+    private String bearerTokenSigningSecret(Map<String, Object> claims) {
+        CollectionSchema collection = collectionForClaims(claims);
+        if (collection == null) {
+            return "";
+        }
+        return tokenSigningSecret(collection.authToken, claims.get("tokenKey"));
+    }
+
+    private String fileTokenSigningSecret(Map<String, Object> claims) {
+        CollectionSchema collection = collectionForClaims(claims);
+        if (collection == null) {
+            return "";
+        }
+        return tokenSigningSecret(collection.fileToken, claims.get("tokenKey"));
+    }
+
+    private CollectionSchema collectionForClaims(Map<String, Object> claims) {
+        if (claims == null) {
+            return null;
+        }
+        CollectionSchema collection = findCollectionOrNull(String.valueOf(claims.getOrDefault("collectionId", "")));
+        if (collection == null) {
+            collection = findCollectionOrNull(String.valueOf(claims.getOrDefault("collectionName", "")));
+        }
+        return collection;
+    }
+
+    private String tokenSigningSecret(CollectionSchema.TokenConfig config, Object tokenKeyValue) {
+        String tokenKey = textSetting(tokenKeyValue);
+        String secret = config == null ? "" : textSetting(config.secret);
+        return tokenKey + secret;
+    }
+
+    private CollectionSchema.TokenConfig tokenConfigForAction(String tokenType, CollectionSchema collection) {
+        if (collection == null || tokenType == null) {
+            return null;
+        }
+        return switch (tokenType) {
+            case "passwordReset" -> collection.passwordResetToken;
+            case "verification" -> collection.verificationToken;
+            case "emailChange" -> collection.emailChangeToken;
+            case "file" -> collection.fileToken;
+            default -> collection.authToken;
+        };
     }
 
     private void ensureSuperuserCollection() {
@@ -4661,9 +4808,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private static String requiredText(JsonNode body, String field) {
+        return requiredText(body, field, "Failed to submit request.");
+    }
+
+    private static String requiredText(JsonNode body, String field, String message) {
         JsonNode value = body == null ? null : body.get(field);
         if (value == null || value.isNull() || value.asText().isBlank()) {
-            throw new ApiException(400, field + " is required.", fieldError(field, "validation_required", field + " is required."));
+            throw new ApiException(400, message, ApiErrors.requiredField(field));
         }
         return value.asText();
     }
@@ -4675,6 +4826,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         String text = value.asText("").trim();
         return text.isBlank() ? fallback : text;
+    }
+
+    private static String bodyOrQueryText(JsonNode body, Map<String, String> query, String field, String fallback) {
+        String value = bodyText(body, field, null);
+        if (value != null) {
+            return value;
+        }
+        if (query == null) {
+            return fallback;
+        }
+        String queryValue = query.get(field);
+        if (queryValue == null || queryValue.isBlank()) {
+            return fallback;
+        }
+        return queryValue.trim();
     }
 
     private static String nullableText(JsonNode value) {

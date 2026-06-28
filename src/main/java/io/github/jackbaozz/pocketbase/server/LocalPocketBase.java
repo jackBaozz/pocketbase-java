@@ -11,6 +11,7 @@ import io.github.jackbaozz.pocketbase.server.internal.RelationalStorageEngine;
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Programmatic handle for the embedded PocketBase-like runtime.
@@ -74,7 +75,16 @@ public final class LocalPocketBase implements AutoCloseable {
     @Override
     public void close() {
         httpServer.stop(0);
-        executor.shutdownNow();
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+                executor.awaitTermination(5, TimeUnit.SECONDS);
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         store.close();
     }
 }

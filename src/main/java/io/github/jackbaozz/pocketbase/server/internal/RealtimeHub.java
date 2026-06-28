@@ -230,7 +230,7 @@ public final class RealtimeHub {
             return wildcard || recordId.equals(changedRecordId);
         }
 
-        String filter() {
+        public String filter() {
             return query.get("filter");
         }
 

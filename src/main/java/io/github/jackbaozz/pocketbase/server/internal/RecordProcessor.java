@@ -20,6 +20,9 @@ public final class RecordProcessor {
         Map<String, Object> findRecordByEmail(CollectionSchema collection, String email);
         void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields);
         boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal);
+        default List<Map<String, Object>> recordsForRule(String collectionName) {
+            return List.of();
+        }
     }
 
     public static Map<String, Object> process(
@@ -170,6 +173,12 @@ public final class RecordProcessor {
         boolean isLast = index == path.size() - 1;
 
         if (source instanceof Map<?, ?> sourceMap && target instanceof Map targetMap) {
+            if ("*".equals(key)) {
+                if (isLast) {
+                    sourceMap.forEach((sourceKey, value) -> targetMap.put(String.valueOf(sourceKey), value));
+                }
+                return;
+            }
             if (!sourceMap.containsKey(key)) return;
             Object sourceVal = sourceMap.get(key);
 

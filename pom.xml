@@ -96,19 +96,6 @@
             <artifactId>HikariCP</artifactId>
             <version>5.1.0</version>
         </dependency>
-        <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
-            <version>8.4.0</version>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>42.7.4</version>
-            <optional>true</optional>
-        </dependency>
-
         <!-- Testcontainers for Integration Testing -->
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -282,6 +269,21 @@
 
     <profiles>
         <profile>
+            <id>external-db-drivers</id>
+            <dependencies>
+                <dependency>
+                    <groupId>com.mysql</groupId>
+                    <artifactId>mysql-connector-j</artifactId>
+                    <version>8.4.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>org.postgresql</groupId>
+                    <artifactId>postgresql</artifactId>
+                    <version>42.7.4</version>
+                </dependency>
+            </dependencies>
+        </profile>
+        <profile>
             <id>native</id>
             <build>
                 <plugins>
@@ -296,7 +298,9 @@
                                 <buildArg>--no-fallback</buildArg>
                                 <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                                 <buildArg>--enable-all-security-services</buildArg>
-                                <buildArg>--enable-url-protocols=http,https</buildArg>
+                                <buildArg>--enable-url-protocols=jar,http,https</buildArg>
+                                <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+                                <buildArg>--initialize-at-build-time=org.sqlite.util.ProcessRunner</buildArg>
                             </buildArgs>
                         </configuration>
                         <executions>

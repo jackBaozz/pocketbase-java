@@ -17,11 +17,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-final class SmtpMailer {
+public final class SmtpMailer {
     private SmtpMailer() {
     }
 
-    static void send(Settings settings, Message message) {
+    public static void send(Settings settings, Message message) {
         try (Session session = Session.open(settings)) {
             session.expect(220);
             List<String> ehlo = session.ehlo();
@@ -61,7 +61,7 @@ final class SmtpMailer {
         return text;
     }
 
-    record Settings(
+    public record Settings(
             String host,
             int port,
             String username,
@@ -75,7 +75,7 @@ final class SmtpMailer {
         }
     }
 
-    record Message(
+    public record Message(
             String fromName,
             String fromAddress,
             String to,

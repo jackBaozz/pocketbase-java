@@ -13,6 +13,8 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Supplier;
 
@@ -48,6 +50,7 @@ public final class JooqDatabase implements AutoCloseable {
     private final HikariDataSource dataSource;
     private final Engine engine;
     private final ThreadLocal<Connection> transactionConnection = new ThreadLocal<>();
+    private final ThreadLocal<List<Runnable>> rollbackActions = new ThreadLocal<>();
 
     private JooqDatabase(Engine engine, HikariDataSource dataSource) {
         this.engine = engine;
@@ -65,51 +68,77 @@ public final class JooqDatabase implements AutoCloseable {
             case POSTGRES -> configureExternal(config, "postgres", "org.postgresql.Driver");
         }
 
-        return new JooqDatabase(engine, new HikariDataSource(config));
+        JooqDatabase database = new JooqDatabase(engine, new HikariDataSource(config));
+        if (engine != Engine.SQLITE) {
+            database.validateExternalConnection();
+        }
+        return database;
     }
 
     private static void configureExternal(HikariConfig config, String prefix, String driverClassName) {
-        String url = firstNonBlank(
-                System.getProperty("db.url"),
-                System.getProperty(prefix + ".url"),
-                System.getenv("PB_DATABASE_URL")
-        );
-        if (url == null) {
-            throw new ApiException(400, "Missing JDBC URL for " + prefix + " storage. Set -Ddb.url or PB_DATABASE_URL.");
+        ExternalDatabaseSupport.ResolvedConfig resolved = ExternalDatabaseSupport.resolve(prefix);
+        if (resolved == null) {
+            throw new ApiException(400, ExternalDatabaseSupport.missingUrlMessage(prefix));
         }
-
-        config.setJdbcUrl(url);
+        resolved.applySystemProperties();
+        config.setJdbcUrl(resolved.url());
         config.setDriverClassName(driverClassName);
 
-        String user = firstNonBlank(
-                System.getProperty("db.user"),
-                System.getProperty(prefix + ".user"),
-                System.getenv("PB_DATABASE_USER")
-        );
-        String password = firstNonBlank(
-                System.getProperty("db.password"),
-                System.getProperty(prefix + ".password"),
-                System.getenv("PB_DATABASE_PASSWORD")
-        );
-        if (user != null) {
-            config.setUsername(user);
+        if (resolved.user() != null && !resolved.user().isBlank()) {
+            config.setUsername(resolved.user());
         }
-        if (password != null) {
-            config.setPassword(password);
+        if (resolved.password() != null && !resolved.password().isBlank()) {
+            config.setPassword(resolved.password());
         }
-    }
-
-    private static String firstNonBlank(String... values) {
-        for (String value : values) {
-            if (value != null && !value.isBlank()) {
-                return value;
-            }
-        }
-        return null;
     }
 
     public Engine engine() {
         return engine;
+    }
+
+    private void validateExternalConnection() {
+        try (Connection connection = dataSource.getConnection()) {
+            DSLContext context = dsl(connection);
+            switch (engine) {
+                case MYSQL -> validateMysqlConnection(context);
+                case POSTGRES -> validatePostgresConnection(context);
+                case SQLITE -> {
+                }
+            }
+        } catch (SQLException | RuntimeException e) {
+            throw new ApiException(400,
+                    "Failed to initialize " + engine.name().toLowerCase(Locale.ROOT)
+                            + " storage. Verify the JDBC URL, database/schema, credentials, and server settings. Raw error: "
+                            + e.getMessage());
+        }
+    }
+
+    private void validateMysqlConnection(DSLContext context) {
+        org.jooq.Record record = context.fetchOne(
+                "select database() as db, @@session.time_zone as tz, @@character_set_connection as charset, @@collation_connection as collation");
+        if (record == null || blank(record.get("db", String.class))) {
+            throw new ApiException(400, "Failed to initialize mysql storage. The JDBC URL must select a database.");
+        }
+        if (blank(record.get("tz", String.class))) {
+            throw new ApiException(400, "Failed to initialize mysql storage. Session time zone is not available.");
+        }
+        if (blank(record.get("charset", String.class)) || blank(record.get("collation", String.class))) {
+            throw new ApiException(400, "Failed to initialize mysql storage. Session charset/collation is not available.");
+        }
+    }
+
+    private void validatePostgresConnection(DSLContext context) {
+        org.jooq.Record record = context.fetchOne(
+                "select current_database() as db, current_schema() as schema, current_setting('TimeZone') as tz, current_setting('client_encoding') as encoding");
+        if (record == null || blank(record.get("db", String.class))) {
+            throw new ApiException(400, "Failed to initialize postgres storage. The JDBC URL must select a database.");
+        }
+        if (blank(record.get("schema", String.class))) {
+            throw new ApiException(400, "Failed to initialize postgres storage. current_schema() returned blank.");
+        }
+        if (blank(record.get("tz", String.class)) || blank(record.get("encoding", String.class))) {
+            throw new ApiException(400, "Failed to initialize postgres storage. Session time zone or client encoding is not available.");
+        }
     }
 
     public SQLDialect dialect() {
@@ -161,6 +190,13 @@ public final class JooqDatabase implements AutoCloseable {
         }
     }
 
+    public void onRollback(Runnable action) {
+        List<Runnable> actions = rollbackActions.get();
+        if (actions != null && action != null) {
+            actions.add(action);
+        }
+    }
+
     private static Connection closeShield(Connection target) {
         return (Connection) Proxy.newProxyInstance(
                 Connection.class.getClassLoader(),
@@ -187,6 +223,7 @@ public final class JooqDatabase implements AutoCloseable {
             boolean previousAutoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
             transactionConnection.set(conn);
+            rollbackActions.set(new ArrayList<>());
             try {
                 T result = action.get();
                 conn.commit();
@@ -197,9 +234,11 @@ public final class JooqDatabase implements AutoCloseable {
                 } catch (SQLException rollbackError) {
                     e.addSuppressed(rollbackError);
                 }
+                runRollbackActions(e);
                 throw e;
             } finally {
                 transactionConnection.remove();
+                rollbackActions.remove();
                 conn.setAutoCommit(previousAutoCommit);
             }
         } catch (SQLException e) {
@@ -207,8 +246,26 @@ public final class JooqDatabase implements AutoCloseable {
         }
     }
 
+    private void runRollbackActions(RuntimeException cause) {
+        List<Runnable> actions = rollbackActions.get();
+        if (actions == null) {
+            return;
+        }
+        for (int i = actions.size() - 1; i >= 0; i--) {
+            try {
+                actions.get(i).run();
+            } catch (RuntimeException cleanupError) {
+                cause.addSuppressed(cleanupError);
+            }
+        }
+    }
+
     @Override
     public void close() {
         dataSource.close();
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
     }
 }

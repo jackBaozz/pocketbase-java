@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
+import io.github.jackbaozz.pocketbase.server.internal.ExternalDatabaseSupport;
 
 import java.util.Locale;
 
@@ -19,6 +20,13 @@ public class TestDatabaseFactory {
         }
 
         String storage = System.getProperty("storage", "json").trim().toLowerCase(Locale.ROOT);
+        ExternalDatabaseSupport.ResolvedConfig external = ExternalDatabaseSupport.resolve(storage);
+        if (external != null) {
+            external.applySystemProperties();
+            initialized = true;
+            System.err.println("Using external " + storage + " test database from " + external.source());
+            return;
+        }
 
         try {
             switch (storage) {
@@ -45,9 +53,9 @@ public class TestDatabaseFactory {
             }
             initialized = true;
         } catch (Exception e) {
-            // If Docker is not available or container fails to start, we skip the tests.
-            System.err.println("Failed to start Testcontainers for " + storage + ": " + e.getMessage());
-            Assumptions.assumeTrue(false, "Skipping tests because Testcontainers could not start for storage: " + storage);
+            String message = "Skipping " + storage + " tests because no external DSN is configured and Testcontainers could not start: " + e.getMessage();
+            System.err.println(message);
+            Assumptions.assumeTrue(false, message);
         }
     }
 }
