@@ -370,6 +370,7 @@ public class AuthRepository extends BaseRepository {
 
     public void confirmPasswordReset(String collection, JsonNode body) {
         AuthProcessor.confirmPasswordReset(storeContext, tokenService, collection, body);
+        invalidateAuthRequestToken(body);
     }
 
     public void requestVerification(String collection, JsonNode body) {
@@ -383,6 +384,7 @@ public class AuthRepository extends BaseRepository {
 
     public void confirmVerification(String collection, JsonNode body) {
         AuthProcessor.confirmVerification(storeContext, tokenService, collection, body);
+        invalidateAuthRequestToken(body);
     }
 
     public void requestEmailChange(String collection, JsonNode body, RequestPrincipal principal) {
@@ -396,6 +398,7 @@ public class AuthRepository extends BaseRepository {
 
     public void confirmEmailChange(String collection, JsonNode body) {
         AuthProcessor.confirmEmailChange(storeContext, tokenService, collection, body);
+        invalidateAuthRequestToken(body);
     }
 
     public Map<String, Object> impersonate(String collection, String id, JsonNode body, Map<String, String> query) {
@@ -916,17 +919,40 @@ public class AuthRepository extends BaseRepository {
     }
 
     private void appendAuthRequest(Map<String, Object> request) {
-        try {
-            Files.createDirectories(dataDir);
-            Path file = dataDir.resolve("auth_requests.json");
-            List<Map<String, Object>> authRequests = new ArrayList<>();
-            if (Files.exists(file)) {
-                authRequests = mapper.readValue(file.toFile(), new TypeReference<List<Map<String, Object>>>() {});
+        database.dsl().insertInto(qt("_authRequests"))
+                .columns(
+                        qfs("id"),
+                        qfs("type"),
+                        qfs("collectionId"),
+                        qfs("collectionName"),
+                        qfs("recordId"),
+                        qfs("email"),
+                        qfs("newEmail"),
+                        qfs("token"),
+                        qfs("created"),
+                        qfs("expires")
+                )
+                .values(
+                        String.valueOf(request.get("id")),
+                        String.valueOf(request.get("type")),
+                        String.valueOf(request.get("collectionId")),
+                        String.valueOf(request.get("collectionName")),
+                        String.valueOf(request.get("recordId")),
+                        String.valueOf(request.getOrDefault("email", "")),
+                        request.containsKey("newEmail") ? String.valueOf(request.get("newEmail")) : null,
+                        String.valueOf(request.get("token")),
+                        String.valueOf(request.get("created")),
+                        String.valueOf(request.get("expires"))
+                )
+                .execute();
+    }
+
+    private void invalidateAuthRequestToken(JsonNode body) {
+        if (body != null && body.has("token")) {
+            String token = body.get("token").asText();
+            if (!token.isBlank()) {
+                database.dsl().deleteFrom(qt("_authRequests")).where(qfs("token").eq(token)).execute();
             }
-            authRequests.add(request);
-            mapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), authRequests);
-        } catch (Exception e) {
-            throw new ApiException(400, "Failed to write auth request.");
         }
     }
 

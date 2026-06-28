@@ -358,6 +358,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
             createMfasTable(dsl);
             createExternalAuthsTable(dsl);
             createOtpsTable(dsl);
+            createAuthRequestsTable(dsl);
             createParamsTable(dsl);
             ensureParamsKeyColumn(dsl);
             ensureSuperusersCollection(dsl);
@@ -468,6 +469,22 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("value"), SQLDataType.CLOB)
                 .constraints(DSL.constraint(DSL.name("pk__params")).primaryKey(DSL.name("id")))
+                .execute();
+    }
+
+    private void createAuthRequestsTable(DSLContext dsl) {
+        dsl.createTableIfNotExists(DSL.name("_authRequests"))
+                .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
+                .column(DSL.name("type"), SQLDataType.VARCHAR(64))
+                .column(DSL.name("collectionId"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("collectionName"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("recordId"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("email"), SQLDataType.VARCHAR(320))
+                .column(DSL.name("newEmail"), SQLDataType.VARCHAR(320))
+                .column(DSL.name("token"), SQLDataType.CLOB)
+                .column(DSL.name("created"), SQLDataType.VARCHAR(64))
+                .column(DSL.name("expires"), SQLDataType.VARCHAR(64))
+                .constraints(DSL.constraint(DSL.name("pk__authRequests")).primaryKey(DSL.name("id")))
                 .execute();
     }
 

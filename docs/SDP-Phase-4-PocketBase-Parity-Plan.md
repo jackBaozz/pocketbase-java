@@ -94,16 +94,16 @@ This workstream improves the testing coverage to verify compatibility against of
 
 This workstream completes the authentication, OAuth2, and email workflows.
 
-#### [ ] P4-C01: Durable Auth Action Persistence
-- [ ] **Auth tokens persistence**: Store action tokens (password resets, email verification, email changes) in the database with strict expiry limits.
-- [ ] **One-time-use validation**: Implement atomic checks to ensure action tokens are invalidated upon first use.
-- [ ] **Transactional updates**: Perform token validation, user record updates, and token invalidation in a single database transaction.
+#### [x] P4-C01: Durable Auth Action Persistence
+- [x] **Auth tokens persistence**: Store action tokens (password resets, email verification, email changes) in the database with strict expiry limits.
+- [x] **One-time-use validation**: Implement atomic checks to ensure action tokens are invalidated upon first use.
+- [x] **Transactional updates**: Perform token validation, user record updates, and token invalidation in a single database transaction.
 - *Acceptance Criteria*: Password resets, email verification, and email updates behave atomically and validate against real database records.
 
-#### [ ] P4-C02: OTP Token Persistence
-- [ ] **OTP persistence schema**: Implement the `_otps` table schema for SQLite, MySQL, and PostgreSQL.
-- [ ] **OTP atomic check & store**: Save generated OTP states (code hashes, retry counts, expiration, matching auth record) in the database.
-- [ ] **Stale OTP cleanup**: Implement a scheduled clean-up job for expired OTP records.
+#### [x] P4-C02: OTP Token Persistence
+- [x] **OTP persistence schema**: Implement the `_otps` table schema for SQLite, MySQL, and PostgreSQL.
+- [x] **OTP atomic check & store**: Save generated OTP states (code hashes, retry counts, expiration, matching auth record) in the database.
+- [x] **Stale OTP cleanup**: Implement a scheduled clean-up job for expired OTP records.
 - *Acceptance Criteria*: OTP tokens survive server restarts and expire according to configurations.
 
 #### [ ] P4-C03: Full OAuth2 Provider Flow
