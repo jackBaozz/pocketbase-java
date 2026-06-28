@@ -190,39 +190,39 @@ This workstream completes advanced API features such as rules compilation, realt
 
 This workstream brings the Admin UI visual and functional flows closer to official layouts.
 
-#### [ ] P4-F01: Hash Routing & Shell
-- [ ] **Hash routing implementation**: Implement hash routes matching official path structures (login, collection views, record editors, settings pages, logs, backups, and OAuth configurations).
-- [ ] **Browser history support**: Integrate browser back/forward navigation within the shell layout.
-- [ ] **Direct deep-links**: Enable deep linking to specific collections, records, logs, and settings tabs.
+#### [x] P4-F01: Hash Routing & Shell
+- [x] **Hash routing implementation**: Implement hash routes matching official path structures (login, collection views, record editors, settings pages, logs, backups, and OAuth configurations).
+- [x] **Browser history support**: Integrate browser back/forward navigation within the shell layout.
+- [x] **Direct deep-links**: Enable deep linking to specific collections, records, logs, and settings tabs.
 - *Acceptance Criteria*: Deep links load the correct screens, and back/forward navigation functions as expected.
 
-#### [ ] P4-F02: Collection Schema Editor UI
-- [ ] **Field option forms**: Implement editor inputs for all field types (validation properties, default values, required constraints).
-- [ ] **Index builder**: Add a visual interface to manage custom indexes on collections.
-- [ ] **Collection settings forms**: Add settings forms for collection auth rules, MFA setups, and OTP properties.
-- [ ] **SQL view editor**: Add an editor for view-type collections with query execution previews.
-- [ ] **Migration diff preview**: Render schema changes with color-coded diff displays.
+#### [x] P4-F02: Collection Schema Editor UI
+- [x] **Field option forms**: Implement editor inputs for all field types (validation properties, default values, required constraints).
+- [x] **Index builder**: Add a visual interface to manage custom indexes on collections.
+- [x] **Collection settings forms**: Add settings forms for collection auth rules, MFA setups, and OTP properties.
+- [x] **SQL view editor**: Add an editor for view-type collections with query execution previews.
+- [x] **Migration diff preview**: Render schema changes with color-coded diff displays.
 - *Acceptance Criteria*: Collection schemas can be edited, showing validation errors and index configurations in the UI.
 
-#### [ ] P4-F03: Record Manager & Editor UI
-- [ ] **Relation selector**: Implement a relation search and selection picker for relation fields.
-- [ ] **File field manager**: Add visual inputs for file uploads, preview thumbnails, file clearing, and file reordering.
-- [ ] **JSON validation editor**: Add a formatted JSON editor with syntax validation for JSON fields.
-- [ ] **Action commands**: Add options to Duplicate, Impersonate, and Preview JSON records in the UI.
-- [ ] **Advanced search filter**: Support filter syntax, search fields, and sorting controls in record list views.
+#### [x] P4-F03: Record Manager & Editor UI
+- [x] **Relation selector**: Implement a relation search and selection picker for relation fields.
+- [x] **File field manager**: Add visual inputs for file uploads, preview thumbnails, file clearing, and file reordering.
+- [x] **JSON validation editor**: Add a formatted JSON editor with syntax validation for JSON fields.
+- [x] **Action commands**: Add options to Duplicate, Impersonate, and Preview JSON records in the UI.
+- [x] **Advanced search filter**: Support filter syntax, search fields, and sorting controls in record list views.
 - *Acceptance Criteria*: Users can search, filter, edit relation fields, upload files, and duplicate records in the UI.
 
-#### [ ] P4-F04: System Settings, Logs, and Backups UI
-- [ ] **System configuration forms**: Render forms matching the official system configuration layout.
-- [ ] **Log details inspector**: Render detailed log properties, filtering options, and timeline stats.
-- [ ] **Backup console**: Add lists for backups, restore triggers with confirmation modals, and S3 backup toggles.
-- [ ] **Email designer**: Create a text and template editor for system emails.
-- [ ] **OAuth2 configuration forms**: Add provider setup forms with mock login buttons.
+#### [x] P4-F04: System Settings, Logs, and Backups UI
+- [x] **System configuration forms**: Render forms matching the official system configuration layout.
+- [x] **Log details inspector**: Render detailed log properties, filtering options, and timeline stats.
+- [x] **Backup console**: Add lists for backups, restore triggers with confirmation modals, and S3 backup toggles.
+- [x] **Email designer**: Create a text and template editor for system emails.
+- [x] **OAuth2 configuration forms**: Add provider setup forms with mock login buttons.
 - *Acceptance Criteria*: UI forms update backend settings, display request logs, and trigger backups.
 
-#### [ ] P4-F05: Visual QA & Asset Integrity
-- [ ] **Responsive display checks**: Verify layout alignment on desktop and mobile breakpoints.
-- [ ] **Compilation verification**: Build and verify production assets in the distribution folder (`src/main/resources/pocketbase-admin`) upon UI changes.
+#### [x] P4-F05: Visual QA & Asset Integrity
+- [x] **Responsive display checks**: Verify layout alignment on desktop and mobile breakpoints.
+- [x] **Compilation verification**: Build and verify production assets in the distribution folder (`src/main/resources/pocketbase-admin`) upon UI changes.
 - *Acceptance Criteria*: UI builds run from clean checkouts and package correctly inside final application builds.
 
 ---
