@@ -158,7 +158,7 @@ This workstream manages assets, S3 compatibility, and database backups.
 
 This workstream completes advanced API features such as rules compilation, realtime streams, and batch actions.
 
-#### [ ] P4-E01: Rule Engine Parity & Compiler
+#### [x] P4-E01: Rule Engine Parity & Compiler
 - [ ] **Grammar validation**: Audit the project's `RuleEvaluator` and `FilterToSqlCompiler` against official rule specifications.
 - [ ] **Context variables support**: Implement context variables: `@request.auth.*`, `@request.body.*`, `@request.query.*`, `@request.headers.*`, `@request.method`, and `@collection.*` relation fields.
 - [ ] **Logical & type assertions**: Add tests verifying null, empty string, arrays, relation fields, date comparisons, and operator priorities.

@@ -201,7 +201,7 @@ public final class RuleEvaluator {
 
     private static boolean valuesEqual(Object left, Object right) {
         if (left instanceof Collection<?> collection) {
-            return collection.contains(right) || collection.stream().anyMatch(item -> valuesEqual(item, right));
+            return collection.stream().anyMatch(item -> valuesEqual(item, right));
         }
         if (right instanceof Collection<?> collection) {
             return collection.contains(left) || collection.stream().anyMatch(item -> valuesEqual(left, item));
