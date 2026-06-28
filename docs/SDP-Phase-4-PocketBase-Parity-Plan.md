@@ -106,12 +106,12 @@ This workstream completes the authentication, OAuth2, and email workflows.
 - [x] **Stale OTP cleanup**: Implement a scheduled clean-up job for expired OTP records.
 - *Acceptance Criteria*: OTP tokens survive server restarts and expire according to configurations.
 
-#### [ ] P4-C03: Full OAuth2 Provider Flow
-- [ ] **Local mock OAuth2 server**: Implement a local test OAuth2 mock server to simulate OAuth provider exchanges.
-- [ ] **Config validation**: Validate configuration settings for standard providers (Google, GitHub, OIDC).
-- [ ] **OAuth2 lifecycle**: Implement the full OAuth2 authentication flow (redirect generation, token exchange, id_token verification, user profile fetching).
-- [ ] **Account linking & conflict management**: Handle email duplication, link new OAuth providers to existing records, and handle unlinking.
-- [ ] **Browser redirect/popup response**: Render redirect success/failure pages and handle `postMessage` outputs for popup authentication.
+#### [x] P4-C03: Full OAuth2 Provider Flow
+- [x] **Local mock OAuth2 server**: Implement a local test OAuth2 mock server to simulate OAuth provider exchanges.
+- [x] **Config validation**: Validate configuration settings for standard providers (Google, GitHub, OIDC).
+- [x] **OAuth2 lifecycle**: Implement the full OAuth2 authentication flow (redirect generation, token exchange, id_token verification, user profile fetching).
+- [x] **Account linking & conflict management**: Handle email duplication, link new OAuth providers to existing records, and handle unlinking.
+- [x] **Browser redirect/popup response**: Render redirect success/failure pages and handle `postMessage` outputs for popup authentication.
 - *Acceptance Criteria*: The mock OAuth2 server handles authentication flows, and accounts link or fail according to configuration rules.
 
 #### [ ] P4-C04: SMTP Mail Delivery
