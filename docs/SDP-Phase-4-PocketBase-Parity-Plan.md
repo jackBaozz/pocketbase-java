@@ -26,14 +26,14 @@ The primary goal of Phase 4 is to transition the Java implementation from an SQL
 
 This workstream focuses on database compatibility, dialect abstractions, and schema migrations.
 
-#### [ ] P4-A01: Dialect-Aware Query Compilation & SQL Endpoint
-- [ ] **SQL query validation**: Design query validation parser to reject invalid or dangerous statements in raw SQL/view SQL.
-- [ ] **Dialect-aware JSON extraction**: Replace SQLite-only `json_extract(...)` calls in `FilterToSqlCompiler` with a dialect abstraction supporting:
+#### [x] P4-A01: Dialect-Aware Query Compilation & SQL Endpoint
+- [x] **SQL query validation**: Design query validation parser to reject invalid or dangerous statements in raw SQL/view SQL.
+- [x] **Dialect-aware JSON extraction**: Replace SQLite-only `json_extract(...)` calls in `FilterToSqlCompiler` with a dialect abstraction supporting:
   - SQLite: `json_extract(column, '$.path')` or `column ->> '$.path'`
   - MySQL: `JSON_EXTRACT(column, '$.path')` or `column->>'$.path'`
   - PostgreSQL: `column ->> 'path'` (for json/jsonb columns)
-- [ ] **Dialect-specific operators & quoting**: Implement dialect-specific text concatenation, quoting, pagination, and LIKE escaping (`%`, `_`, `\`) for MySQL and PostgreSQL.
-- [ ] **SQL Exec API validation**: Enable the official raw SQL executing API for superusers with parameter bindings, enforcing transaction security.
+- [x] **Dialect-specific operators & quoting**: Implement dialect-specific text concatenation, quoting, pagination, and LIKE escaping (`%`, `_`, `\`) for MySQL and PostgreSQL.
+- [x] **SQL Exec API validation**: Enable the official raw SQL executing API for superusers with parameter bindings, enforcing transaction security.
 - *Acceptance Criteria*: SQL execution and view dry-runs pass correctly on all active relational dialects (SQLite, MySQL, PostgreSQL).
 
 #### [ ] P4-A02: SQL Type Mapping & Value Normalization
@@ -164,18 +164,18 @@ This workstream completes advanced API features such as rules compilation, realt
 - [ ] **Logical & type assertions**: Add tests verifying null, empty string, arrays, relation fields, date comparisons, and operator priorities.
 - *Acceptance Criteria*: Compiled rule filters output valid SQL and match the evaluation results of the official engine.
 
-#### [ ] P4-E02: Realtime SSE Protocol Parity
-- [ ] **SSE format validation**: Format SSE response structures to match official PocketBase clients.
-- [ ] **Auth refresh validation**: Validate auth tokens on open SSE connections, disconnecting expired or revoked sessions.
-- [ ] **Access filter broadcasting**: Filter change notifications before broadcasting to ensure clients have permission via collection rules.
-- [ ] **Connection pool management**: Implement connection cleanup, reconnect handlers, and backpressure management.
-- *Acceptance Criteria*: Clients subscribe and receive updates over SSE, filtering out unauthorized events.
+#### [x] P4-E02: Realtime SSE Protocol Parity
++- [x] **SSE format validation**: Format SSE response structures to match official PocketBase clients.
++- [x] **Auth refresh validation**: Validate auth tokens on open SSE connections, disconnecting expired or revoked sessions.
++- [x] **Access filter broadcasting**: Filter change notifications before broadcasting to ensure clients have permission via collection rules.
++- [x] **Connection pool management**: Implement connection cleanup, reconnect handlers, and backpressure management.
++- *Acceptance Criteria*: Clients subscribe and receive updates over SSE, filtering out unauthorized events.
 
-#### [ ] P4-E03: Batch API Parity
-- [ ] **Sub-request routing**: Route batch requests to appropriate endpoint handlers.
-- [ ] **System limits**: Enforce batch request limits (max requests, payload sizes, timeout, and authorization).
-- [ ] **Multipart batch payloads**: Parse multipart files within batch updates.
-- [ ] **Atomic transactions**: Ensure database transactions and uploaded files roll back completely if any batch sub-request fails.
+#### [x] P4-E03: Batch API Parity
+- [x] **Sub-request routing**: Route batch requests to appropriate endpoint handlers.
+- [x] **System limits**: Enforce batch request limits (max requests, payload sizes, timeout, and authorization).
+- [x] **Multipart batch payloads**: Parse multipart files within batch updates.
+- [x] **Atomic transactions**: Ensure database transactions and uploaded files roll back completely if any batch sub-request fails.
 - *Acceptance Criteria*: Batch API requests process atomically, rolling back all modifications on failures.
 
 #### [ ] P4-E04: Direct SQL Endpoint
