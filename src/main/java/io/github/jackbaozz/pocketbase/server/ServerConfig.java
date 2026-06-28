@@ -13,7 +13,8 @@ public record ServerConfig(
         int port,
         Path dataDir,
         String bootstrapSuperuserEmail,
-        String bootstrapSuperuserPassword
+        String bootstrapSuperuserPassword,
+        String encryptionEnv
 ) {
     public static final int DEFAULT_PORT = 8090;
 
@@ -30,7 +31,7 @@ public record ServerConfig(
     }
 
     public static ServerConfig defaults() {
-        return new ServerConfig("127.0.0.1", DEFAULT_PORT, Path.of("pb_data"), null, null);
+        return new ServerConfig("127.0.0.1", DEFAULT_PORT, Path.of("pb_data"), null, null, null);
     }
 
     public static ServerConfig fromArgs(String[] args) {
@@ -43,6 +44,7 @@ public record ServerConfig(
         Path dataDir = Path.of(firstNonBlank(env.get("PB_DATA_DIR"), "pb_data"));
         String email = firstNonBlank(env.get("PB_SUPERUSER_EMAIL"), null);
         String password = firstNonBlank(env.get("PB_SUPERUSER_PASSWORD"), null);
+        String encryptionEnv = firstNonBlank(env.get("PB_ENCRYPTION_KEY"), null);
 
         for (int i = 0; args != null && i < args.length; i++) {
             String arg = args[i];
@@ -54,6 +56,10 @@ public record ServerConfig(
             }
             if ("--dir".equals(arg) && i + 1 < args.length) {
                 dataDir = Path.of(args[++i]);
+                continue;
+            }
+            if ("--encryptionEnv".equals(arg) && i + 1 < args.length) {
+                encryptionEnv = args[++i];
                 continue;
             }
             if ("--host".equals(arg) && i + 1 < args.length) {
@@ -79,6 +85,10 @@ public record ServerConfig(
                 dataDir = Path.of(arg.substring("--dir=".length()));
                 continue;
             }
+            if (arg.startsWith("--encryptionEnv=")) {
+                encryptionEnv = arg.substring("--encryptionEnv=".length());
+                continue;
+            }
             if (arg.startsWith("--host=")) {
                 host = arg.substring("--host=".length());
                 continue;
@@ -101,7 +111,7 @@ public record ServerConfig(
             throw new IllegalArgumentException("unknown argument: " + arg);
         }
 
-        return new ServerConfig(host, port, dataDir, email, password);
+        return new ServerConfig(host, port, dataDir, email, password, encryptionEnv);
     }
 
     public InetSocketAddress bindAddress() {
@@ -115,7 +125,7 @@ public record ServerConfig(
     public static String usage() {
         return """
                 Usage:
-                  pocketbase-java serve [--http 127.0.0.1:8090] [--dir pb_data]
+                  pocketbase-java serve [--http 127.0.0.1:8090] [--dir pb_data] [--encryptionEnv PB_ENCRYPTION_KEY]
 
                 Environment:
                   PB_HTTP_HOST              bind host, default 127.0.0.1
@@ -123,6 +133,7 @@ public record ServerConfig(
                   PB_DATA_DIR               data directory, default pb_data
                   PB_SUPERUSER_EMAIL        optional first superuser email
                   PB_SUPERUSER_PASSWORD     optional first superuser password
+                  PB_ENCRYPTION_KEY         optional encryption key
                 """;
     }
 

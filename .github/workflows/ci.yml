@@ -8,8 +8,12 @@ on:
 
 jobs:
   jvm-tests:
-    name: JVM Tests
+    name: JVM Tests (${{ matrix.storage }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [sqlite, mysql, postgresql]
     steps:
       - uses: actions/checkout@v4
       - name: Setup GraalVM
@@ -19,7 +23,12 @@ jobs:
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Maven Tests
-        run: mvn -B test
+        run: |
+          if [ "${{ matrix.storage }}" = "sqlite" ]; then
+            mvn -B test -Dstorage=${{ matrix.storage }}
+          else
+            mvn -B test -Dstorage=${{ matrix.storage }} -Pexternal-db-drivers
+          fi
 
   ui-build:
     name: UI Build

@@ -212,6 +212,12 @@ public class LogRepository extends BaseRepository {
         data.put("userIP", remoteIp == null ? "" : remoteIp);
         data.put("userAgent", headers != null ? headers.getOrDefault("user-agent", "") : "");
         data.put("referer", headers != null ? headers.getOrDefault("referer", "") : "");
+
+        // Redact Authorization header if present
+        if (headers != null && headers.containsKey("authorization")) {
+            data.put("auth_header", "******");
+        }
+
         data.put("auth", principal != null ? (principal.superuser() ? SUPERUSERS : principal.collectionName()) : "");
         if (principal != null) {
             data.put("authId", principal.id());

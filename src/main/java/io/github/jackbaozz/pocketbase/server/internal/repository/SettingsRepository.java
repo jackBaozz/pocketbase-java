@@ -185,7 +185,7 @@ public class SettingsRepository extends BaseRepository {
             Map<String, Object> target = (Map<String, Object>) map;
             for (Map.Entry<String, Object> entry : new ArrayList<>(target.entrySet())) {
                 if (hiddenSettingKey(entry.getKey())) {
-                    target.remove(entry.getKey());
+                    target.put(entry.getKey(), REDACTED_SECRET);
                 } else {
                     hideSensitiveSettings(entry.getValue());
                 }
