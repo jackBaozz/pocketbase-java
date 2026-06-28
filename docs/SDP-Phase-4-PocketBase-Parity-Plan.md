@@ -52,17 +52,17 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 - [ ] **DDL Dialect documentation**: Document specific DDL limitations (such as SQLite column type alteration limits).
 - *Acceptance Criteria*: Applying or rolling back a migration plan behaves atomically and leaves the database schema in sync with `_collections` metadata.
 
-#### [ ] P4-A04: MySQL and PostgreSQL Database Profiles
-- [ ] **Startup permission probes**: Add startup validation to verify that the DSN credentials have the necessary database permissions (CREATE, SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, DROP).
-- [ ] **Collation & encoding validation**: Verify that database connection character encoding is UTF-8 (utf8mb4 for MySQL) and collations match PocketBase requirements on startup.
+#### [x] P4-A04: MySQL and PostgreSQL Database Profiles
+- [x] **Startup permission probes**: Add startup validation to verify that the DSN credentials have the necessary database permissions (CREATE, SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, DROP).
+- [x] **Collation & encoding validation**: Verify that database connection character encoding is UTF-8 (utf8mb4 for MySQL) and collations match PocketBase requirements on startup.
 - [ ] **CI pipeline integration**: Configure optional/required MySQL and PostgreSQL test execution in the project's CI configuration.
 - *Acceptance Criteria*: Verification suites run on real MySQL and PostgreSQL databases.
 
-#### [ ] P4-A05: SQLite Default Engine & Migration Paths
-- [ ] **Default SQLite configuration**: Switch the server's default configuration to use the SQLite relational store instead of the JSON file store.
-- [ ] **JSON-to-SQLite migrator**: Write an automated command/bootstrapper that reads existing JSON file stores and writes them into SQLite tables.
-- [ ] **JSON storage deprecation**: Remove or mark the legacy JSON storage engine as deprecated, maintaining it only as a fallback adapter.
-- [ ] **Documentation updates**: Revise the README, setup guides, and CLI parameter descriptions to reflect the SQLite-first default.
+#### [x] P4-A05: SQLite Default Engine & Migration Paths
+- [x] **Default SQLite configuration**: Switch the server's default configuration to use the SQLite relational store instead of the JSON file store.
+- [x] **JSON-to-SQLite migrator**: Write an automated command/bootstrapper that reads existing JSON file stores and writes them into SQLite tables.
+- [x] **JSON storage deprecation**: Remove or mark the legacy JSON storage engine as deprecated, maintaining it only as a fallback adapter.
+- [x] **Documentation updates**: Revise the README, setup guides, and CLI parameter descriptions to reflect the SQLite-first default.
 - *Acceptance Criteria*: A fresh server launch bootstraps using SQLite without requiring extra flags, and existing JSON databases migrate without data loss.
 
 ---
