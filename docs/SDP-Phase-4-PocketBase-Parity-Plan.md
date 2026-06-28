@@ -178,10 +178,10 @@ This workstream completes advanced API features such as rules compilation, realt
 - [x] **Atomic transactions**: Ensure database transactions and uploaded files roll back completely if any batch sub-request fails.
 - *Acceptance Criteria*: Batch API requests process atomically, rolling back all modifications on failures.
 
-#### [ ] P4-E04: Direct SQL Endpoint
-- [ ] **SQL request API**: Implement the raw SQL executing endpoint for superusers.
-- [ ] **Query syntax analyzer**: Restrict execution to allowed query types (SELECT, INSERT, UPDATE, DELETE) and handle safety validations.
-- [ ] **Dialect normalizer**: Format returned column types and errors to match database dialects.
+#### [x] P4-E04: Direct SQL Endpoint
+- [x] **SQL request API**: Implement the raw SQL executing endpoint for superusers.
+- [x] **Query syntax analyzer**: Restrict execution to allowed query types (SELECT, INSERT, UPDATE, DELETE) and handle safety validations.
+- [x] **Dialect normalizer**: Format returned column types and errors to match database dialects.
 - *Acceptance Criteria*: Superusers can query databases directly through the SQL endpoint with structured outputs and error handling.
 
 ---
