@@ -16,7 +16,7 @@ public final class FilterToSqlCompiler {
     }
 
     public static String compile(String filter) {
-        return compileInternal(filter, FilterToSqlCompiler::standardQuoteIdentifier, false).sql();
+        return compileInternal(filter, FilterToSqlCompiler::standardQuoteIdentifier, false, null, JooqDatabase.Engine.SQLITE).sql();
     }
 
     public static CompiledFilter compileBound(String filter, Function<String, String> quoteIdentifier) {
@@ -24,19 +24,23 @@ public final class FilterToSqlCompiler {
     }
 
     public static CompiledFilter compileBound(String filter, Function<String, String> quoteIdentifier, ContainsRenderer containsRenderer) {
-        return compileInternal(filter, quoteIdentifier, true, containsRenderer);
+        return compileBound(filter, quoteIdentifier, containsRenderer, JooqDatabase.Engine.SQLITE);
+    }
+
+    public static CompiledFilter compileBound(String filter, Function<String, String> quoteIdentifier, ContainsRenderer containsRenderer, JooqDatabase.Engine engine) {
+        return compileInternal(filter, quoteIdentifier, true, containsRenderer, engine);
     }
 
     private static CompiledFilter compileInternal(String filter, Function<String, String> quoteIdentifier, boolean bindLiterals) {
-        return compileInternal(filter, quoteIdentifier, bindLiterals, null);
+        return compileInternal(filter, quoteIdentifier, bindLiterals, null, JooqDatabase.Engine.SQLITE);
     }
 
-    private static CompiledFilter compileInternal(String filter, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer) {
+    private static CompiledFilter compileInternal(String filter, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer, JooqDatabase.Engine engine) {
         if (filter == null || filter.isBlank()) {
             return new CompiledFilter("1=1", List.of());
         }
         List<Token> tokens = tokenize(filter);
-        Parser parser = new Parser(tokens, quoteIdentifier, bindLiterals, containsRenderer);
+        Parser parser = new Parser(tokens, quoteIdentifier, bindLiterals, containsRenderer, engine);
         SqlPart part = parser.parseExpression();
         parser.requireEnd();
         return new CompiledFilter(part.sql(), List.copyOf(part.bindings()));
@@ -197,13 +201,15 @@ public final class FilterToSqlCompiler {
         private final Function<String, String> quoteIdentifier;
         private final boolean bindLiterals;
         private final ContainsRenderer containsRenderer;
+        private final JooqDatabase.Engine engine;
         private int pos = 0;
 
-        Parser(List<Token> tokens, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer) {
+        Parser(List<Token> tokens, Function<String, String> quoteIdentifier, boolean bindLiterals, ContainsRenderer containsRenderer, JooqDatabase.Engine engine) {
             this.tokens = tokens;
             this.quoteIdentifier = quoteIdentifier;
             this.bindLiterals = bindLiterals;
             this.containsRenderer = containsRenderer;
+            this.engine = engine;
         }
 
         private Token peek() {
@@ -300,13 +306,13 @@ public final class FilterToSqlCompiler {
                     return new Operand(keywordLiteral(t.value), false, null, null);
                 }
                 if (t.value.startsWith("@request.auth.")) {
-                    return new Operand(SqlPart.of("json_extract(:request_auth, '$." + t.value.substring("@request.auth.".length()) + "')"), false, null, null);
+                    return new Operand(SqlPart.of(dialectJsonExtract(":request_auth", t.value.substring("@request.auth.".length()))), false, null, null);
                 }
                 if (t.value.startsWith("@request.body.")) {
-                    return new Operand(SqlPart.of("json_extract(:request_body, '$." + t.value.substring("@request.body.".length()) + "')"), false, null, null);
+                    return new Operand(SqlPart.of(dialectJsonExtract(":request_body", t.value.substring("@request.body.".length()))), false, null, null);
                 }
                 if (t.value.startsWith("@request.query.")) {
-                    return new Operand(SqlPart.of("json_extract(:request_query, '$." + t.value.substring("@request.query.".length()) + "')"), false, null, null);
+                    return new Operand(SqlPart.of(dialectJsonExtract(":request_query", t.value.substring("@request.query.".length()))), false, null, null);
                 }
                 if (t.value.equals("@request.method")) {
                     return new Operand(SqlPart.of(":request_method"), false, null, null);
@@ -322,6 +328,14 @@ public final class FilterToSqlCompiler {
                 return new Operand(SqlPart.of(escapeIdentifier(t.value)), false, null, null);
             }
             throw invalidFilter("Unexpected token in filter: " + t.value);
+        }
+
+        private String dialectJsonExtract(String column, String path) {
+            return switch (engine) {
+                case MYSQL -> "JSON_EXTRACT(" + column + ", '$." + path + "')";
+                case POSTGRES -> column + " ->> '" + path + "'";
+                default -> "json_extract(" + column + ", '$." + path + "')"; // SQLITE
+            };
         }
 
         private SqlPart literal(Object value) {
@@ -393,13 +407,22 @@ public final class FilterToSqlCompiler {
                 );
                 return new SqlPart(rendered.sql(), rendered.bindings());
             }
-            SqlPart mapped = new SqlPart(
-                    (negated ? "NOT LIKE " : "LIKE ")
-                            + "'%' || "
-                            + "replace(replace(replace(" + right.sql() + ", '\\', '\\\\'), '%', '\\%'), '_', '\\_')"
-                            + " || '%' ESCAPE '\\'",
-                    right.bindings()
-            );
+            SqlPart mapped;
+            if (engine == JooqDatabase.Engine.MYSQL) {
+                mapped = new SqlPart(
+                        (negated ? "NOT LIKE " : "LIKE ")
+                                + "CONCAT('%', replace(replace(replace(" + right.sql() + ", '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_'), '%') ESCAPE '\\\\'",
+                        right.bindings()
+                );
+            } else {
+                mapped = new SqlPart(
+                        (negated ? "NOT LIKE " : "LIKE ")
+                                + "'%' || "
+                                + "replace(replace(replace(" + right.sql() + ", '\\', '\\\\'), '%', '\\%'), '_', '\\_')"
+                                + " || '%' ESCAPE '\\'",
+                        right.bindings()
+                );
+            }
             List<Object> bindings = new ArrayList<>(left.bindings());
             bindings.addAll(mapped.bindings());
             return new SqlPart(left.sql() + " " + mapped.sql(), bindings);

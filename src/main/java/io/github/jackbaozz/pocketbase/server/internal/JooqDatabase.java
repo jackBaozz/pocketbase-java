@@ -149,6 +149,15 @@ public final class JooqDatabase implements AutoCloseable {
         return dsl().render(DSL.name(identifier));
     }
 
+    public FilterToSqlCompiler.CompiledFilter compileFilter(String filter) {
+        return FilterToSqlCompiler.compileBound(
+                filter,
+                this::quoteIdentifier,
+                this::renderContainsCondition,
+                engine
+        );
+    }
+
     public DSLContext dsl() {
         Connection current = transactionConnection.get();
         if (current != null) {
