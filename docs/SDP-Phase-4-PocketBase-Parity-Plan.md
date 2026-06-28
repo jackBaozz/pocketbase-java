@@ -114,11 +114,11 @@ This workstream completes the authentication, OAuth2, and email workflows.
 - [x] **Browser redirect/popup response**: Render redirect success/failure pages and handle `postMessage` outputs for popup authentication.
 - *Acceptance Criteria*: The mock OAuth2 server handles authentication flows, and accounts link or fail according to configuration rules.
 
-#### [ ] P4-C04: SMTP Mail Delivery
-- [ ] **SMTP Client integration**: Implement SMTP client support with TLS, SSL, and authentication options.
-- [ ] **Outbox/Dry-run mail log**: Implement a dry-run or local mail directory logger to capture email outputs for testing.
-- [ ] **Template compilation**: Compile official mail templates using variables (e.g. `{APP_NAME}`, `{RECORD_EMAIL}`, `{ACTION_URL}`).
-- [ ] **UI template designer integration**: Connect backend template storage to the Admin UI email designer endpoints.
+#### [x] P4-C04: SMTP Mail Delivery
+- [x] **SMTP Client integration**: Implement SMTP client support with TLS, SSL, and authentication options.
+- [x] **Outbox/Dry-run mail log**: Implement a dry-run or local mail directory logger to capture email outputs for testing.
+- [x] **Template compilation**: Compile official mail templates using variables (e.g. `{APP_NAME}`, `{RECORD_EMAIL}`, `{ACTION_URL}`).
+- [x] **UI template designer integration**: Connect backend template storage to the Admin UI email designer endpoints.
 - *Acceptance Criteria*: The server sends emails via SMTP and outputs templates correctly in dry-run modes.
 
 ---
