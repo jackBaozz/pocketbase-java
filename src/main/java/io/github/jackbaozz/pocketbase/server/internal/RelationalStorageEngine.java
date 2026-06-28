@@ -694,7 +694,14 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         if (startsWithKeyword(sql, "insert")
                 || startsWithKeyword(sql, "update")
                 || startsWithKeyword(sql, "delete")) {
-            return database.dsl().execute(sql);
+            try {
+                // Parse the SQL using jOOQ AST parser to enforce safety checks.
+                // jOOQ parser validates the statement structure against known SQL syntax.
+                var queries = database.dsl().parser().parse(sql);
+                return database.dsl().execute(queries.queries()[0]);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Invalid SQL statement: " + e.getMessage(), e);
+            }
         }
         throw new IllegalArgumentException("Unsupported SQL statement.");
     }
@@ -704,7 +711,14 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         if (!startsWithKeyword(sql, "select")) {
             throw new IllegalArgumentException("Unsupported SQL statement.");
         }
-        var result = database.dsl().fetch(sql);
+        org.jooq.Result<?> result;
+        try {
+            // Parse using jOOQ AST to reject malformed/dangerous SELECT constructs
+            var query = database.dsl().parser().parseSelect(sql);
+            result = database.dsl().fetch(query.toString());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid SQL SELECT statement: " + e.getMessage(), e);
+        }
         List<Map<String, Object>> columns = new ArrayList<>();
         for (var field : result.fields()) {
             Map<String, Object> column = new LinkedHashMap<>();

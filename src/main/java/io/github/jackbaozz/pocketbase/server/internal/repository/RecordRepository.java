@@ -121,8 +121,8 @@ public class RecordRepository extends BaseRepository {
         String filter = query.getOrDefault("filter", "");
         org.jooq.Condition condition = null;
         if (filter != null && !filter.isBlank()) {
-            String filterSql = FilterToSqlCompiler.compile(filter);
-            condition = DSL.condition(filterSql);
+            FilterToSqlCompiler.CompiledFilter compiled = database.compileFilter(filter);
+            condition = DSL.condition(compiled.sql(), compiled.bindings().toArray());
         }
 
         // Sort support: parse sort string like "-created,title" where "-" prefix means DESC
