@@ -231,21 +231,21 @@ This workstream brings the Admin UI visual and functional flows closer to offici
 
 This workstream maintains GraalVM compatibility and prepares release pipelines.
 
-#### [ ] P4-G01: GraalVM Native Image Validation
-- [ ] **Native compilation check**: Run native image builds with all dependencies (jOOQ dialects, JDBC drivers, S3 packages, mail, and image thumbnail encoders).
-- [ ] **Minimize native configs**: Update and minimize files under `src/main/resources/META-INF/native-image`.
-- [ ] **Native verification tests**: Execute integration tests against compiled native binaries.
-- [ ] **Conditional database drivers**: Ensure optional drivers (MySQL, PostgreSQL) do not impact compilation size or startup validation when using SQLite.
+#### [x] P4-G01: GraalVM Native Image Validation
+- [x] **Native compilation check**: Run native image builds with all dependencies (jOOQ dialects, JDBC drivers, S3 packages, mail, and image thumbnail encoders).
+- [x] **Minimize native configs**: Update and minimize files under `src/main/resources/META-INF/native-image`.
+- [x] **Native verification tests**: Execute integration tests against compiled native binaries.
+- [x] **Conditional database drivers**: Ensure optional drivers (MySQL, PostgreSQL) do not impact compilation size or startup validation when using SQLite.
 - *Acceptance Criteria*: Native image compilation succeeds and passes core integration tests on SQLite.
 
-#### [ ] P4-G02: CLI & Configuration Parity
-- [ ] **CLI commands**: Match official startup options and flags (`--dir`, `--encryptionEnv`, etc.).
-- [ ] **Data masking**: Redact credentials, API keys, and email passwords from system logs and settings responses.
+#### [x] P4-G02: CLI & Configuration Parity
+- [x] **CLI commands**: Match official startup options and flags (`--dir`, `--encryptionEnv`, etc.).
+- [x] **Data masking**: Redact credentials, API keys, and email passwords from system logs and settings responses.
 - *Acceptance Criteria*: Startup flags behave consistently, and logs redact sensitive credentials.
 
-#### [ ] P4-G03: Build & Release Gates
-- [ ] **Required CI gates**: Configure CI pipeline checks for JVM test execution, SQLite tests, MySQL tests, PostgreSQL tests, and UI asset compilation.
-- [ ] **Native binary gate**: Include a compilation step verifying release branches compile on GraalVM.
+#### [x] P4-G03: Build & Release Gates
+- [x] **Required CI gates**: Configure CI pipeline checks for JVM test execution, SQLite tests, MySQL tests, PostgreSQL tests, and UI asset compilation.
+- [x] **Native binary gate**: Include a compilation step verifying release branches compile on GraalVM.
 - *Acceptance Criteria*: Merges to main require successful test coverage passes across all database dialects.
 
 ---
