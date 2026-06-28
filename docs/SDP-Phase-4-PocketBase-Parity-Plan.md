@@ -36,20 +36,20 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 - [x] **SQL Exec API validation**: Enable the official raw SQL executing API for superusers with parameter bindings, enforcing transaction security.
 - *Acceptance Criteria*: SQL execution and view dry-runs pass correctly on all active relational dialects (SQLite, MySQL, PostgreSQL).
 
-#### [ ] P4-A02: SQL Type Mapping & Value Normalization
-- [ ] **Migration tests for field types**: Create migration tests covering all field types (text, editor, email, url, number, bool, date, autodate, select, json, file, relation, password, geoPoint).
-- [ ] **Output type normalization**: Verify that values read from the database are correctly coerced into official JSON data types (e.g. converting numeric booleans, mapping JSON strings to list arrays).
-- [ ] **Array serialization consistency**: Verify that list fields (`select` multiple, `json` arrays, `relation` ID lists) serialize and roundtrip consistently across SQLite, MySQL, and PostgreSQL.
+#### [x] P4-A02: SQL Type Mapping & Value Normalization
+- [x] **Migration tests for field types**: Create migration tests covering all field types (text, editor, email, url, number, bool, date, autodate, select, json, file, relation, password, geoPoint).
+- [x] **Output type normalization**: Verify that values read from the database are correctly coerced into official JSON data types (e.g. converting numeric booleans, mapping JSON strings to list arrays).
+- [x] **Array serialization consistency**: Verify that list fields (`select` multiple, `json` arrays, `relation` ID lists) serialize and roundtrip consistently across SQLite, MySQL, and PostgreSQL.
 - *Acceptance Criteria*: Integration tests verify field storage mapping and value normalization pass for all database dialects.
 
-#### [ ] P4-A03: Schema Migration Planner
-- [ ] **Migration plan generator**: Build an engine that calculates diffs between schema states and outputs safe migration SQL.
-- [ ] **Field structural modifications**: Implement field addition, removal, renaming, and type modification.
-- [ ] **Index manager operations**: Implement DDL commands to create, alter, and drop collection database indexes.
-- [ ] **Dynamic View DDL**: Handle schema migration updates when collections of type `view` change their underlying SQL definition.
-- [ ] **Dry-run schema output**: Provide a structural migration diff payload mapping directly to the Admin UI review screen.
-- [ ] **DDL Transaction safety**: Wrap DDL migration queries in database transactions where supported (PostgreSQL/SQLite) and add transactional rollback workarounds for MySQL.
-- [ ] **DDL Dialect documentation**: Document specific DDL limitations (such as SQLite column type alteration limits).
+#### [x] P4-A03: Schema Migration Planner
+- [x] **Migration plan generator**: Build an engine that calculates diffs between schema states and outputs safe migration SQL.
+- [x] **Field structural modifications**: Implement field addition, removal, renaming, and type modification.
+- [x] **Index manager operations**: Implement DDL commands to create, alter, and drop collection database indexes.
+- [x] **Dynamic View DDL**: Handle schema migration updates when collections of type `view` change their underlying SQL definition.
+- [x] **Dry-run schema output**: Provide a structural migration diff payload mapping directly to the Admin UI review screen.
+- [x] **DDL Transaction safety**: Wrap DDL migration queries in database transactions where supported (PostgreSQL/SQLite) and add transactional rollback workarounds for MySQL.
+- [x] **DDL Dialect documentation**: Document specific DDL limitations (such as SQLite column type alteration limits).
 - *Acceptance Criteria*: Applying or rolling back a migration plan behaves atomically and leaves the database schema in sync with `_collections` metadata.
 
 #### [x] P4-A04: MySQL and PostgreSQL Database Profiles
