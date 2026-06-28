@@ -113,7 +113,7 @@ public class SettingsRepository extends BaseRepository {
             throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("template", "Invalid email template."));
         }
 
-        EmailContent content = testEmailContent(template);
+        EmailContent content = testEmailContent(template, settings);
         Map<String, Object> smtp = mergedSettingsSection(settings, "smtp", body);
         if (truthySetting(smtp.get("enabled"), false) && !textSetting(smtp.get("host")).isBlank()) {
             SmtpMailer.send(smtpSettings(smtp), new SmtpMailer.Message(
@@ -299,13 +299,29 @@ public class SettingsRepository extends BaseRepository {
         return senderAddress.isBlank() ? "noreply@example.com" : senderAddress;
     }
 
-    private EmailContent testEmailContent(String template) {
+    private EmailContent testEmailContent(String template, Map<String, Object> settings) {
+        String appName = textSetting(section(settings, "meta").get("appName"));
+        if (appName.isBlank()) {
+            appName = "PocketBase Java";
+        }
+        String actionUrl = textSetting(section(settings, "meta").get("appURL"));
+
         return switch (template) {
-            case "verification" -> new EmailContent("Verify your email", "Verify your email address for this PocketBase Java instance.", "<p>Verify your email address for this PocketBase Java instance.</p>");
-            case "password-reset" -> new EmailContent("Reset password", "Reset password request for this PocketBase Java instance.", "<p>Reset password request for this PocketBase Java instance.</p>");
-            case "email-change" -> new EmailContent("Confirm new email", "Confirm new email request for this PocketBase Java instance.", "<p>Confirm new email request for this PocketBase Java instance.</p>");
-            case "otp" -> new EmailContent("Your one-time password", "Your test one-time password is 123456.", "<p>Your test one-time password is <strong>123456</strong>.</p>");
-            case "login-alert" -> new EmailContent("New login alert", "This is a test login alert from a new location.", "<p>This is a test login alert from a new location.</p>");
+            case "verification" -> new EmailContent("Verify your email",
+                "Verify your email address for this " + appName + " instance.\n\n" + actionUrl,
+                "<p>Verify your email address for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Verify</a></p>");
+            case "password-reset" -> new EmailContent("Reset password",
+                "Reset password request for this " + appName + " instance.\n\n" + actionUrl,
+                "<p>Reset password request for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Reset</a></p>");
+            case "email-change" -> new EmailContent("Confirm new email",
+                "Confirm new email request for this " + appName + " instance.\n\n" + actionUrl,
+                "<p>Confirm new email request for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Confirm</a></p>");
+            case "otp" -> new EmailContent("Your one-time password",
+                "Your test one-time password is 123456.",
+                "<p>Your test one-time password is <strong>123456</strong>.</p>");
+            case "login-alert" -> new EmailContent("New login alert",
+                "This is a test login alert from a new location.",
+                "<p>This is a test login alert from a new location.</p>");
             default -> throw new ApiException(400, "Failed to send the test email.", ApiErrors.invalidField("template", "Invalid email template."));
         };
     }

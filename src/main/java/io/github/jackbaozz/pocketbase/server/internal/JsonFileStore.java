@@ -224,7 +224,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(400, "Failed to send the test email.", fieldError("collection", "validation_invalid_value", "Must be a valid auth collection id or name."));
         }
 
-        TestEmailContent content = testEmailContent(template);
+        TestEmailContent content = testEmailContent(template, settings);
         Map<String, Object> smtp = mergedSettingsSection("smtp", body);
         if (truthyObject(smtp.get("enabled")) && !textSetting(smtp.get("host")).isBlank()) {
             SmtpMailer.send(smtpSettings(smtp), new SmtpMailer.Message(
@@ -3650,22 +3650,28 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 .replace(">", "&gt;");
     }
 
-    private TestEmailContent testEmailContent(String template) {
+    private TestEmailContent testEmailContent(String template, Map<String, Object> settings) {
+        String appName = textSetting(settingsSection("meta").get("appName"));
+        if (appName.isBlank()) {
+            appName = "PocketBase Java";
+        }
+        String actionUrl = textSetting(settingsSection("meta").get("appURL"));
+
         return switch (template) {
             case "verification" -> new TestEmailContent(
                     "Verify your email",
-                    "Verify your email address for this PocketBase Java instance.",
-                    "<p>Verify your email address for this PocketBase Java instance.</p>"
+                    "Verify your email address for this " + appName + " instance.\n\n" + actionUrl,
+                    "<p>Verify your email address for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Verify</a></p>"
             );
             case "password-reset" -> new TestEmailContent(
                     "Reset password",
-                    "Reset password request for this PocketBase Java instance.",
-                    "<p>Reset password request for this PocketBase Java instance.</p>"
+                    "Reset password request for this " + appName + " instance.\n\n" + actionUrl,
+                    "<p>Reset password request for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Reset</a></p>"
             );
             case "email-change" -> new TestEmailContent(
                     "Confirm new email",
-                    "Confirm new email request for this PocketBase Java instance.",
-                    "<p>Confirm new email request for this PocketBase Java instance.</p>"
+                    "Confirm new email request for this " + appName + " instance.\n\n" + actionUrl,
+                    "<p>Confirm new email request for this " + appName + " instance.</p><p><a href=\"" + actionUrl + "\">Confirm</a></p>"
             );
             case "otp" -> new TestEmailContent(
                     "Your one-time password",
