@@ -38,7 +38,7 @@ public class BehaviorFixturesTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
+        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null, null);
         server = LocalPocketBase.start(config);
         baseUrl = "http://localhost:" + server.port();
         bootstrapSuperuser();

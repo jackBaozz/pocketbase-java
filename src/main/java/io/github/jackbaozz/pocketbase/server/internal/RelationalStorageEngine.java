@@ -740,8 +740,31 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         for (var field : result.fields()) {
             Map<String, Object> column = new LinkedHashMap<>();
             column.put("name", field.getName());
-            column.put("type", "");
-            column.put("nullable", true);
+
+            // Format column types to match PocketBase dialects
+            String typeName = field.getDataType().getTypeName();
+            if (typeName != null) {
+                typeName = typeName.toUpperCase(java.util.Locale.ROOT);
+                if (typeName.contains("VARCHAR") || typeName.contains("TEXT") || typeName.contains("CHAR")) {
+                    column.put("type", "TEXT");
+                } else if (typeName.contains("INT") || typeName.contains("LONG") || typeName.contains("DECIMAL") || typeName.contains("NUMERIC")) {
+                    column.put("type", "NUMERIC");
+                } else if (typeName.contains("BOOL") || typeName.contains("BIT")) {
+                    column.put("type", "BOOL");
+                } else if (typeName.contains("DATE") || typeName.contains("TIME")) {
+                    column.put("type", "DATETIME");
+                } else if (typeName.contains("JSON")) {
+                    column.put("type", "JSON");
+                } else if (typeName.contains("BLOB") || typeName.contains("BINARY")) {
+                    column.put("type", "BLOB");
+                } else {
+                    column.put("type", ""); // fallback
+                }
+            } else {
+                column.put("type", "");
+            }
+
+            column.put("nullable", field.getDataType().nullable());
             columns.add(column);
         }
         List<List<Object>> rows = new ArrayList<>();

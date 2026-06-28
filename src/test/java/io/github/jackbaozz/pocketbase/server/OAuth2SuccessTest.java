@@ -35,7 +35,7 @@ class OAuth2SuccessTest {
         mockServer = new MockOAuth2Server(0);
         mockServer.start();
 
-        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null);
+        ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null, null);
         TestDatabaseFactory.init();
         server = LocalPocketBase.start(config);
         bootstrapSuperuser();
