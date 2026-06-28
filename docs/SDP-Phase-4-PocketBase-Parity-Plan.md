@@ -71,21 +71,21 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 
 This workstream improves the testing coverage to verify compatibility against official specs.
 
-#### [ ] P4-B01: API Fixture Harness Expansion
-- [ ] **Modular fixture groups**: Restructure behavior fixtures to match official API groups (auth, MFA, OAuth2, collections, records, files, settings, logs, backups, crons, SQL, batch, realtime).
-- [ ] **Negative test cases**: Write negative tests for each endpoint covering unauthorized access, not found, forbidden, invalid JSON bodies, and invalid query structures.
+#### [x] P4-B01: API Fixture Harness Expansion
+- [x] **Modular fixture groups**: Restructure behavior fixtures to match official API groups (auth, MFA, OAuth2, collections, records, files, settings, logs, backups, crons, SQL, batch, realtime).
+- [x] **Negative test cases**: Write negative tests for each endpoint covering unauthorized access, not found, forbidden, invalid JSON bodies, and invalid query structures.
 - *Acceptance Criteria*: Test suites execute the same fixture assertions across all active storage engines.
 
-#### [ ] P4-B02: Official Version Baseline Management
-- [ ] **Version baseline pin**: Explicitly pin the official PocketBase version baseline (e.g. v0.22.x) in all project documentation and test profiles.
-- [ ] **Route manifest sync script**: Implement a script or workflow that compares current project routes against the official route/method manifest.
-- [ ] **Custom route separation**: Isolate and document custom Java-only routes so they are clearly marked.
+#### [x] P4-B02: Official Version Baseline Management
+- [x] **Version baseline pin**: Explicitly pin the official PocketBase version baseline (e.g. v0.22.x) in all project documentation and test profiles.
+- [x] **Route manifest sync script**: Implement a script or workflow that compares current project routes against the official route/method manifest.
+- [x] **Custom route separation**: Isolate and document custom Java-only routes so they are clearly marked.
 - *Acceptance Criteria*: Running the route validation helper produces a diff showing exactly which routes are verified, missing, or customized.
 
-#### [ ] P4-B03: Client SDK Compatibility Testing
-- [ ] **Patch-free JS SDK validation**: Run the official JavaScript SDK test suites against the running server without any custom client-side request modifications.
-- [ ] **Expand JS SDK coverage**: Add test coverage for file uploads/downloads, batch operations, realtime subscriptions, token refresh, OAuth2, and MFA.
-- [ ] **Dart SDK smoke tests**: Write basic client tests using the official Dart/Flutter SDK to verify mobile client compatibility.
+#### [x] P4-B03: Client SDK Compatibility Testing
+- [x] **Patch-free JS SDK validation**: Run the official JavaScript SDK test suites against the running server without any custom client-side request modifications.
+- [x] **Expand JS SDK coverage**: Add test coverage for file uploads/downloads, batch operations, realtime subscriptions, token refresh, OAuth2, and MFA.
+- [x] **Dart SDK smoke tests**: Write basic client tests using the official Dart/Flutter SDK to verify mobile client compatibility.
 - *Acceptance Criteria*: Official JS and Dart SDKs can establish connections and perform CRUD, auth, and realtime operations without client code modifications.
 
 ---
