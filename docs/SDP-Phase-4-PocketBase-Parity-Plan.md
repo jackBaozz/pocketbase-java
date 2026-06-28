@@ -127,29 +127,29 @@ This workstream completes the authentication, OAuth2, and email workflows.
 
 This workstream manages assets, S3 compatibility, and database backups.
 
-#### [ ] P4-D01: Unified FileStorageProvider SPI
-- [ ] **Storage interface definition**: Define `FileStorageProvider` SPI with operations (put, get, delete, list, stat, signed/proxied read, and temporary staging).
-- [ ] **Local storage provider**: Implement the SPI targeting local file systems.
-- [ ] **S3 storage provider**: Implement the SPI targeting AWS S3 and S3-compatible APIs.
-- [ ] **Transaction rollback integration**: Implement file cleanup routines if the database transaction creating the record fails.
-- [ ] **Orphaned files cleanup**: Implement scheduled clean-up tasks to remove staged files that were never finalized.
+#### [x] P4-D01: Unified FileStorageProvider SPI
+- [x] **Storage interface definition**: Define `FileStorageProvider` SPI with operations (put, get, delete, list, stat, signed/proxied read, and temporary staging).
+- [x] **Local storage provider**: Implement the SPI targeting local file systems.
+- [x] **S3 storage provider**: Implement the SPI targeting AWS S3 and S3-compatible APIs.
+- [x] **Transaction rollback integration**: Implement file cleanup routines if the database transaction creating the record fails.
+- [x] **Orphaned files cleanup**: Implement scheduled clean-up tasks to remove staged files that were never finalized.
 - *Acceptance Criteria*: Files are uploaded and deleted consistently, rolling back from file storage if database writes fail.
 
-#### [ ] P4-D02: File HTTP API Parity
-- [ ] **filePath resolution**: Implement path generation for files stored in relational databases.
-- [ ] **File token validation**: Enforce file token validations on protected file URLs.
-- [ ] **Rule-based access control**: Enforce collection `viewRule` requirements on protected file access.
-- [ ] **HTTP range & caching**: Implement HTTP range requests, cache-control headers, ETag validation, and MIME-type assertions.
-- [ ] **Thumbnail generation & cache**: Generate and cache file thumbnails, returning fallback assets for unsupported files.
+#### [x] P4-D02: File HTTP API Parity
+- [x] **filePath resolution**: Implement path generation for files stored in relational databases.
+- [x] **File token validation**: Enforce file token validations on protected file URLs.
+- [x] **Rule-based access control**: Enforce collection `viewRule` requirements on protected file access.
+- [x] **HTTP range & caching**: Implement HTTP range requests, cache-control headers, ETag validation, and MIME-type assertions.
+- [x] **Thumbnail generation & cache**: Generate and cache file thumbnails, returning fallback assets for unsupported files.
 - *Acceptance Criteria*: Protected files are readable only with valid tokens and rules, and thumbnails cache as expected.
 
-#### [ ] P4-D03: Backup Provider Parity
-- [ ] **backupFile resolver**: Implement backup file resolvers for relational storage.
-- [ ] **Relational backup operations**: Implement backup creation, list, download, upload, delete, and restore workflows.
-- [ ] **Multi-dialect support**: Document or implement backup/restore strategies for MySQL and PostgreSQL.
-- [ ] **S3 Backup storage**: Support backing up files directly to AWS S3/S3-compatible storage.
-- [ ] **Restore validation & safety**: Validate the backup ZIP archive structure before running restorations, and implement rollback fallbacks if the restore fails.
-- [ ] **Scheduled auto-backup cron**: Integrate backups with the scheduler to run automatic backups.
+#### [x] P4-D03: Backup Provider Parity
+- [x] **backupFile resolver**: Implement backup file resolvers for relational storage.
+- [x] **Relational backup operations**: Implement backup creation, list, download, upload, delete, and restore workflows.
+- [x] **Multi-dialect support**: Document or implement backup/restore strategies for MySQL and PostgreSQL.
+- [x] **S3 Backup storage**: Support backing up files directly to AWS S3/S3-compatible storage.
+- [x] **Restore validation & safety**: Validate the backup ZIP archive structure before running restorations, and implement rollback fallbacks if the restore fails.
+- [x] **Scheduled auto-backup cron**: Integrate backups with the scheduler to run automatic backups.
 - *Acceptance Criteria*: ZIP backups can be created, uploaded, downloaded, and restored successfully.
 
 ---
