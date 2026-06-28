@@ -319,6 +319,64 @@ public class BehaviorFixturesTest {
     }
 
     @Test
+    void testInvalidJsonBodyReturns400() throws Exception {
+        String token = getSuperuserToken();
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections"))
+                .header("Authorization", "Bearer " + token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{ invalid_json: "))
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode());
+    }
+
+    @Test
+    void testUnauthorizedRecordAccessReturns404() throws Exception {
+        // Create collection without guest access
+        String token = getSuperuserToken();
+        String collectionJson = "{"
+                + "\"name\":\"secret_posts\","
+                + "\"type\":\"base\","
+                + "\"createRule\":null,"
+                + "\"listRule\":null,"
+                + "\"viewRule\":null,"
+                + "\"updateRule\":null,"
+                + "\"deleteRule\":null,"
+                + "\"schema\":["
+                + "  {\"name\":\"title\",\"type\":\"text\",\"required\":true}"
+                + "]"
+                + "}";
+        HttpRequest createCollReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections"))
+                .header("Authorization", "Bearer " + token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(collectionJson))
+                .build();
+        assertEquals(200, httpClient.send(createCollReq, HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        // Create a record using superuser token
+        String validRecordJson = "{\"title\":\"Secret Post\"}";
+        HttpRequest createRecordReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/secret_posts/records"))
+                .header("Authorization", "Bearer " + token)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(validRecordJson))
+                .build();
+        HttpResponse<String> createRes = httpClient.send(createRecordReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, createRes.statusCode());
+        String recordId = mapper.readTree(createRes.body()).get("id").asText();
+
+        // Try to access as anonymous user (should return 404 per PocketBase spec when unauthorized to view)
+        HttpRequest anonymousRequest = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/collections/secret_posts/records/" + recordId))
+                .GET()
+                .build();
+        HttpResponse<String> anonymousResponse = httpClient.send(anonymousRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(404, anonymousResponse.statusCode());
+    }
+
+    @Test
     void testStoragePropertyIsPassed() {
         String storage = System.getProperty("storage");
         assertNotNull(storage);

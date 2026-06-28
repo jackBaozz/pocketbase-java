@@ -2,6 +2,8 @@
 
 PocketBase Java implementation. This project contains a lightweight **PocketBase Java SDK** and a low-dependency **Embedded Server**: using JDK `HttpServer` to serve PocketBase-like APIs, featuring a built-in Admin UI, JSON file persistence, and designed for GraalVM Native Image constraints.
 
+**Official PocketBase Baseline:** v0.22.x
+
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
         <img src="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml/badge.svg" alt="CI Status" />

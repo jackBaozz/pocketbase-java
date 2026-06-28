@@ -85,6 +85,24 @@ async function run() {
             }
         }
 
+        // Create auth collection for OAuth and OTP
+        console.log("Creating auth collection for OAuth/OTP test...");
+        try {
+            await pb.collections.create({
+                name: "smoke_auth_collection",
+                type: "auth",
+                schema: [
+                    { name: "name", type: "text" }
+                ],
+                oauth2: {
+                    enabled: true,
+                    providers: []
+                }
+            });
+        } catch (e) {
+            if (e.status !== 400) throw e;
+        }
+
         // 5. Testing file upload & download & token
         console.log("Testing file upload...");
         const fileBlob = new Blob(["hello world"], { type: 'text/plain' });
@@ -172,6 +190,14 @@ async function run() {
         }
         console.log("Realtime SSE event verified!");
         pb.collection('smoke_test_collection').unsubscribe('*');
+
+        // 8. Testing Auth methods list (OAuth2 mock check placeholder)
+        console.log("Testing listAuthMethods...");
+        const authMethods = await pb.collection('smoke_auth_collection').listAuthMethods();
+        if (!authMethods) {
+            throw new Error("listAuthMethods failed to return data");
+        }
+        console.log("Auth methods returned successfully");
 
         // Cleanup
         console.log("Cleaning up created records...");
