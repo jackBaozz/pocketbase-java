@@ -1395,6 +1395,7 @@ type AuthPanelProps = {
 };
 
 function AuthPanel(props: AuthPanelProps) {
+  const { t } = useTranslation();
   return (
     <section className="auth-layout">
       <div className="auth-copy">
@@ -1402,7 +1403,7 @@ function AuthPanel(props: AuthPanelProps) {
         <h2>{props.setupRequired ? "Create the first superuser" : "Sign in to manage data"}</h2>
         <dl>
           <div>
-            <dt>Runtime</dt>
+            <dt>{t("collections.runtime")}</dt>
             <dd>{props.dataDir ?? "pb_data"}</dd>
           </div>
         </dl>
@@ -1454,6 +1455,7 @@ type CollectionSidebarProps = {
 };
 
 function CollectionSidebar(props: CollectionSidebarProps) {
+  const { t } = useTranslation();
   const pinned = props.pinnedNames
     .map((name) => props.collections.find((collection) => collection.name === name))
     .filter(Boolean) as CollectionSchema[];
@@ -1483,7 +1485,7 @@ function CollectionSidebar(props: CollectionSidebarProps) {
 
       {noMatches ? (
         <div className="sidebar-no-results">
-          <p>No collections found.</p>
+          <p>{t("collections.no_collections")}</p>
           <button className="subtle" onClick={() => props.onSearch("")}>
             Clear search
           </button>
@@ -1656,6 +1658,7 @@ type RecordsViewProps = {
 };
 
 function RecordsView(props: RecordsViewProps) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(props.query);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const selectedSet = useMemo(() => new Set(props.selectedIds), [props.selectedIds]);
@@ -1674,7 +1677,7 @@ function RecordsView(props: RecordsViewProps) {
     <section className="records-page">
       <header className="page-header records-page-header">
         <nav className="breadcrumbs" aria-label="Breadcrumb">
-          <span>Collections</span>
+          <span>{t("nav.collections")}</span>
           <span title={props.collection.name}>{props.collection.name}</span>
         </nav>
         <div className="page-header-secondary-btns">
@@ -1689,7 +1692,7 @@ function RecordsView(props: RecordsViewProps) {
           <div className="page-header-primary-btns">
             <button className="primary new-record-btn" onClick={props.onNew}>
               <Plus size={16} />
-              <span>New record</span>
+              <span>{t("actions.add_record")}</span>
             </button>
           </div>
         )}
@@ -1748,7 +1751,7 @@ function RecordsView(props: RecordsViewProps) {
           {columnsOpen && (
             <div className="columns-popover">
               <div className="columns-popover-header">
-                <strong>Visible columns</strong>
+                <strong>{t("collections.visible_columns")}</strong>
                 <button className="icon-button tiny" onClick={props.onResetColumns} title="Reset columns" aria-label="Reset columns">
                   <RotateCcw size={14} />
                 </button>
@@ -1801,7 +1804,7 @@ function RecordsView(props: RecordsViewProps) {
               {props.columns.map((column) => (
                 <th key={column}>{column}</th>
               ))}
-              <th className="actions-col">Actions</th>
+              <th className="actions-col">{t("collections.actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1809,7 +1812,7 @@ function RecordsView(props: RecordsViewProps) {
               <tr>
                 <td className="empty-row" colSpan={props.columns.length + 2}>
                   <div className="empty-table-message">
-                    <strong>No records found.</strong>
+                    <strong>{t("collections.no_records")}</strong>
                     {!draft.filter && canCreateRecord && (
                       <button className="subtle" onClick={props.onNew}>
                         <Plus size={16} />
@@ -1934,20 +1937,21 @@ type SchemaViewProps = {
 };
 
 function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onDelete, onOAuthTest, onCopy }: SchemaViewProps) {
+  const { t } = useTranslation();
   const json = JSON.stringify(collection, null, 2);
   return (
     <section className="schema-layout">
       <div className="schema-summary">
         <div className="summary-row">
-          <span>ID</span>
+          <span>{t("collections.id")}</span>
           <code>{collection.id}</code>
         </div>
         <div className="summary-row">
-          <span>Type</span>
+          <span>{t("collections.type")}</span>
           <strong>{collection.type}</strong>
         </div>
         <div className="summary-row">
-          <span>System</span>
+          <span>{t("collections.system")}</span>
           <strong>{collection.system ? "true" : "false"}</strong>
         </div>
         <div className="schema-actions">
@@ -1970,32 +1974,32 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
         <div className="auth-methods-panel">
           <article className="auth-method-card">
             <header>
-              <strong>Password</strong>
+              <strong>{t("auth.password")}</strong>
               <span>{authMethods.password.enabled ? "enabled" : "disabled"}</span>
             </header>
             <p>{authMethods.password.identityFields.join(", ") || "none"}</p>
           </article>
           <article className="auth-method-card">
             <header>
-              <strong>OTP</strong>
+              <strong>{t("auth.otp")}</strong>
               <span>{authMethods.otp.enabled ? "enabled" : "disabled"}</span>
             </header>
             <p>{authMethods.otp.enabled ? `${authMethods.otp.duration}s window` : "No one-time passwords"}</p>
           </article>
           <article className="auth-method-card">
             <header>
-              <strong>MFA</strong>
+              <strong>{t("auth.mfa")}</strong>
               <span>{authMethods.mfa.enabled ? "enabled" : "disabled"}</span>
             </header>
             <p>{authMethods.mfa.enabled ? `${authMethods.mfa.duration}s challenge` : "No second factor"}</p>
           </article>
           <article className="auth-method-card auth-method-card-wide">
             <header>
-              <strong>OAuth2</strong>
+              <strong>{t("settings.oauth2")}</strong>
               <span>{authMethods.oauth2.enabled ? "enabled" : "disabled"}</span>
             </header>
             {authMethods.oauth2.providers.length === 0 ? (
-              <p>No providers configured</p>
+              <p>{t("settings.no_providers")}</p>
             ) : (
               <div className="provider-chip-list">
                 {authMethods.oauth2.providers.map((provider) => (
@@ -2027,10 +2031,10 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
               <span>{field.type}</span>
             </div>
             <div className="chips">
-              {field.required && <span>required</span>}
-              {field.unique && <span>unique</span>}
-              {field.hidden && <span>hidden</span>}
-              {field.protected && <span>protected</span>}
+              {field.required && <span>{t("collections.required")}</span>}
+              {field.unique && <span>{t("collections.unique")}</span>}
+              {field.hidden && <span>{t("collections.hidden")}</span>}
+              {field.protected && <span>{t("collections.protected")}</span>}
             </div>
           </article>
         ))}
@@ -2061,10 +2065,11 @@ type BackupViewProps = {
 };
 
 function SettingsPageHeader({ section, actions }: { section: string; actions?: ReactNode }) {
+  const { t } = useTranslation();
   return (
     <header className="page-header settings-page-header">
       <nav className="breadcrumbs" aria-label="Breadcrumb">
-        <span>Settings</span>
+        <span>{t("nav.settings")}</span>
         <span>{section}</span>
       </nav>
       {actions && <div className="page-header-primary-btns">{actions}</div>}
@@ -2073,6 +2078,7 @@ function SettingsPageHeader({ section, actions }: { section: string; actions?: R
 }
 
 function BackupView(props: BackupViewProps) {
+  const { t } = useTranslation();
   const [createOpen, setCreateOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
@@ -2157,7 +2163,7 @@ function BackupView(props: BackupViewProps) {
       <section className="surface backups-surface">
         <div className="backup-list-header">
           <div>
-            <p className="settings-intro">Backup and restore your PocketBase data</p>
+            <p className="settings-intro">{t("settings.backups_intro")}</p>
             <div className="backup-metrics">
               <span>{sortedBackups.length} backups</span>
               <span>{formatBytes(totalSize)} total</span>
@@ -2175,8 +2181,8 @@ function BackupView(props: BackupViewProps) {
             <article className="backup-list-item empty">
               <FileArchive size={20} />
               <div>
-                <strong>No backups found.</strong>
-                <span>Create a new backup or upload an existing ZIP archive.</span>
+                <strong>{t("settings.no_backups")}</strong>
+                <span>{t("settings.no_backups_desc")}</span>
               </div>
             </article>
           ) : (
@@ -2206,7 +2212,7 @@ function BackupView(props: BackupViewProps) {
 
       <section className="surface backup-options-surface">
         <button className="backup-options-toggle" type="button" onClick={() => setOptionsOpen((value) => !value)}>
-          <span>Backup options</span>
+          <span>{t("settings.backup_options")}</span>
           <ChevronRight className={optionsOpen ? "expanded" : ""} size={18} />
         </button>
         {optionsOpen && (
@@ -2225,8 +2231,8 @@ function BackupView(props: BackupViewProps) {
               <div className="settings-accordion-card settings-form-block">
                 <header>
                   <div>
-                    <strong>Schedule</strong>
-                    <span>By default the timezone is UTC.</span>
+                    <strong>{t("settings.schedule")}</strong>
+                    <span>{t("settings.schedule_utc")}</span>
                   </div>
                   <Clock3 size={18} />
                 </header>
@@ -2426,6 +2432,7 @@ type CronsViewProps = {
 };
 
 function CronsView(props: CronsViewProps) {
+  const { t } = useTranslation();
   const [runningCronId, setRunningCronId] = useState("");
   const sortedCrons = useMemo(() => [...props.crons].sort((left, right) => left.id.localeCompare(right.id)), [props.crons]);
 
@@ -2505,6 +2512,7 @@ type SettingsViewProps = {
 };
 
 function SettingsView(props: SettingsViewProps) {
+  const { t } = useTranslation();
   const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
   const meta = settingsObject(draftSettings, "meta");
   const logs = settingsObject(draftSettings, "logs");
@@ -3569,6 +3577,7 @@ type LogsViewProps = {
 };
 
 function LogsView(props: LogsViewProps) {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState<LogItem | null>(null);
   const total = props.logPage?.totalItems ?? props.logs.length;
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
@@ -3643,7 +3652,7 @@ function LogsView(props: LogsViewProps) {
               <th>URL</th>
               <th>Auth</th>
               <th>Exec</th>
-              <th className="actions-col">Actions</th>
+              <th className="actions-col">{t("collections.actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -3728,6 +3737,7 @@ type CollectionModalProps = {
 };
 
 function CollectionModal({ state, oauthProviders, onClose, onSubmit }: CollectionModalProps) {
+  const { t } = useTranslation();
   const collection = state.collection;
   const [name, setName] = useState(collection?.name ?? "");
   const [type, setType] = useState(collection?.type ?? "base");
@@ -4049,7 +4059,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
 
             <article className="auth-config-card">
               <header>
-                <strong>OTP</strong>
+                <strong>{t("auth.otp")}</strong>
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={otpEnabled} onChange={(event) => setOtpEnabled(event.target.checked)} />
@@ -4080,7 +4090,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
 
             <article className="auth-config-card">
               <header>
-                <strong>MFA</strong>
+                <strong>{t("auth.mfa")}</strong>
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={mfaEnabled} onChange={(event) => setMfaEnabled(event.target.checked)} />
@@ -4099,7 +4109,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
 
             <article className="auth-config-card auth-config-card-wide">
               <header>
-                <strong>OAuth2</strong>
+                <strong>{t("settings.oauth2")}</strong>
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} />
@@ -4563,6 +4573,7 @@ function OAuthResultModal({ result, onClose }: OAuthResultModalProps) {
 }
 
 function StatusPill({ health, loading }: { health: HealthResponse["data"] | null; loading: boolean }) {
+  const { t } = useTranslation();
   return (
     <span className={loading ? "status busy" : health ? "status ready" : "status offline"}>
       {loading ? "syncing" : health ? "online" : "offline"}
@@ -5031,6 +5042,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 export default App;
 export function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps) {
+  const { t } = useTranslation();
   const commonMeta = (
     <span className="record-field-meta">
       {field.type}
