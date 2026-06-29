@@ -1575,34 +1575,35 @@ function CollectionGroup(props: CollectionGroupProps) {
   );
 }
 
-const SETTINGS_NAV_GROUPS: Array<{
+const getSettingsNavGroups = (t: any): Array<{
   title: string;
   items: Array<{ view: ViewName; label: string; icon: LucideIcon }>;
-}> = [
+}> => [
   {
-    title: "Application",
+    title: t("settings.nav.application", "Application").toUpperCase(),
     items: [
-      { view: "settings", label: "General", icon: Settings },
-      { view: "mail", label: "Mail settings", icon: Mail },
-      { view: "storage", label: "File storage", icon: HardDrive }
+      { view: "settings", label: t("settings.nav.general", "General"), icon: Settings },
+      { view: "mail", label: t("settings.nav.mail", "Mail settings"), icon: Mail },
+      { view: "storage", label: t("settings.nav.storage", "File storage"), icon: HardDrive }
     ]
   },
   {
-    title: "System",
+    title: t("settings.nav.system", "System").toUpperCase(),
     items: [
-      { view: "backups", label: "Backups", icon: FileArchive },
-      { view: "crons", label: "Crons", icon: Clock3 },
-      { view: "export", label: "Export collections", icon: Download },
-      { view: "import", label: "Import collections", icon: Upload },
-      { view: "sql", label: "SQL console", icon: Code2 }
+      { view: "backups", label: t("settings.nav.backups", "Backups"), icon: FileArchive },
+      { view: "crons", label: t("settings.nav.crons", "Crons"), icon: Clock3 },
+      { view: "export", label: t("settings.nav.export", "Export collections"), icon: Download },
+      { view: "import", label: t("settings.nav.import", "Import collections"), icon: Upload },
+      { view: "sql", label: t("settings.nav.sql", "SQL console"), icon: Code2 }
     ]
   }
 ];
 
 function SettingsSidebar({ current, onSelect }: { current: ViewName; onSelect: (view: ViewName) => void }) {
+  const { t } = useTranslation();
   return (
     <aside className="sidebar settings-sidebar">
-      {SETTINGS_NAV_GROUPS.map((group) => (
+      {getSettingsNavGroups(t).map((group) => (
         <section className="sidebar-group" key={group.title}>
           <div className="sidebar-section-title">{group.title}</div>
           <nav className="settings-nav" aria-label={group.title}>

@@ -64,7 +64,19 @@
     "mail_intro": "Configure common settings for sending emails.",
     "smtp": "SMTP",
     "test_email": "Test email",
-    "test_email_desc": "Send a test auth email with the current mail configuration."
+    "test_email_desc": "Send a test auth email with the current mail configuration.",
+    "nav": {
+      "application": "Application",
+      "general": "General",
+      "mail": "Mail settings",
+      "storage": "File storage",
+      "system": "System",
+      "backups": "Backups",
+      "crons": "Crons",
+      "export": "Export collections",
+      "import": "Import collections",
+      "sql": "SQL console"
+    }
   },
   "auth": {
     "login": "Войти",

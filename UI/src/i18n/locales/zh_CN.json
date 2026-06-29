@@ -64,7 +64,19 @@
     "mail_intro": "Configure common settings for sending emails.",
     "smtp": "SMTP",
     "test_email": "Test email",
-    "test_email_desc": "Send a test auth email with the current mail configuration."
+    "test_email_desc": "Send a test auth email with the current mail configuration.",
+    "nav": {
+      "application": "应用配置",
+      "general": "常规设置",
+      "mail": "邮件设置",
+      "storage": "文件存储",
+      "system": "系统功能",
+      "backups": "数据备份",
+      "crons": "定时任务",
+      "export": "导出集合",
+      "import": "导入集合",
+      "sql": "SQL终端"
+    }
   },
   "auth": {
     "login": "登录",
