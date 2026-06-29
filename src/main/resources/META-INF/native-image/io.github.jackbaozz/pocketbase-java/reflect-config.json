@@ -6,18 +6,6 @@
     "allPublicMethods": true
   },
   {
-    "name": "io.github.jackbaozz.pocketbase.client.RecordList",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allPublicMethods": true
-  },
-  {
-    "name": "io.github.jackbaozz.pocketbase.client.PocketBaseError",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allPublicMethods": true
-  },
-  {
     "name": "io.github.jackbaozz.pocketbase.client.BatchResponse",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
@@ -30,45 +18,75 @@
     "allPublicMethods": true
   },
   {
+    "name": "io.github.jackbaozz.pocketbase.client.PocketBaseError",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.client.RecordList",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.Admin",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allPublicMethods": true
+  },
+  {
     "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema",
     "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
-  },
-  {
-    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$PasswordAuthConfig",
-    "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
-  },
-  {
-    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OtpConfig",
-    "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
+    "allPublicMethods": true,
+    "allDeclaredFields": true
   },
   {
     "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$MfaConfig",
     "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
+    "allPublicMethods": true,
+    "allDeclaredFields": true
   },
   {
     "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OAuth2Config",
     "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
+    "allPublicMethods": true,
+    "allDeclaredFields": true
   },
   {
     "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OAuth2ProviderConfig",
     "allDeclaredConstructors": true,
-    "allPublicFields": true,
-    "allPublicMethods": true
+    "allPublicMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$OtpConfig",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$PasswordAuthConfig",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.CollectionSchema$TokenConfig",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true
   },
   {
     "name": "io.github.jackbaozz.pocketbase.server.model.FieldSchema",
     "allDeclaredConstructors": true,
-    "allPublicFields": true,
+    "allPublicMethods": true,
+    "allDeclaredFields": true
+  },
+  {
+    "name": "io.github.jackbaozz.pocketbase.server.model.Record",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
     "allPublicMethods": true
   }
 ]
