@@ -693,6 +693,187 @@ h2 {
   min-height: var(--btnHeight);
 }
 
+.sort-field {
+  min-width: 0;
+}
+
+.sort-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compact-dropdown {
+  flex: 0 0 auto;
+}
+
+.compact-dropdown .dropdown-select-trigger {
+  padding-inline: 12px 9px;
+}
+
+.compact-dropdown .dropdown-select-value,
+.compact-dropdown .dropdown-select-placeholder {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.compact-dropdown .dropdown-select-menu {
+  width: max-content;
+  min-width: 100%;
+}
+
+.dropdown-select {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  color: var(--surfaceTxtColor);
+}
+
+.dropdown-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: var(--btnHeight);
+  padding: 0 var(--inputPadding);
+  border: 1px solid var(--inputBorderColor);
+  border-radius: var(--borderRadius);
+  background: var(--inputColor);
+  color: var(--surfaceTxtHintColor);
+  text-align: left;
+  font-weight: 400;
+  line-height: var(--smLineHeight);
+  cursor: pointer;
+}
+
+.dropdown-select-trigger:hover:not(:disabled),
+.dropdown-select.open .dropdown-select-trigger,
+.dropdown-select-trigger:focus-visible {
+  border-color: var(--inputFocusColor);
+  background: var(--surfaceColor);
+}
+
+.dropdown-select-trigger:focus-visible {
+  box-shadow: 0 0 0 3px rgba(16, 85, 201, 0.12);
+}
+
+.dropdown-select-value,
+.dropdown-select-placeholder {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-select-value {
+  color: var(--surfaceTxtColor);
+}
+
+.dropdown-select-placeholder {
+  color: var(--surfaceTxtDisabledColor);
+}
+
+.dropdown-select-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--surfaceTxtHintColor);
+  transition:
+    color 150ms,
+    transform 150ms;
+}
+
+.dropdown-select.open .dropdown-select-chevron {
+  color: var(--surfaceTxtColor);
+  transform: rotate(180deg);
+}
+
+.dropdown-select-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 90;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  min-width: 150px;
+  max-height: 330px;
+  margin: 0;
+  padding: 5px;
+  overflow: auto;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+  color: var(--surfaceTxtColor);
+  font-size: var(--fontSize);
+  font-weight: 400;
+  line-height: var(--smLineHeight);
+  text-align: left;
+  scrollbar-width: thin;
+}
+
+.dropdown-select-search {
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.dropdown-select-search input {
+  min-height: var(--smBtnHeight);
+  border: 0;
+  background: transparent;
+  padding: 0 8px;
+  box-shadow: none;
+}
+
+.dropdown-select-search input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dropdown-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: auto;
+  padding: 10px 12px;
+  border-radius: var(--borderRadius);
+  background: transparent;
+  color: inherit;
+  font-weight: 400;
+  line-height: var(--smLineHeight);
+  text-align: left;
+  word-break: break-word;
+  user-select: none;
+  transition: background 150ms;
+}
+
+.dropdown-select-option:hover:not(:disabled) {
+  background: var(--surfaceAlt1Color);
+}
+
+.dropdown-select-option.active {
+  background: var(--surfaceAlt2Color);
+}
+
+.dropdown-select-option.active:hover:not(:disabled) {
+  background: var(--surfaceAlt3Color);
+}
+
+.dropdown-select-option:focus-visible {
+  outline: 2px dotted var(--surfaceAlt3Color);
+}
+
+.dropdown-select-empty {
+  padding: 16px 12px;
+  color: var(--surfaceTxtHintColor);
+  text-align: center;
+}
+
 .page-footer {
   display: flex;
   flex-wrap: wrap;
@@ -909,7 +1090,7 @@ h2 {
 
 .records-searchbar-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(120px, 170px) 105px max-content max-content;
+  grid-template-columns: minmax(260px, 1fr) max-content max-content max-content max-content;
   align-items: end;
   gap: 10px;
   margin-bottom: var(--smSpacing);

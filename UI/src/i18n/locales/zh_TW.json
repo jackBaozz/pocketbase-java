@@ -270,9 +270,9 @@
     "columns_count": "{{shown}}/{{total}} 欄",
     "edit_collection_title": "編輯 {{name}}",
     "collection_type": "集合類型",
-    "type_base": "Base",
-    "type_view": "View",
-    "type_auth": "Auth",
+    "type_base": "基礎",
+    "type_view": "視圖",
+    "type_auth": "認證",
     "editor_tabs": "集合編輯標籤頁",
     "fields": "欄位",
     "configured_fields": "已配置 {{count}} 個欄位",
@@ -295,7 +295,12 @@
     "delete_rule": "刪除規則",
     "views": "集合視圖",
     "no_collection_selected": "未選擇集合",
-    "collection_settings": "集合設定"
+    "collection_settings": "集合設定",
+    "records": "紀錄",
+    "sort_field": "排序欄位",
+    "sort_direction": "排序方向",
+    "sort_asc": "升冪",
+    "sort_desc": "降冪"
   },
   "language": {
     "change": "切换语言"

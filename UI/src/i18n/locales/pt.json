@@ -271,8 +271,8 @@
     "edit_collection_title": "Editar {{name}}",
     "collection_type": "Tipo da coleção",
     "type_base": "Base",
-    "type_view": "View",
-    "type_auth": "Auth",
+    "type_view": "Visualização",
+    "type_auth": "Autenticação",
     "editor_tabs": "Abas do editor de coleção",
     "fields": "Campos",
     "configured_fields": "{{count}} campos configurados",
@@ -295,7 +295,12 @@
     "delete_rule": "Regra de exclusão",
     "views": "Visões da coleção",
     "no_collection_selected": "Nenhuma coleção selecionada",
-    "collection_settings": "Configurações da coleção"
+    "collection_settings": "Configurações da coleção",
+    "records": "Registros",
+    "sort_field": "Campo de ordenação",
+    "sort_direction": "Direção da ordenação",
+    "sort_asc": "Ascendente",
+    "sort_desc": "Descendente"
   },
   "language": {
     "change": "Change language"

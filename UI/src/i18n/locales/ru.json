@@ -270,9 +270,9 @@
     "columns_count": "{{shown}}/{{total}} столбцов",
     "edit_collection_title": "Редактировать {{name}}",
     "collection_type": "Тип коллекции",
-    "type_base": "Base",
-    "type_view": "View",
-    "type_auth": "Auth",
+    "type_base": "Базовая",
+    "type_view": "Представление",
+    "type_auth": "Авторизация",
     "editor_tabs": "Вкладки редактора коллекции",
     "fields": "Поля",
     "configured_fields": "Настроено полей: {{count}}",
@@ -295,7 +295,12 @@
     "delete_rule": "Правило удаления",
     "views": "Представления коллекции",
     "no_collection_selected": "Коллекция не выбрана",
-    "collection_settings": "Настройки коллекции"
+    "collection_settings": "Настройки коллекции",
+    "records": "Записи",
+    "sort_field": "Поле сортировки",
+    "sort_direction": "Направление сортировки",
+    "sort_asc": "По возрастанию",
+    "sort_desc": "По убыванию"
   },
   "language": {
     "change": "Change language"

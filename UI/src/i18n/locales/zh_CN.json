@@ -270,9 +270,9 @@
     "columns_count": "{{shown}}/{{total}} 列",
     "edit_collection_title": "编辑 {{name}}",
     "collection_type": "集合类型",
-    "type_base": "Base",
-    "type_view": "View",
-    "type_auth": "Auth",
+    "type_base": "基础",
+    "type_view": "视图",
+    "type_auth": "认证",
     "editor_tabs": "集合编辑标签页",
     "fields": "字段",
     "configured_fields": "已配置 {{count}} 个字段",
@@ -295,7 +295,12 @@
     "delete_rule": "删除规则",
     "views": "集合视图",
     "no_collection_selected": "未选择集合",
-    "collection_settings": "集合设置"
+    "collection_settings": "集合设置",
+    "records": "记录",
+    "sort_field": "排序字段",
+    "sort_direction": "排序方向",
+    "sort_asc": "升序",
+    "sort_desc": "降序"
   },
   "language": {
     "change": "切换语言"

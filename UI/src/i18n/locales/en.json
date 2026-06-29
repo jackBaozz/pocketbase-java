@@ -295,7 +295,12 @@
     "delete_rule": "Delete rule",
     "views": "Collection views",
     "no_collection_selected": "No collection selected",
-    "collection_settings": "Collection settings"
+    "collection_settings": "Collection settings",
+    "records": "Records",
+    "sort_field": "Sort field",
+    "sort_direction": "Sort direction",
+    "sort_asc": "Ascending",
+    "sort_desc": "Descending"
   },
   "language": {
     "change": "Change language"

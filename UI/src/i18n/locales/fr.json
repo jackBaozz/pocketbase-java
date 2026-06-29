@@ -272,7 +272,7 @@
     "collection_type": "Type de collection",
     "type_base": "Base",
     "type_view": "Vue",
-    "type_auth": "Auth",
+    "type_auth": "Authentification",
     "editor_tabs": "Onglets de l’éditeur de collection",
     "fields": "Champs",
     "configured_fields": "{{count}} champs configurés",
@@ -295,7 +295,12 @@
     "delete_rule": "Règle de suppression",
     "views": "Vues de collection",
     "no_collection_selected": "Aucune collection sélectionnée",
-    "collection_settings": "Réglages de collection"
+    "collection_settings": "Réglages de collection",
+    "records": "Enregistrements",
+    "sort_field": "Champ de tri",
+    "sort_direction": "Sens du tri",
+    "sort_asc": "Croissant",
+    "sort_desc": "Décroissant"
   },
   "language": {
     "change": "Change language"

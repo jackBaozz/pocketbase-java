@@ -38,6 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
 import type { TFunction } from "i18next";
 import { AuthActionPages } from "./AuthActionPages";
+import { DropdownSelect } from "./components/DropdownSelect";
 import { FieldEditor } from "./components/FieldEditor";
 
 import { useTranslation } from "react-i18next";
@@ -234,6 +235,8 @@ type QueryState = {
   sort: string;
   perPage: number;
 };
+
+type SortDirection = "asc" | "desc";
 
 type ViewName =
   | "records"
@@ -815,7 +818,7 @@ function App() {
       notify(id ? t("notifications.record_saved", "Record saved") : t("notifications.record_created", "Record created"));
       if (options.close !== false) {
         setRecordEditor(null);
-      } else {
+      } else if (id) {
         setRecordEditor({ record: saved });
       }
       await refreshRecords(selected.name);
@@ -1191,11 +1194,11 @@ function App() {
                 <div className="view-tabs" role="tablist" aria-label={t("collections.views", "Collection views")}>
                   <button className={view === "records" ? "active" : ""} onClick={() => navigateTo("records")}>
                     <Database size={16} />
-                    Records
+                    {t("collections.records", "Records")}
                   </button>
                   <button className={view === "schema" ? "active" : ""} onClick={() => navigateTo("schema")}>
                     <ListFilter size={16} />
-                    Schema
+                    {t("collections.schema", "Schema")}
                   </button>
                 </div>
               )}
@@ -1671,12 +1674,38 @@ function RecordsView(props: RecordsViewProps) {
   const allVisibleSelected =
     props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
   const canCreateRecord = props.collection.type !== "view";
+  const sortState = parseSortValue(draft.sort);
+  const sortableColumns = useMemo(() => {
+    const source = props.columns.length ? props.columns : props.allColumns;
+    const columns = source.filter((column) => column !== "expand");
+    return sortState.field && !columns.includes(sortState.field) ? [sortState.field, ...columns] : columns;
+  }, [props.allColumns, props.columns, sortState.field]);
+  const sortColumnOptions = useMemo(() => sortableColumns.map((column) => ({ value: column, label: column })), [sortableColumns]);
+  const sortDirectionOptions = useMemo(
+    () => [
+      { value: "asc" as SortDirection, label: t("collections.sort_asc", "Ascending") },
+      { value: "desc" as SortDirection, label: t("collections.sort_desc", "Descending") }
+    ],
+    [t]
+  );
+  const perPageOptions = useMemo(() => [25, 50, 100, 200].map((value) => ({ value, label: String(value) })), []);
+  const sortFieldWidth = useMemo(() => compactSelectWidth(sortableColumns), [sortableColumns]);
+  const sortDirectionWidth = compactSelectWidth(sortDirectionOptions.map((option) => String(option.label)));
+  const perPageWidth = compactSelectWidth(perPageOptions.map((option) => String(option.label)));
 
   useEffect(() => setDraft(props.query), [props.query]);
 
   function apply() {
     props.onQuery(draft);
     props.onApply(draft);
+  }
+
+  function updateSort(field: string, direction = sortState.direction) {
+    setDraft({ ...draft, sort: formatSortValue(field, direction) });
+  }
+
+  function updateSortDirection(direction: SortDirection) {
+    setDraft({ ...draft, sort: formatSortValue(sortState.field || sortableColumns[0] || "created", direction) });
   }
 
   return (
@@ -1722,28 +1751,41 @@ function RecordsView(props: RecordsViewProps) {
         </div>
         <label className="compact-field sort-field">
           {t("collections.sort", "Sort")}
-          <input
-            id="records-sort"
-            name="sort"
-            autoComplete="off"
-            value={draft.sort}
-            onChange={(event) => setDraft({ ...draft, sort: event.target.value })}
-          />
+          <span className="sort-controls">
+            <DropdownSelect
+              id="records-sort"
+              name="sort"
+              value={sortState.field}
+              options={sortColumnOptions}
+              onChange={updateSort}
+              ariaLabel={t("collections.sort_field", "Sort field")}
+              className="compact-dropdown"
+              style={{ width: sortFieldWidth }}
+            />
+            <DropdownSelect<SortDirection>
+              id="records-sort-direction"
+              name="sortDirection"
+              value={sortState.direction}
+              options={sortDirectionOptions}
+              onChange={updateSortDirection}
+              ariaLabel={t("collections.sort_direction", "Sort direction")}
+              className="compact-dropdown"
+              style={{ width: sortDirectionWidth }}
+            />
+          </span>
         </label>
         <label className="compact-field per-page-field">
           {t("collections.per_page", "Per page")}
-          <select
+          <DropdownSelect<number>
             id="records-per-page"
             name="perPage"
             value={draft.perPage}
-            onChange={(event) => setDraft({ ...draft, perPage: Number(event.target.value) })}
-          >
-            {[25, 50, 100, 200].map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
+            options={perPageOptions}
+            onChange={(value) => setDraft({ ...draft, perPage: value })}
+            ariaLabel={t("collections.per_page", "Per page")}
+            className="compact-dropdown"
+            style={{ width: perPageWidth }}
+          />
         </label>
         <button className="subtle apply-button" onClick={apply} disabled={props.loading}>
           <ListFilter size={16} />
@@ -4325,8 +4367,10 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
   const [files, setFiles] = useState<Record<string, File[]>>({});
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const editing = Boolean(state.record);
   const showTabs = Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
   const changed = JSON.stringify(payload) !== JSON.stringify(basePayload) || Object.values(files).some((items) => items.length > 0);
+  const canSubmit = !saving && (!editing || changed);
 
   useEffect(() => {
     if (!changed) return;
@@ -4389,6 +4433,16 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
       const parsedPayload = JSON.parse(json || "{}") as Record<string, unknown>;
       if (!isPlainObject(parsedPayload)) throw new Error(t("errors.record_payload_object", "Record payload must be an object."));
       await onSubmit(parsedPayload, files, { close });
+      if (!close && !editing) {
+        const nextPayload = recordEditorPayload(collection);
+        setBasePayload(nextPayload);
+        setPayload(nextPayload);
+        setJson(JSON.stringify(nextPayload, null, 2));
+        setFiles({});
+        localStorage.removeItem(draftKey);
+        setInitialDraft(null);
+        return;
+      }
       setBasePayload(parsedPayload);
       setPayload(parsedPayload);
       setFiles({});
@@ -4514,13 +4568,15 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
             {t("actions.reset_form", "Reset form")}
           </button>
           <span className="modal-actions-spacer" />
-          <button className="primary" type="submit" disabled={saving}>
+          <button className="primary" type="submit" disabled={!canSubmit}>
             <Save size={16} />
             {state.record ? t("actions.save_changes", "Save changes") : t("actions.create", "Create")}
           </button>
-          <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={saving}>
-            {t("actions.save_and_continue", "Save and continue")}
-          </button>
+          {!editing && (
+            <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={!canSubmit}>
+              {t("actions.save_and_continue", "Save and continue")}
+            </button>
+          )}
         </div>
       </form>
     </Modal>
@@ -5078,6 +5134,28 @@ function selectFieldOptions(field: FieldSchema) {
   const legacyValues = (field as FieldSchema & { values?: unknown }).values;
   const values = Array.isArray(legacyValues) ? legacyValues : field.options?.values;
   return Array.isArray(values) ? values.map(String) : [];
+}
+
+function parseSortValue(value: string): { field: string; direction: SortDirection } {
+  const first = (value || "-created").split(",")[0]?.trim() || "-created";
+  if (first.startsWith("-")) {
+    return { field: first.slice(1) || "created", direction: "desc" };
+  }
+  return { field: first || "created", direction: "asc" };
+}
+
+function formatSortValue(field: string, direction: SortDirection) {
+  const cleanField = field.trim() || "created";
+  return direction === "desc" ? `-${cleanField}` : cleanField;
+}
+
+function compactSelectWidth(labels: string[]) {
+  const maxLength = Math.max(2, ...labels.map((label) => Array.from(label).reduce((total, char) => total + charDisplayUnits(char), 0)));
+  return `calc(${maxLength}ch + 54px)`;
+}
+
+function charDisplayUnits(char: string) {
+  return /[\u2E80-\u9FFF\uAC00-\uD7AF\u3040-\u30FF\uFF00-\uFFEF]/.test(char) ? 2 : 1;
 }
 
 function errorMessage(error: unknown) {

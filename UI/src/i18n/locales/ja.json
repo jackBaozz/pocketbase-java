@@ -270,9 +270,9 @@
     "columns_count": "{{shown}}/{{total}} 列",
     "edit_collection_title": "{{name}} を編集",
     "collection_type": "コレクションタイプ",
-    "type_base": "Base",
-    "type_view": "View",
-    "type_auth": "Auth",
+    "type_base": "ベース",
+    "type_view": "ビュー",
+    "type_auth": "認証",
     "editor_tabs": "コレクションエディタータブ",
     "fields": "フィールド",
     "configured_fields": "{{count}} フィールド設定済み",
@@ -295,7 +295,12 @@
     "delete_rule": "削除ルール",
     "views": "コレクションビュー",
     "no_collection_selected": "コレクションが選択されていません",
-    "collection_settings": "コレクション設定"
+    "collection_settings": "コレクション設定",
+    "records": "レコード",
+    "sort_field": "並び替えフィールド",
+    "sort_direction": "並び順",
+    "sort_asc": "昇順",
+    "sort_desc": "降順"
   },
   "language": {
     "change": "Change language"

@@ -183,8 +183,8 @@
     "columns_count": "{{shown}}/{{total}} Spalten",
     "edit_collection_title": "{{name}} bearbeiten",
     "collection_type": "Sammlungstyp",
-    "type_base": "Base",
-    "type_view": "View",
+    "type_base": "Basis",
+    "type_view": "Ansicht",
     "type_auth": "Auth",
     "editor_tabs": "Sammlungseditor-Tabs",
     "fields": "Felder",
@@ -208,7 +208,12 @@
     "delete_rule": "Löschregel",
     "views": "Sammlungsansichten",
     "no_collection_selected": "Keine Sammlung ausgewählt",
-    "collection_settings": "Sammlungseinstellungen"
+    "collection_settings": "Sammlungseinstellungen",
+    "records": "Datensätze",
+    "sort_field": "Sortierfeld",
+    "sort_direction": "Sortierrichtung",
+    "sort_asc": "Aufsteigend",
+    "sort_desc": "Absteigend"
   },
   "fields": {
     "presentable": "Anzeigbar",
