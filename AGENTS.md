@@ -48,3 +48,9 @@
 - `SDP2-C01` ~ `SDP2-C06` 已开始抽离共享语义：
   * 已新增 `FieldValidator`、`FilterToSqlCompiler` 和 `RecordProcessor`。
   * 字段验证、关系校验、filter SQL 编译、expand/fields 仍需要更多官方 fixture 覆盖后才能标记完成。
+
+## 🛠️ 构建与编译 (Build Commands)
+
+- **普通打包**：`mvn clean package`
+- **Native 编译 (GraalVM)**：运行 `sh/build-native.sh`。该脚本会自动寻找 `mise` 中的 `25-graalvm`，并使用 GraalVM Native Image 进行编译，跳过单元测试（可在命令行传入其他参数覆盖）。
+
