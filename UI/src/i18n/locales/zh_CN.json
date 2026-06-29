@@ -17,7 +17,9 @@
     "search": "搜索",
     "refresh": "刷新",
     "create": "创建",
-    "update": "更新"
+    "update": "更新",
+    "copy_json": "复制 JSON",
+    "download_json": "下载为 JSON"
   },
   "common": {
     "loading": "加载中...",

@@ -17,7 +17,9 @@
     "search": "Search",
     "refresh": "Refresh",
     "create": "Create",
-    "update": "Update"
+    "update": "Update",
+    "copy_json": "Copy JSON",
+    "download_json": "Download as JSON"
   },
   "common": {
     "loading": "Loading...",

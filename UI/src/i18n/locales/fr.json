@@ -17,7 +17,9 @@
     "search": "Rechercher",
     "refresh": "Actualiser",
     "create": "Créer",
-    "update": "Mettre à jour"
+    "update": "Mettre à jour",
+    "copy_json": "Copier JSON",
+    "download_json": "Télécharger en JSON"
   },
   "common": {
     "loading": "Chargement...",
@@ -67,15 +69,15 @@
     "test_email_desc": "Send a test auth email with the current mail configuration.",
     "nav": {
       "application": "Application",
-      "general": "General",
-      "mail": "Mail settings",
-      "storage": "File storage",
-      "system": "System",
-      "backups": "Backups",
-      "crons": "Crons",
-      "export": "Export collections",
-      "import": "Import collections",
-      "sql": "SQL console"
+      "general": "Général",
+      "mail": "Paramètres d'e-mail",
+      "storage": "Stockage de fichiers",
+      "system": "Système",
+      "backups": "Sauvegardes",
+      "crons": "Tâches Cron",
+      "export": "Exporter des collections",
+      "import": "Importer des collections",
+      "sql": "Console SQL"
     }
   },
   "auth": {
