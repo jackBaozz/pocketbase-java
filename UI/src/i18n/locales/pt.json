@@ -7,6 +7,12 @@
     "open_collections": "Abrir coleções",
     "primary": "Principal"
   },
+  "theme": {
+    "change": "Alterar tema",
+    "light": "Claro",
+    "dark": "Escuro",
+    "auto": "Auto"
+  },
   "actions": {
     "add_record": "Adicionar Registro",
     "new_collection": "Nova Coleção",

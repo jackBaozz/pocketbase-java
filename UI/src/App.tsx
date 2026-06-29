@@ -17,6 +17,8 @@ import {
   ListFilter,
   LogOut,
   Mail,
+  Minus,
+  Moon,
   Pin,
   PinOff,
   Plus,
@@ -29,6 +31,7 @@ import {
   Settings,
   Shield,
   Square,
+  Sun,
   Trash2,
   Upload,
   X
@@ -237,6 +240,8 @@ type QueryState = {
 };
 
 type SortDirection = "asc" | "desc";
+type ThemeMode = "light" | "dark" | "auto";
+type ResolvedTheme = "light" | "dark";
 
 type ViewName =
   | "records"
@@ -339,6 +344,7 @@ type ApiOptions = Omit<RequestInit, "body"> & {
 const TOKEN_KEY = "pbj_token";
 const PINNED_COLLECTIONS_KEY = "pbj_pinned_collections";
 const HIDDEN_COLUMNS_KEY = "pbj_hidden_columns";
+const THEME_KEY = "pbj_theme";
 const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
@@ -379,6 +385,8 @@ function App() {
   const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
   const [oauthResult, setOauthResult] = useState<OAuthResultState | null>(null);
   const [oauthTestingProvider, setOauthTestingProvider] = useState<string>("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readThemeMode);
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveThemeMode(readThemeMode()));
   const [pinnedCollectionNames, setPinnedCollectionNames] = useState<string[]>(() =>
     readStringArray(PINNED_COLLECTIONS_KEY)
   );
@@ -609,6 +617,23 @@ function App() {
   useEffect(() => {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(hiddenColumnsByCollection));
   }, [hiddenColumnsByCollection]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const nextResolved = resolveThemeMode(themeMode);
+      setResolvedTheme(nextResolved);
+      document.documentElement.dataset.theme = nextResolved;
+      document.documentElement.dataset.themeMode = themeMode;
+    };
+
+    applyTheme();
+    if (themeMode === "auto" && media) {
+      media.addEventListener("change", applyTheme);
+      return () => media.removeEventListener("change", applyTheme);
+    }
+    return undefined;
+  }, [themeMode]);
 
   useEffect(() => {
     setSelectedRecordIds([]);
@@ -1137,6 +1162,10 @@ function App() {
         </nav>
         <div className="header-tools">
           <LanguageSelector />
+          <ThemeSelector mode={themeMode} resolvedTheme={resolvedTheme} onChange={(nextMode) => {
+            setThemeMode(nextMode);
+            localStorage.setItem(THEME_KEY, nextMode);
+          }} />
           <StatusPill health={health} loading={loading} />
           <button className="icon-button header-icon" onClick={refreshAll} title={t("actions.refresh")} aria-label={t("actions.refresh")}>
             <RefreshCw size={17} />
@@ -4681,6 +4710,71 @@ function StatusPill({ health, loading }: { health: HealthResponse["data"] | null
   );
 }
 
+function ThemeSelector({ mode, resolvedTheme, onChange }: { mode: ThemeMode; resolvedTheme: ResolvedTheme; onChange: (mode: ThemeMode) => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const TriggerIcon = mode === "auto" ? (resolvedTheme === "dark" ? Moon : Sun) : mode === "dark" ? Moon : Sun;
+  const options: Array<{ value: ThemeMode; label: string; icon: LucideIcon }> = [
+    { value: "light", label: t("theme.light", "Light"), icon: Sun },
+    { value: "dark", label: t("theme.dark", "Dark"), icon: Moon },
+    { value: "auto", label: t("theme.auto", "Auto"), icon: Minus }
+  ];
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!dropdownRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div className="theme-selector" ref={dropdownRef}>
+      <button
+        type="button"
+        className={open ? "icon-button header-icon active" : "icon-button header-icon"}
+        title={t("theme.change", "Change theme")}
+        aria-label={t("theme.change", "Change theme")}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <TriggerIcon size={17} />
+      </button>
+
+      {open && (
+        <div className="theme-menu" role="menu">
+          {options.map((option) => {
+            const Icon = option.icon;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={mode === option.value}
+                className={mode === option.value ? "active" : ""}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <Icon size={15} />
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmptyState({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
   return (
     <section className="empty-state">
@@ -5028,6 +5122,18 @@ function setNestedSetting(target: Record<string, unknown>, path: string[], value
 
 function truthyText(value: unknown) {
   return value ? "enabled" : "disabled";
+}
+
+function readThemeMode(): ThemeMode {
+  const value = localStorage.getItem(THEME_KEY);
+  return value === "light" || value === "dark" || value === "auto" ? value : "auto";
+}
+
+function resolveThemeMode(mode: ThemeMode): ResolvedTheme {
+  if (mode === "auto") {
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+  }
+  return mode;
 }
 
 function readStringArray(key: string) {

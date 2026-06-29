@@ -7,6 +7,12 @@
     "open_collections": "Открыть коллекции",
     "primary": "Основная навигация"
   },
+  "theme": {
+    "change": "Сменить тему",
+    "light": "Светлая",
+    "dark": "Тёмная",
+    "auto": "Авто"
+  },
   "actions": {
     "add_record": "Добавить запись",
     "new_collection": "Новая коллекция",

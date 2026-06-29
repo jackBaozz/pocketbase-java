@@ -46,6 +46,40 @@
   accent-color: var(--primaryColor);
 }
 
+:root[data-theme="dark"] {
+  --primaryColor: #171a20;
+  --primaryAlt1Color: #232832;
+  --primaryAlt2Color: #2c333e;
+  --primaryTxtColor: #f7f9fb;
+  --primaryTxtHintColor: rgba(247, 249, 251, 0.68);
+  --secondaryColor: #272d35;
+  --secondaryAlt1Color: #303842;
+  --secondaryAlt2Color: #3a434e;
+  --accentColor: #4f8cff;
+  --infoColor: #6d9cff;
+  --successColor: #35c486;
+  --warningColor: #f0954c;
+  --dangerColor: #ff6680;
+  --surfaceColor: #15181d;
+  --surfaceAlt1Color: #1b1f25;
+  --surfaceAlt2Color: #252b33;
+  --surfaceAlt3Color: #303842;
+  --surfaceAlt4Color: #3c4652;
+  --surfaceTxtColor: #f1f4f7;
+  --surfaceTxtHintColor: #a9b2bd;
+  --surfaceTxtDisabledColor: #6f7a86;
+  --surfaceAccentColor: #18355f;
+  --surfaceSuccessColor: #153d2d;
+  --surfaceWarningColor: #442b1b;
+  --surfaceDangerColor: #4b1e2a;
+  --inputColor: var(--surfaceAlt2Color);
+  --inputFocusColor: var(--surfaceAlt3Color);
+  --inputBorderColor: var(--surfaceAlt4Color);
+  --shadow: 0 10px 18px -8px rgba(0, 0, 0, 0.55);
+  --modalOverlayColor: rgba(0, 0, 0, 0.48);
+  color-scheme: dark;
+}
+
 *,
 *::before,
 *::after {
@@ -305,6 +339,50 @@ h2 {
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
+}
+
+.theme-selector {
+  position: relative;
+}
+
+.theme-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 120;
+  display: inline-flex;
+  min-width: 112px;
+  padding: 5px;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+  color: var(--surfaceTxtColor);
+}
+
+.theme-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: var(--borderRadius);
+  color: var(--surfaceTxtColor);
+  font-weight: 500;
+  line-height: var(--smLineHeight);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.theme-menu button:hover,
+.theme-menu button:focus-visible,
+.theme-menu button.active {
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
 }
 
 .app-body {
@@ -920,7 +998,8 @@ h2 {
 }
 
 .header-icon:hover:not(:disabled),
-.header-icon:focus-visible {
+.header-icon:focus-visible,
+.header-icon.active {
   color: var(--primaryTxtColor);
   background: var(--primaryAlt1Color);
 }

@@ -7,6 +7,12 @@
     "open_collections": "開啟集合",
     "primary": "主導覽"
   },
+  "theme": {
+    "change": "切換主題",
+    "light": "淺色",
+    "dark": "深色",
+    "auto": "自動"
+  },
   "actions": {
     "add_record": "新增紀錄",
     "new_collection": "建立集合",

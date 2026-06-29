@@ -10,6 +10,12 @@
     "open_collections": "Sammlungen öffnen",
     "primary": "Hauptnavigation"
   },
+  "theme": {
+    "change": "Design ändern",
+    "light": "Hell",
+    "dark": "Dunkel",
+    "auto": "Auto"
+  },
   "common": {
     "loading": "Wird geladen...",
     "error": "Fehler",

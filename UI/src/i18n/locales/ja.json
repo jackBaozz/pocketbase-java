@@ -7,6 +7,12 @@
     "open_collections": "コレクションを開く",
     "primary": "メイン"
   },
+  "theme": {
+    "change": "テーマを変更",
+    "light": "ライト",
+    "dark": "ダーク",
+    "auto": "自動"
+  },
   "actions": {
     "add_record": "レコード追加",
     "new_collection": "新規コレクション",
