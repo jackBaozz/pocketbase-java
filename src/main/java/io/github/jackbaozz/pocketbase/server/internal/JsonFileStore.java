@@ -2917,9 +2917,33 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         for (CollectionSchema collection : collectionsByName.values()) {
             Path file = recordsFile(collection);
             if (Files.exists(file)) {
-                recordsByCollectionId.put(collection.id, mapper.readValue(file.toFile(), RECORD_LIST));
+                List<Map<String, Object>> recordsList = new ArrayList<>();
+                try (java.io.BufferedReader reader = Files.newBufferedReader(file)) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (!line.trim().isEmpty()) {
+                            recordsList.add(mapper.readValue(line, STRING_OBJECT_MAP));
+                        }
+                    }
+                } catch (Exception e) {
+                    try {
+                        recordsList = mapper.readValue(file.toFile(), RECORD_LIST);
+                    } catch (IOException ex) {
+                        throw new IllegalStateException("Failed to read records file: " + file, ex);
+                    }
+                }
+                recordsByCollectionId.put(collection.id, recordsList);
             } else {
-                recordsByCollectionId.put(collection.id, new ArrayList<>());
+                Path legacyFile = recordsDir.resolve(collection.id + ".json");
+                if (Files.exists(legacyFile)) {
+                    try {
+                        recordsByCollectionId.put(collection.id, mapper.readValue(legacyFile.toFile(), RECORD_LIST));
+                    } catch (IOException e) {
+                        recordsByCollectionId.put(collection.id, new ArrayList<>());
+                    }
+                } else {
+                    recordsByCollectionId.put(collection.id, new ArrayList<>());
+                }
             }
             records(collection).forEach(record -> {
                 if ("auth".equals(collection.type) && textSetting(record.get("tokenKey")).isBlank()) {
@@ -4850,14 +4874,19 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private void saveRecords(CollectionSchema collection) {
         try {
             Files.createDirectories(recordsDir);
-            mapper.writerWithDefaultPrettyPrinter().writeValue(recordsFile(collection).toFile(), records(collection));
+            try (java.io.BufferedWriter writer = Files.newBufferedWriter(recordsFile(collection))) {
+                for (Map<String, Object> record : records(collection)) {
+                    writer.write(mapper.writeValueAsString(record));
+                    writer.newLine();
+                }
+            }
         } catch (IOException e) {
             throw new IllegalStateException("failed to save records", e);
         }
     }
 
     private Path recordsFile(CollectionSchema collection) {
-        return recordsDir.resolve(collection.id + ".json");
+        return recordsDir.resolve(collection.id + ".jsonl");
     }
 
     private Path collectionStorageDir(CollectionSchema collection) {
