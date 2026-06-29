@@ -10,6 +10,7 @@ import es from './locales/es.json';
 import pt from './locales/pt.json';
 import fr from './locales/fr.json';
 import ru from './locales/ru.json';
+import de from './locales/de.json';
 
 const resources = {
   en: { translation: en },
@@ -20,6 +21,7 @@ const resources = {
   pt: { translation: pt },
   fr: { translation: fr },
   ru: { translation: ru },
+  de: { translation: de },
 };
 
 export const LANGUAGES = [
@@ -31,6 +33,7 @@ export const LANGUAGES = [
   { code: 'pt', label: 'Português' },
   { code: 'fr', label: 'Français' },
   { code: 'ru', label: 'Русский' },
+  { code: 'de', label: 'Deutsch' },
 ];
 
 i18n

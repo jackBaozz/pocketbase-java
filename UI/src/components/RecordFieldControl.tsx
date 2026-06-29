@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from "react-i18next";
 // Types derived from App.tsx
 type FieldSchema = {
   id?: string;
@@ -52,11 +53,12 @@ type RecordFieldControlProps = {
 };
 
 export function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps) {
+  const { t } = useTranslation();
   const commonMeta = (
     <span className="record-field-meta">
       {field.type}
-      {field.required ? " / required" : ""}
-      {field.unique ? " / unique" : ""}
+      {field.required ? ` / ${t("collections.required", "required")}` : ""}
+      {field.unique ? ` / ${t("collections.unique", "unique")}` : ""}
     </span>
   );
 
@@ -204,7 +206,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         >
-          <option value="">-- Select --</option>
+          <option value="">{t("fields.select_placeholder", "-- Select --")}</option>
           {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
         </select>
       </label>

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 const DEFAULT_COLLECTION = "users";
 
@@ -12,8 +14,8 @@ type RouteKind =
 
 type AuthActionRoute = {
   kind: RouteKind;
-  title: string;
-  description: string;
+  titleKey: string;
+  descriptionKey: string;
   collection: string;
   token?: string;
 };
@@ -24,6 +26,7 @@ type StatusState = {
 } | null;
 
 export function AuthActionPages() {
+  const { t } = useTranslation();
   const [hash, setHash] = useState(window.location.hash);
   const route = useMemo(() => parseAuthActionRoute(hash), [hash]);
   const [collection, setCollection] = useState(route.collection);
@@ -74,16 +77,16 @@ export function AuthActionPages() {
         route.kind === "confirmEmailChange";
 
       if (needsEmail && !cleanEmail) {
-        throw new Error("Email is required.");
+        throw new Error(t("auth_actions.errors.email_required", "Email is required."));
       }
       if (needsPassword && !password) {
-        throw new Error("Password is required.");
+        throw new Error(t("auth_actions.errors.password_required", "Password is required."));
       }
       if (needsPasswordConfirm && password !== passwordConfirm) {
-        throw new Error("Passwords do not match.");
+        throw new Error(t("auth_actions.errors.passwords_mismatch", "Passwords do not match."));
       }
       if (needsToken && !cleanToken) {
-        throw new Error("Token is required.");
+        throw new Error(t("auth_actions.errors.token_required", "Token is required."));
       }
 
       switch (route.kind) {
@@ -92,13 +95,13 @@ export function AuthActionPages() {
             email: cleanEmail,
             password
           });
-          setStatus({ kind: "success", message: "Superuser created." });
+          setStatus({ kind: "success", message: t("auth_actions.success.superuser_created", "Superuser created.") });
           break;
         case "requestPasswordReset":
           await postJson(collectionActionPath(cleanCollection, "request-password-reset"), {
             email: cleanEmail
           });
-          setStatus({ kind: "success", message: "Password reset request accepted." });
+          setStatus({ kind: "success", message: t("auth_actions.success.password_reset_requested", "Password reset request accepted.") });
           break;
         case "confirmPasswordReset":
           await postJson(collectionActionPath(cleanCollection, "confirm-password-reset"), {
@@ -106,23 +109,23 @@ export function AuthActionPages() {
             password,
             passwordConfirm
           });
-          setStatus({ kind: "success", message: "Password reset confirmed." });
+          setStatus({ kind: "success", message: t("auth_actions.success.password_reset_confirmed", "Password reset confirmed.") });
           break;
         case "confirmVerification":
           await postJson(collectionActionPath(cleanCollection, "confirm-verification"), {
             token: cleanToken
           });
-          setStatus({ kind: "success", message: "Email verified." });
+          setStatus({ kind: "success", message: t("auth_actions.success.email_verified", "Email verified.") });
           break;
         case "confirmEmailChange":
           await postJson(collectionActionPath(cleanCollection, "confirm-email-change"), {
             token: cleanToken,
             password
           });
-          setStatus({ kind: "success", message: "Email change confirmed." });
+          setStatus({ kind: "success", message: t("auth_actions.success.email_change_confirmed", "Email change confirmed.") });
           break;
         default:
-          throw new Error("Unsupported auth action.");
+          throw new Error(t("auth_actions.errors.unsupported", "Unsupported auth action."));
       }
     } catch (error) {
       setStatus({ kind: "error", message: errorMessage(error) });
@@ -136,19 +139,19 @@ export function AuthActionPages() {
       <main className="auth-layout">
         <section className="auth-copy">
           <div>
-            <h2>{route.title}</h2>
-            <p className="settings-intro">{route.description}</p>
+            <h2>{t(route.titleKey)}</h2>
+            <p className="settings-intro">{t(route.descriptionKey)}</p>
           </div>
           <dl>
             {needsCollection ? (
               <div>
-                <dt>Collection</dt>
+                <dt>{t("common.collection", "Collection")}</dt>
                 <dd>{collection || DEFAULT_COLLECTION}</dd>
               </div>
             ) : null}
             {route.token ? (
               <div>
-                <dt>Token</dt>
+                <dt>{t("common.token", "Token")}</dt>
                 <dd>{route.token}</dd>
               </div>
             ) : null}
@@ -158,7 +161,7 @@ export function AuthActionPages() {
         <form className="auth-form" onSubmit={handleSubmit}>
           {needsCollection ? (
             <label>
-              Collection
+              {t("common.collection", "Collection")}
               <input
                 value={collection}
                 onChange={(event) => setCollection(event.target.value)}
@@ -171,7 +174,7 @@ export function AuthActionPages() {
 
           {needsEmail ? (
             <label>
-              Email
+              {t("auth.email", "Email")}
               <input
                 type="email"
                 value={email}
@@ -184,7 +187,7 @@ export function AuthActionPages() {
 
           {needsPassword ? (
             <label>
-              {route.kind === "confirmEmailChange" ? "Current password" : "Password"}
+              {route.kind === "confirmEmailChange" ? t("auth.current_password", "Current password") : t("auth.password", "Password")}
               <input
                 type="password"
                 value={password}
@@ -197,7 +200,7 @@ export function AuthActionPages() {
 
           {needsPasswordConfirm ? (
             <label>
-              Confirm password
+              {t("auth.confirm_password", "Confirm password")}
               <input
                 type="password"
                 value={passwordConfirm}
@@ -222,10 +225,10 @@ export function AuthActionPages() {
                 window.location.hash = "";
               }}
             >
-              Back
+              {t("actions.back", "Back")}
             </button>
             <button type="submit" className="primary submit" disabled={busy}>
-              {busy ? "Submitting..." : submitLabel(route.kind)}
+              {busy ? t("common.submitting", "Submitting...") : submitLabel(route.kind, t)}
             </button>
           </div>
         </form>
@@ -241,8 +244,8 @@ function parseAuthActionRoute(hash: string): AuthActionRoute {
   if (path.startsWith("#/pbinstall/")) {
     return {
       kind: "install",
-      title: "Install PocketBase",
-      description: "Create the first superuser account for this server.",
+      titleKey: "auth_actions.install.title",
+      descriptionKey: "auth_actions.install.description",
       collection,
       token: decodeHashPart(path.slice("#/pbinstall/".length))
     };
@@ -250,16 +253,16 @@ function parseAuthActionRoute(hash: string): AuthActionRoute {
   if (path === "#/request-password-reset" || path === "#/request-password-reset/") {
     return {
       kind: "requestPasswordReset",
-      title: "Request password reset",
-      description: "Send a password reset request for an auth collection.",
+      titleKey: "auth_actions.request_password_reset.title",
+      descriptionKey: "auth_actions.request_password_reset.description",
       collection
     };
   }
   if (path.startsWith("#/auth/confirm-password-reset/")) {
     return {
       kind: "confirmPasswordReset",
-      title: "Confirm password reset",
-      description: "Set a new password using the reset token.",
+      titleKey: "auth_actions.confirm_password_reset.title",
+      descriptionKey: "auth_actions.confirm_password_reset.description",
       collection,
       token: decodeHashPart(path.slice("#/auth/confirm-password-reset/".length))
     };
@@ -267,8 +270,8 @@ function parseAuthActionRoute(hash: string): AuthActionRoute {
   if (path.startsWith("#/auth/confirm-verification/")) {
     return {
       kind: "confirmVerification",
-      title: "Confirm verification",
-      description: "Verify the auth record using the email token.",
+      titleKey: "auth_actions.confirm_verification.title",
+      descriptionKey: "auth_actions.confirm_verification.description",
       collection,
       token: decodeHashPart(path.slice("#/auth/confirm-verification/".length))
     };
@@ -276,16 +279,16 @@ function parseAuthActionRoute(hash: string): AuthActionRoute {
   if (path.startsWith("#/auth/confirm-email-change/")) {
     return {
       kind: "confirmEmailChange",
-      title: "Confirm email change",
-      description: "Confirm the email change with the current account password.",
+      titleKey: "auth_actions.confirm_email_change.title",
+      descriptionKey: "auth_actions.confirm_email_change.description",
       collection,
       token: decodeHashPart(path.slice("#/auth/confirm-email-change/".length))
     };
   }
   return {
     kind: "unknown",
-    title: "",
-    description: "",
+    titleKey: "",
+    descriptionKey: "",
     collection
   };
 }
@@ -314,20 +317,20 @@ function collectionActionPath(collection: string, action: string): string {
   return `/api/collections/${encodeURIComponent(name)}/${action}`;
 }
 
-function submitLabel(kind: RouteKind): string {
+function submitLabel(kind: RouteKind, t: TFunction): string {
   switch (kind) {
     case "install":
-      return "Create superuser";
+      return t("actions.create_superuser", "Create superuser");
     case "requestPasswordReset":
-      return "Send request";
+      return t("actions.send_request", "Send request");
     case "confirmPasswordReset":
-      return "Reset password";
+      return t("actions.reset_password", "Reset password");
     case "confirmVerification":
-      return "Verify";
+      return t("actions.verify", "Verify");
     case "confirmEmailChange":
-      return "Confirm change";
+      return t("actions.confirm_change", "Confirm change");
     default:
-      return "Submit";
+      return t("actions.submit", "Submit");
   }
 }
 

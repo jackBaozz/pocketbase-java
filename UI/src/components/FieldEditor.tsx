@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Edit3, Check, X, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 // Types derived from App.tsx
 type FieldSchema = {
@@ -31,6 +32,7 @@ type FieldEditorProps = {
 };
 
 export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorProps) {
+  const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<FieldSchema>(field);
 
@@ -50,7 +52,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
         <div className="field-edit-form">
           <div className="field-edit-row">
             <label>
-              Name
+              {t("common.name", "Name")}
               <input
                 type="text"
                 value={editState.name}
@@ -59,7 +61,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
               />
             </label>
             <label>
-              Type
+              {t("common.type", "Type")}
               <select
                 value={editState.type}
                 onChange={(e) => setEditState({ ...editState, type: e.target.value })}
@@ -79,7 +81,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
                 checked={editState.required ?? false} 
                 onChange={(e) => setEditState({ ...editState, required: e.target.checked })}
               />
-              Required
+              {t("collections.required", "Required")}
             </label>
             <label className="check-row">
               <input 
@@ -87,7 +89,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
                 checked={editState.unique ?? false} 
                 onChange={(e) => setEditState({ ...editState, unique: e.target.checked })}
               />
-              Unique
+              {t("collections.unique", "Unique")}
             </label>
             <label className="check-row">
               <input 
@@ -95,7 +97,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
                 checked={editState.hidden ?? false} 
                 onChange={(e) => setEditState({ ...editState, hidden: e.target.checked })}
               />
-              Hidden
+              {t("collections.hidden", "Hidden")}
             </label>
             <label className="check-row">
               <input 
@@ -103,14 +105,14 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
                 checked={editState.presentable ?? false} 
                 onChange={(e) => setEditState({ ...editState, presentable: e.target.checked })}
               />
-              Presentable
+              {t("fields.presentable", "Presentable")}
             </label>
           </div>
           
           {/* Type specific options could go here */}
           {editState.type === 'file' && (
              <div className="field-type-specific-options">
-               <label>Max size (bytes)
+               <label>{t("fields.max_size_bytes", "Max size (bytes)")}
                  <input type="number" value={editState.maxSize || ''} onChange={(e) => setEditState({...editState, maxSize: parseInt(e.target.value) || undefined})} />
                </label>
              </div>
@@ -118,10 +120,10 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
 
           <div className="field-edit-actions">
             <button type="button" className="primary" onClick={handleSave}>
-              <Check size={14} /> Save
+              <Check size={14} /> {t("actions.save", "Save")}
             </button>
             <button type="button" className="subtle" onClick={handleCancel}>
-              <X size={14} /> Cancel
+              <X size={14} /> {t("actions.cancel", "Cancel")}
             </button>
           </div>
         </div>
@@ -132,22 +134,22 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
   return (
     <article className="field-builder-row" key={`${field.name}-${index}`}>
       <div>
-        <strong>{field.name || "(unnamed)"}</strong>
-        <span>{field.type || "unknown"}</span>
+        <strong>{field.name || t("fields.unnamed", "(unnamed)")}</strong>
+        <span>{field.type || t("fields.unknown", "unknown")}</span>
       </div>
       <div className="chips">
-        {field.required && <span>required</span>}
-        {field.unique && <span>unique</span>}
-        {field.hidden && <span>hidden</span>}
-        {field.system && <span>system</span>}
+        {field.required && <span>{t("collections.required", "required")}</span>}
+        {field.unique && <span>{t("collections.unique", "unique")}</span>}
+        {field.hidden && <span>{t("collections.hidden", "hidden")}</span>}
+        {field.system && <span>{t("collections.system", "system")}</span>}
       </div>
       <div className="field-row-actions">
         <button
           className="icon-button"
           type="button"
           onClick={() => setIsEditing(true)}
-          title="Edit field"
-          aria-label="Edit field"
+          title={t("fields.edit_field", "Edit field")}
+          aria-label={t("fields.edit_field", "Edit field")}
         >
           <Edit3 size={15} />
         </button>
@@ -155,8 +157,8 @@ export function FieldEditor({ field, index, onUpdate, onRemove }: FieldEditorPro
           className="icon-button danger"
           type="button"
           onClick={() => onRemove(index)}
-          title="Remove field"
-          aria-label="Remove field"
+          title={t("fields.remove_field", "Remove field")}
+          aria-label={t("fields.remove_field", "Remove field")}
           disabled={field.system}
         >
           <Trash2 size={15} />

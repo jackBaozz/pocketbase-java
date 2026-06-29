@@ -19,7 +19,8 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
-pb_data/
+pb_data/*
+!pb_data/pb_schema.json
 
 # ==================== Frontend ====================
 UI/node_modules/

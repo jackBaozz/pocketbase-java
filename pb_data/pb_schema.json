@@ -23,6 +23,26 @@
       "enabled" : false,
       "providers" : [ ]
     },
+    "authToken" : {
+      "duration" : 1209600,
+      "secret" : ""
+    },
+    "passwordResetToken" : {
+      "duration" : 1800,
+      "secret" : ""
+    },
+    "verificationToken" : {
+      "duration" : 604800,
+      "secret" : ""
+    },
+    "emailChangeToken" : {
+      "duration" : 1800,
+      "secret" : ""
+    },
+    "fileToken" : {
+      "duration" : 180,
+      "secret" : ""
+    },
     "indexes" : [ ],
     "fields" : [ {
       "id" : "field_email",
@@ -59,6 +79,118 @@
       "name" : "verified",
       "type" : "bool",
       "required" : false,
+      "unique" : false,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    } ]
+  }, {
+    "id" : "pbc_fn5t6ejzdg3z",
+    "name" : "steel",
+    "type" : "base",
+    "system" : false,
+    "created" : "2026-06-29T05:44:39.212201Z",
+    "updated" : "2026-06-29T05:44:39.212201Z",
+    "passwordAuth" : {
+      "enabled" : true,
+      "identityFields" : [ "email" ]
+    },
+    "otp" : {
+      "enabled" : false,
+      "duration" : 300,
+      "length" : 6
+    },
+    "mfa" : {
+      "enabled" : false,
+      "duration" : 1800
+    },
+    "oauth2" : {
+      "enabled" : false,
+      "providers" : [ ]
+    },
+    "authToken" : {
+      "duration" : 1209600
+    },
+    "passwordResetToken" : {
+      "duration" : 1800
+    },
+    "verificationToken" : {
+      "duration" : 604800
+    },
+    "emailChangeToken" : {
+      "duration" : 1800
+    },
+    "fileToken" : {
+      "duration" : 180
+    },
+    "indexes" : [ ],
+    "fields" : [ {
+      "id" : "field_teokv8w1goj2",
+      "name" : "title",
+      "type" : "text",
+      "required" : true,
+      "unique" : false,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    }, {
+      "id" : "field_4lqgtvhvsy8k",
+      "name" : "number",
+      "type" : "number",
+      "required" : false,
+      "unique" : false,
+      "hidden" : false,
+      "system" : false,
+      "presentable" : false,
+      "options" : { }
+    } ]
+  }, {
+    "id" : "pbc_54epesrj8too",
+    "name" : "t_auth",
+    "type" : "base",
+    "system" : false,
+    "created" : "2026-06-29T05:45:07.789230Z",
+    "updated" : "2026-06-29T05:45:07.789230Z",
+    "passwordAuth" : {
+      "enabled" : true,
+      "identityFields" : [ "email" ]
+    },
+    "otp" : {
+      "enabled" : false,
+      "duration" : 300,
+      "length" : 6
+    },
+    "mfa" : {
+      "enabled" : false,
+      "duration" : 1800
+    },
+    "oauth2" : {
+      "enabled" : false,
+      "providers" : [ ]
+    },
+    "authToken" : {
+      "duration" : 1209600
+    },
+    "passwordResetToken" : {
+      "duration" : 1800
+    },
+    "verificationToken" : {
+      "duration" : 604800
+    },
+    "emailChangeToken" : {
+      "duration" : 1800
+    },
+    "fileToken" : {
+      "duration" : 180
+    },
+    "indexes" : [ ],
+    "fields" : [ {
+      "id" : "field_0zf9xoiukwac",
+      "name" : "title",
+      "type" : "text",
+      "required" : true,
       "unique" : false,
       "hidden" : false,
       "system" : false,

@@ -4,7 +4,7 @@ import { LANGUAGES } from '../i18n';
 import { Globe } from 'lucide-react';
 
 export const LanguageSelector: React.FC = () => {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -33,7 +33,7 @@ export const LanguageSelector: React.FC = () => {
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className="header-link"
-        title="Change language"
+        title={t("language.change", "Change language")}
       >
         <Globe size={16} />
         <span>{currentLang.label}</span>

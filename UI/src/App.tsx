@@ -36,6 +36,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode, RefObject } from "react";
+import type { TFunction } from "i18next";
 import { AuthActionPages } from "./AuthActionPages";
 import { FieldEditor } from "./components/FieldEditor";
 
@@ -662,7 +663,7 @@ function App() {
     try {
       if (setupRequired) {
         await apiRequest("/api/bootstrap/superuser", "", { method: "POST", body });
-        notify("Superuser created");
+        notify(t("notifications.superuser_created", "Superuser created"));
       }
       const auth = await apiRequest<AuthResponse>("/api/collections/_superusers/auth-with-password", "", {
         method: "POST",
@@ -730,10 +731,10 @@ function App() {
           method: "PATCH",
           body: payload
         });
-        notify("Collection saved");
+        notify(t("notifications.collection_saved", "Collection saved"));
       } else {
         await api("/api/collections", { method: "POST", body: payload });
-        notify("Collection created");
+        notify(t("notifications.collection_created", "Collection created"));
       }
       setCollectionEditor(null);
       await refreshCollections();
@@ -743,10 +744,10 @@ function App() {
   }
 
   async function deleteCollection(collection: CollectionSchema) {
-    if (!window.confirm(`Delete collection ${collection.name}?`)) return;
+    if (!window.confirm(t("confirm.delete_collection", { name: collection.name, defaultValue: "Delete collection {{name}}?" }))) return;
     try {
       await api(`/api/collections/${encodeURIComponent(collection.name)}`, { method: "DELETE" });
-      notify("Collection deleted");
+      notify(t("notifications.collection_deleted", "Collection deleted"));
       setSelectedName("");
       await refreshCollections();
     } catch (error) {
@@ -757,7 +758,7 @@ function App() {
   async function startOAuthTest(provider: AuthMethodProvider) {
     if (!selected) return;
     if (!provider.authURL || !provider.state) {
-      notify(`Provider ${provider.displayName || provider.name} is missing an auth URL`, "error");
+      notify(t("errors.provider_missing_auth_url", { name: provider.displayName || provider.name, defaultValue: "Provider {{name}} is missing an auth URL" }), "error");
       return;
     }
     const redirectURL = `${window.location.origin}/api/oauth2-redirect`;
@@ -767,15 +768,18 @@ function App() {
       "popup,width=720,height=820"
     );
     if (!popup) {
-      notify("OAuth popup was blocked", "error");
+      notify(t("errors.oauth_popup_blocked", "OAuth popup was blocked"), "error");
       return;
     }
 
     setOauthTestingProvider(provider.name);
     try {
-      const payload = await waitForOAuthResult(provider.state, popup);
+      const payload = await waitForOAuthResult(provider.state, popup, {
+        closed: t("errors.oauth_popup_closed", "OAuth2 popup was closed before authentication completed."),
+        timeout: t("errors.oauth_popup_timed_out", "OAuth2 popup timed out.")
+      });
       if (payload.error) throw new Error(payload.error);
-      if (!payload.code) throw new Error("OAuth2 redirect did not provide an authorization code.");
+      if (!payload.code) throw new Error(t("errors.oauth_missing_code", "OAuth2 redirect did not provide an authorization code."));
       const response = await apiRequest<AuthResponse>(
         `/api/collections/${encodeURIComponent(selected.name)}/auth-with-oauth2`,
         "",
@@ -790,7 +794,7 @@ function App() {
         }
       );
       setOauthResult({ provider, response });
-      notify(`OAuth2 auth completed for ${provider.displayName || provider.name}`);
+      notify(t("notifications.oauth_completed", { name: provider.displayName || provider.name, defaultValue: "OAuth2 auth completed for {{name}}" }));
       await refreshRecords(selected.name);
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -808,7 +812,7 @@ function App() {
         ? `/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`
         : `/api/collections/${encodeURIComponent(selected.name)}/records`;
       const saved = await api<RecordItem>(path, { method: id ? "PATCH" : "POST", body });
-      notify(id ? "Record saved" : "Record created");
+      notify(id ? t("notifications.record_saved", "Record saved") : t("notifications.record_created", "Record created"));
       if (options.close !== false) {
         setRecordEditor(null);
       } else {
@@ -822,12 +826,12 @@ function App() {
   }
 
   async function deleteRecord(record: RecordItem) {
-    if (!selected || !window.confirm(`Delete record ${record.id}?`)) return;
+    if (!selected || !window.confirm(t("confirm.delete_record", { id: record.id, defaultValue: "Delete record {{id}}?" }))) return;
     try {
       await api(`/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(record.id)}`, {
         method: "DELETE"
       });
-      notify("Record deleted");
+      notify(t("notifications.record_deleted", "Record deleted"));
       await refreshRecords(selected.name);
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -836,7 +840,7 @@ function App() {
 
   async function deleteSelectedRecords() {
     if (!selected || selectedRecordIds.length === 0) return;
-    if (!window.confirm(`Delete ${selectedRecordIds.length} selected records?`)) return;
+    if (!window.confirm(t("confirm.delete_selected_records", { count: selectedRecordIds.length, defaultValue: "Delete {{count}} selected records?" }))) return;
     try {
       await Promise.all(
         selectedRecordIds.map((id) =>
@@ -845,7 +849,7 @@ function App() {
           })
         )
       );
-      notify("Records deleted");
+      notify(t("notifications.records_deleted", "Records deleted"));
       setSelectedRecordIds([]);
       await refreshRecords(selected.name);
     } catch (error) {
@@ -918,7 +922,7 @@ function App() {
     try {
       await api("/api/backups", { method: "POST", body: backupName.trim() ? { name: backupName.trim() } : {} });
       setBackupName("");
-      notify("Backup created");
+      notify(t("notifications.backup_created", "Backup created"));
       await refreshBackups();
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -930,7 +934,7 @@ function App() {
       const form = new FormData();
       form.append("file", file);
       await api("/api/backups/upload", { method: "POST", body: form });
-      notify("Backup uploaded");
+      notify(t("notifications.backup_uploaded", "Backup uploaded"));
       await refreshBackups();
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -961,10 +965,10 @@ function App() {
   }
 
   async function restoreBackup(backup: BackupInfo) {
-    if (!window.confirm(`Restore ${backup.key}?`)) return;
+    if (!window.confirm(t("confirm.restore_backup", { key: backup.key, defaultValue: "Restore {{key}}?" }))) return;
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}/restore`, { method: "POST" });
-      notify("Backup restored");
+      notify(t("notifications.backup_restored", "Backup restored"));
       await refreshCollections();
       await refreshBackups();
     } catch (error) {
@@ -973,10 +977,10 @@ function App() {
   }
 
   async function deleteBackup(backup: BackupInfo) {
-    if (!window.confirm(`Delete backup ${backup.key}?`)) return;
+    if (!window.confirm(t("confirm.delete_backup", { key: backup.key, defaultValue: "Delete backup {{key}}?" }))) return;
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}`, { method: "DELETE" });
-      notify("Backup deleted");
+      notify(t("notifications.backup_deleted", "Backup deleted"));
       await refreshBackups();
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -989,7 +993,7 @@ function App() {
       const updated = await api<AppSettings>("/api/settings", { method: "PATCH", body: parsed });
       setSettings(updated);
       setSettingsDraft(JSON.stringify(updated, null, 2));
-      notify("Settings saved");
+      notify(t("notifications.settings_saved", "Settings saved"));
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1004,7 +1008,7 @@ function App() {
           template: testEmailTemplate || "verification"
         }
       });
-      notify("Test email queued");
+      notify(t("notifications.test_email_queued", "Test email queued"));
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1018,7 +1022,7 @@ function App() {
           filesystem: testS3Target
         }
       });
-      notify("S3 connection check completed");
+      notify(t("notifications.s3_check_completed", "S3 connection check completed"));
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1032,7 +1036,7 @@ function App() {
         : isPlainObject(parsed) && Array.isArray(parsed.collections)
           ? parsed.collections
           : null;
-      if (!collectionsPayload) throw new Error("Import JSON must be an array or an object with collections.");
+      if (!collectionsPayload) throw new Error(t("errors.import_json_shape", "Import JSON must be an array or an object with collections."));
       await api("/api/collections/import", {
         method: "PUT",
         body: {
@@ -1040,7 +1044,7 @@ function App() {
           collections: collectionsPayload
         }
       });
-      notify("Collections imported");
+      notify(t("notifications.collections_imported", "Collections imported"));
       await refreshCollections();
       setExportDraft(JSON.stringify(collectionsPayload, null, 2));
     } catch (error) {
@@ -1054,7 +1058,7 @@ function App() {
     try {
       const result = await api<SqlResult>("/api/sql", { method: "POST", body: { query: sqlQuery } });
       setSqlResult(result);
-      notify("SQL executed");
+      notify(t("notifications.sql_executed", "SQL executed"));
       await refreshCollections();
     } catch (error) {
       const message = errorMessage(error);
@@ -1069,7 +1073,7 @@ function App() {
     setLoading(true);
     try {
       await api(`/api/crons/${encodeURIComponent(job.id)}`, { method: "POST" });
-      notify(`Triggered ${job.id}`);
+      notify(t("notifications.cron_triggered", { id: job.id, defaultValue: "Triggered {{id}}" }));
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
@@ -1082,7 +1086,7 @@ function App() {
     () => allColumns.filter((column) => !hiddenColumns.includes(column)),
     [allColumns, hiddenColumns]
   );
-  const pageMeta = viewMeta(view, selected);
+  const pageMeta = viewMeta(view, selected, t);
   const showWorkspaceTopbar = !authenticated || (!collectionView && !settingsView && view !== "logs");
 
   if (hash.startsWith('#/pbinstall/') || hash.startsWith('#/request-password-reset') || hash.startsWith('#/auth/confirm-')) {
@@ -1097,12 +1101,12 @@ function App() {
           onClick={() => {
             if (selectedName) navigateTo("records");
           }}
-          aria-label="Open collections"
+          aria-label={t("nav.open_collections", "Open collections")}
         >
           <span className="brand-mark">PB</span>
           <span className="brand-title">pocketbase-java</span>
         </button>
-        <nav className="app-main-nav" aria-label="Primary">
+        <nav className="app-main-nav" aria-label={t("nav.primary", "Primary")}>
           <button
             className={collectionView ? "header-link active" : "header-link"}
             onClick={() => navigateTo("records")}
@@ -1184,7 +1188,7 @@ function App() {
           ) : (
             <>
               {collectionView && (
-                <div className="view-tabs" role="tablist" aria-label="Collection views">
+                <div className="view-tabs" role="tablist" aria-label={t("collections.views", "Collection views")}>
                   <button className={view === "records" ? "active" : ""} onClick={() => navigateTo("records")}>
                     <Database size={16} />
                     Records
@@ -1261,7 +1265,7 @@ function App() {
                   onImport={importCollections}
                   onCopy={(value) => {
                     navigator.clipboard.writeText(value).then(
-                      () => notify("Copied"),
+                      () => notify(t("notifications.copied", "Copied")),
                       (error) => notify(errorMessage(error), "error")
                     );
                   }}
@@ -1279,7 +1283,7 @@ function App() {
                   onImport={importCollections}
                   onCopy={(value) => {
                     navigator.clipboard.writeText(value).then(
-                      () => notify("Copied"),
+                      () => notify(t("notifications.copied", "Copied")),
                       (error) => notify(errorMessage(error), "error")
                     );
                   }}
@@ -1342,14 +1346,14 @@ function App() {
                     onOAuthTest={startOAuthTest}
                     onCopy={(value) => {
                       navigator.clipboard.writeText(value).then(
-                        () => notify("Copied"),
+                        () => notify(t("notifications.copied", "Copied")),
                         (error) => notify(errorMessage(error), "error")
                       );
                     }}
                   />
                 )
               ) : (
-                <EmptyState icon={Database} title="No collection selected" />
+                <EmptyState icon={Database} title={t("collections.no_collection_selected", "No collection selected")} />
               )}
             </>
           )}
@@ -1399,8 +1403,8 @@ function AuthPanel(props: AuthPanelProps) {
   return (
     <section className="auth-layout">
       <div className="auth-copy">
-        <p className="eyebrow">{props.setupRequired ? "Bootstrap" : "Superuser"}</p>
-        <h2>{props.setupRequired ? "Create the first superuser" : "Sign in to manage data"}</h2>
+        <p className="eyebrow">{props.setupRequired ? t("auth.bootstrap", "Bootstrap") : t("auth.superuser", "Superuser")}</p>
+        <h2>{props.setupRequired ? t("auth.create_first_superuser", "Create the first superuser") : t("auth.sign_in_manage", "Sign in to manage data")}</h2>
         <dl>
           <div>
             <dt>{t("collections.runtime")}</dt>
@@ -1410,7 +1414,7 @@ function AuthPanel(props: AuthPanelProps) {
       </div>
       <form className="auth-form" onSubmit={props.onSubmit}>
         <label>
-          Email
+          {t("auth.email", "Email")}
           <input
             id="superuser-email"
             name="email"
@@ -1422,7 +1426,7 @@ function AuthPanel(props: AuthPanelProps) {
           />
         </label>
         <label>
-          Password
+          {t("auth.password", "Password")}
           <input
             id="superuser-password"
             name="password"
@@ -1436,7 +1440,7 @@ function AuthPanel(props: AuthPanelProps) {
         </label>
         <button className="primary submit" type="submit" disabled={props.loading}>
           <KeyRound size={16} />
-          {props.setupRequired ? "Create and sign in" : "Sign in"}
+          {props.setupRequired ? t("auth.create_and_sign_in", "Create and sign in") : t("auth.sign_in", "Sign in")}
         </button>
       </form>
     </section>
@@ -1474,10 +1478,10 @@ function CollectionSidebar(props: CollectionSidebarProps) {
           autoComplete="off"
           value={props.search}
           onChange={(event) => props.onSearch(event.target.value)}
-          placeholder="Search collections..."
+          placeholder={t("collections.search_placeholder", "Search collections...")}
         />
         {props.search && (
-          <button className="icon-button tiny" onClick={() => props.onSearch("")} title="Clear search" aria-label="Clear search">
+          <button className="icon-button tiny" onClick={() => props.onSearch("")} title={t("actions.clear_search", "Clear search")} aria-label={t("actions.clear_search", "Clear search")}>
             <X size={14} />
           </button>
         )}
@@ -1487,14 +1491,14 @@ function CollectionSidebar(props: CollectionSidebarProps) {
         <div className="sidebar-no-results">
           <p>{t("collections.no_collections")}</p>
           <button className="subtle" onClick={() => props.onSearch("")}>
-            Clear search
+            {t("actions.clear_search", "Clear search")}
           </button>
         </div>
       ) : (
-        <nav className={(pinned.length + regular.length > 12 ? "collection-nav compact" : "collection-nav")} aria-label="Collections">
+        <nav className={(pinned.length + regular.length > 12 ? "collection-nav compact" : "collection-nav")} aria-label={t("nav.collections", "Collections")}>
           {pinned.length > 0 && (
             <CollectionGroup
-              title="Pinned"
+              title={t("collections.pinned", "Pinned")}
               collections={pinned}
               currentName={props.currentName}
               pinnedNames={props.pinnedNames}
@@ -1504,7 +1508,7 @@ function CollectionSidebar(props: CollectionSidebarProps) {
           )}
           {regular.length > 0 && (
             <CollectionGroup
-              title={pinned.length > 0 ? "Others" : "Collections"}
+              title={pinned.length > 0 ? t("collections.others", "Others") : t("nav.collections", "Collections")}
               collections={regular}
               currentName={props.currentName}
               pinnedNames={props.pinnedNames}
@@ -1514,7 +1518,7 @@ function CollectionSidebar(props: CollectionSidebarProps) {
           )}
           {system.length > 0 && (
             <CollectionGroup
-              title="System"
+              title={t("collections.system", "System")}
               collections={system}
               currentName={props.currentName}
               pinnedNames={props.pinnedNames}
@@ -1528,7 +1532,7 @@ function CollectionSidebar(props: CollectionSidebarProps) {
       <div className="sidebar-actions">
         <button className="subtle outline-button" onClick={props.onCreate}>
           <Plus size={16} />
-          New collection
+          {t("actions.new_collection", "New collection")}
         </button>
       </div>
     </aside>
@@ -1545,6 +1549,7 @@ type CollectionGroupProps = {
 };
 
 function CollectionGroup(props: CollectionGroupProps) {
+  const { t } = useTranslation();
   return (
     <section className="sidebar-group">
       <div className="sidebar-section-title">{props.title}</div>
@@ -1563,8 +1568,8 @@ function CollectionGroup(props: CollectionGroupProps) {
             <button
               className="icon-button pin-button"
               onClick={() => props.onTogglePinned(collection)}
-              title={pinned ? "Unpin collection" : "Pin collection"}
-              aria-label={pinned ? "Unpin collection" : "Pin collection"}
+              title={pinned ? t("actions.unpin_collection", "Unpin collection") : t("actions.pin_collection", "Pin collection")}
+              aria-label={pinned ? t("actions.unpin_collection", "Unpin collection") : t("actions.pin_collection", "Pin collection")}
             >
               {pinned ? <PinOff size={14} /> : <Pin size={14} />}
             </button>
@@ -1677,15 +1682,15 @@ function RecordsView(props: RecordsViewProps) {
   return (
     <section className="records-page">
       <header className="page-header records-page-header">
-        <nav className="breadcrumbs" aria-label="Breadcrumb">
+        <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
           <span>{t("nav.collections")}</span>
           <span title={props.collection.name}>{props.collection.name}</span>
         </nav>
         <div className="page-header-secondary-btns">
-          <button className="icon-button page-circle" onClick={props.onEditCollection} title="Collection settings" aria-label="Collection settings">
+          <button className="icon-button page-circle" onClick={props.onEditCollection} title={t("collections.collection_settings", "Collection settings")} aria-label={t("collections.collection_settings", "Collection settings")}>
             <Settings size={17} />
           </button>
-          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh records" aria-label="Refresh records">
+          <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_records", "Refresh records")} aria-label={t("actions.refresh_records", "Refresh records")}>
             <RefreshCw size={17} />
           </button>
         </div>
@@ -1706,17 +1711,17 @@ function RecordsView(props: RecordsViewProps) {
             id="records-filter"
             name="filter"
             autoComplete="off"
-            aria-label="Search term or filter"
+            aria-label={t("logs.search_aria", "Search term or filter")}
             value={draft.filter}
             onChange={(event) => setDraft({ ...draft, filter: event.target.value })}
             onKeyDown={(event) => {
               if (event.key === "Enter") apply();
             }}
-            placeholder="Search term or filter..."
+            placeholder={t("records.search_placeholder", "Search term or filter...")}
           />
         </div>
         <label className="compact-field sort-field">
-          Sort
+          {t("collections.sort", "Sort")}
           <input
             id="records-sort"
             name="sort"
@@ -1726,7 +1731,7 @@ function RecordsView(props: RecordsViewProps) {
           />
         </label>
         <label className="compact-field per-page-field">
-          Per page
+          {t("collections.per_page", "Per page")}
           <select
             id="records-per-page"
             name="perPage"
@@ -1742,18 +1747,18 @@ function RecordsView(props: RecordsViewProps) {
         </label>
         <button className="subtle apply-button" onClick={apply} disabled={props.loading}>
           <ListFilter size={16} />
-          Apply
+          {t("actions.apply", "Apply")}
         </button>
         <div className="column-picker">
           <button className="subtle" onClick={() => setColumnsOpen((open) => !open)}>
             <Columns3 size={16} />
-            Columns
+            {t("collections.columns", "Columns")}
           </button>
           {columnsOpen && (
             <div className="columns-popover">
               <div className="columns-popover-header">
                 <strong>{t("collections.visible_columns")}</strong>
-                <button className="icon-button tiny" onClick={props.onResetColumns} title="Reset columns" aria-label="Reset columns">
+                <button className="icon-button tiny" onClick={props.onResetColumns} title={t("collections.reset_columns", "Reset columns")} aria-label={t("collections.reset_columns", "Reset columns")}>
                   <RotateCcw size={14} />
                 </button>
               </div>
@@ -1776,14 +1781,14 @@ function RecordsView(props: RecordsViewProps) {
 
       {props.selectedIds.length > 0 && (
         <div className="bulkbar">
-          <span>{props.selectedIds.length} selected</span>
+          <span>{t("transfer.selected_count", { count: props.selectedIds.length, defaultValue: "{{count}} selected" })}</span>
           <button className="subtle" onClick={props.onClearSelection}>
             <X size={16} />
-            Clear
+            {t("actions.clear", "Clear")}
           </button>
           <button className="danger subtle" onClick={props.onDeleteSelected}>
             <Trash2 size={16} />
-            Delete selected
+            {t("actions.delete_selected", "Delete selected")}
           </button>
         </div>
       )}
@@ -1796,8 +1801,8 @@ function RecordsView(props: RecordsViewProps) {
                 <button
                   className="checkbox-button"
                   onClick={() => props.onToggleAll(!allVisibleSelected)}
-                  title={allVisibleSelected ? "Clear selection" : "Select page"}
-                  aria-label={allVisibleSelected ? "Clear selection" : "Select page"}
+                  title={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
+                  aria-label={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
                 >
                   {allVisibleSelected ? <CheckSquare2 size={17} /> : <Square size={17} />}
                 </button>
@@ -1817,7 +1822,7 @@ function RecordsView(props: RecordsViewProps) {
                     {!draft.filter && canCreateRecord && (
                       <button className="subtle" onClick={props.onNew}>
                         <Plus size={16} />
-                        New record
+                        {t("actions.new_record", "New record")}
                       </button>
                     )}
                     {draft.filter && (
@@ -1830,7 +1835,7 @@ function RecordsView(props: RecordsViewProps) {
                           props.onApply(next);
                         }}
                       >
-                        Clear search
+                        {t("actions.clear_search", "Clear search")}
                       </button>
                     )}
                   </div>
@@ -1845,8 +1850,8 @@ function RecordsView(props: RecordsViewProps) {
                       <button
                         className="checkbox-button"
                         onClick={() => props.onToggleSelected(record.id)}
-                        title={selected ? "Unselect record" : "Select record"}
-                        aria-label={selected ? "Unselect record" : "Select record"}
+                        title={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
+                        aria-label={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                       >
                         {selected ? <CheckSquare2 size={17} /> : <Square size={17} />}
                       </button>
@@ -1862,14 +1867,14 @@ function RecordsView(props: RecordsViewProps) {
                       </td>
                     ))}
                     <td className="row-actions">
-                      <button className="icon-button" onClick={() => props.onEdit(record)} title="Edit" aria-label="Edit">
+                      <button className="icon-button" onClick={() => props.onEdit(record)} title={t("actions.edit", "Edit")} aria-label={t("actions.edit", "Edit")}>
                         <Edit3 size={16} />
                       </button>
                       <button
                         className="icon-button danger"
                         onClick={() => props.onDelete(record)}
-                        title="Delete"
-                        aria-label="Delete"
+                        title={t("actions.delete", "Delete")}
+                        aria-label={t("actions.delete", "Delete")}
                       >
                         <Trash2 size={16} />
                       </button>
@@ -1882,9 +1887,9 @@ function RecordsView(props: RecordsViewProps) {
         </table>
       </div>
       <footer className="page-footer">
-        <span>Total: {props.recordPage?.totalItems ?? props.records.length}</span>
-        <span>{props.collection.fields?.length ?? 0} fields</span>
-        <span>{props.columns.length}/{props.allColumns.length} columns</span>
+        <span>{t("common.total_count", { count: props.recordPage?.totalItems ?? props.records.length, defaultValue: "Total: {{count}}" })}</span>
+        <span>{t("collections.fields_count", { count: props.collection.fields?.length ?? 0, defaultValue: "{{count}} fields" })}</span>
+        <span>{t("collections.columns_count", { shown: props.columns.length, total: props.allColumns.length, defaultValue: "{{shown}}/{{total}} columns" })}</span>
       </footer>
     </section>
   );
@@ -1958,15 +1963,15 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
         <div className="schema-actions">
           <button className="primary" onClick={onEdit}>
             <Edit3 size={16} />
-            Edit schema
+            {t("actions.edit_schema", "Edit schema")}
           </button>
           <button className="subtle" onClick={() => onCopy(json)}>
             <Copy size={16} />
-            Copy JSON
+            {t("actions.copy_json", "Copy JSON")}
           </button>
           <button className="danger subtle" onClick={onDelete} disabled={collection.system}>
             <Trash2 size={16} />
-            Delete
+            {t("actions.delete", "Delete")}
           </button>
         </div>
       </div>
@@ -1976,28 +1981,28 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
           <article className="auth-method-card">
             <header>
               <strong>{t("auth.password")}</strong>
-              <span>{authMethods.password.enabled ? "enabled" : "disabled"}</span>
+              <span>{authMethods.password.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
             </header>
-            <p>{authMethods.password.identityFields.join(", ") || "none"}</p>
+            <p>{authMethods.password.identityFields.join(", ") || t("common.none", "none")}</p>
           </article>
           <article className="auth-method-card">
             <header>
               <strong>{t("auth.otp")}</strong>
-              <span>{authMethods.otp.enabled ? "enabled" : "disabled"}</span>
+              <span>{authMethods.otp.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
             </header>
-            <p>{authMethods.otp.enabled ? `${authMethods.otp.duration}s window` : "No one-time passwords"}</p>
+            <p>{authMethods.otp.enabled ? t("auth.otp_window", { seconds: authMethods.otp.duration, defaultValue: "{{seconds}}s window" }) : t("auth.no_otp", "No one-time passwords")}</p>
           </article>
           <article className="auth-method-card">
             <header>
               <strong>{t("auth.mfa")}</strong>
-              <span>{authMethods.mfa.enabled ? "enabled" : "disabled"}</span>
+              <span>{authMethods.mfa.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
             </header>
-            <p>{authMethods.mfa.enabled ? `${authMethods.mfa.duration}s challenge` : "No second factor"}</p>
+            <p>{authMethods.mfa.enabled ? t("auth.mfa_challenge", { seconds: authMethods.mfa.duration, defaultValue: "{{seconds}}s challenge" }) : t("auth.no_second_factor", "No second factor")}</p>
           </article>
           <article className="auth-method-card auth-method-card-wide">
             <header>
               <strong>{t("settings.oauth2")}</strong>
-              <span>{authMethods.oauth2.enabled ? "enabled" : "disabled"}</span>
+              <span>{authMethods.oauth2.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
             </header>
             {authMethods.oauth2.providers.length === 0 ? (
               <p>{t("settings.no_providers")}</p>
@@ -2012,10 +2017,10 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
                         onClick={() => onOAuthTest(provider)}
                         disabled={!provider.authURL || oauthTestingProvider === provider.name}
                       >
-                        {oauthTestingProvider === provider.name ? "Waiting..." : "Test"}
+                        {oauthTestingProvider === provider.name ? t("common.waiting", "Waiting...") : t("actions.test", "Test")}
                       </button>
                     </div>
-                    <span>{provider.authURL ? "ready" : "missing credentials"}</span>
+                    <span>{provider.authURL ? t("common.ready", "ready") : t("settings.missing_credentials", "missing credentials")}</span>
                   </div>
                 ))}
               </div>
@@ -2069,7 +2074,7 @@ function SettingsPageHeader({ section, actions }: { section: string; actions?: R
   const { t } = useTranslation();
   return (
     <header className="page-header settings-page-header">
-      <nav className="breadcrumbs" aria-label="Breadcrumb">
+      <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
         <span>{t("nav.settings")}</span>
         <span>{section}</span>
       </nav>
@@ -2095,10 +2100,10 @@ function BackupView(props: BackupViewProps) {
   const backupS3Enabled = Boolean(backupS3.enabled);
   const hasBackupS3Secret = Object.prototype.hasOwnProperty.call(backupS3, "secret");
   const cronPresets = [
-    { cron: "0 0 * * *", label: "Every day at 00:00h" },
-    { cron: "0 0 * * 0", label: "Every sunday at 00:00h" },
-    { cron: "0 0 * * 1,3", label: "Every Mon and Wed at 00:00h" },
-    { cron: "0 0 1 * *", label: "Every first day of the month" }
+    { cron: "0 0 * * *", label: t("settings.cron_every_day", "Every day at 00:00h") },
+    { cron: "0 0 * * 0", label: t("settings.cron_every_sunday", "Every Sunday at 00:00h") },
+    { cron: "0 0 * * 1,3", label: t("settings.cron_every_mon_wed", "Every Mon and Wed at 00:00h") },
+    { cron: "0 0 1 * *", label: t("settings.cron_every_month_first", "Every first day of the month") }
   ];
 
   function updateSetting(path: string[], value: unknown) {
@@ -2118,7 +2123,10 @@ function BackupView(props: BackupViewProps) {
   function confirmUpload(file?: File) {
     if (!file) return;
     const confirmed = window.confirm(
-      `Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload "${file.name}"?`
+      t("confirm.upload_backup", {
+        name: file.name,
+        defaultValue: "Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload \"{{name}}\"?"
+      })
     );
     if (confirmed) {
       props.onUpload(file);
@@ -2140,13 +2148,13 @@ function BackupView(props: BackupViewProps) {
   return (
     <section className="settings-page">
       <SettingsPageHeader
-        section="Backups"
+        section={t("settings.nav.backups", "Backups")}
         actions={
           <>
-            <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh backups" aria-label="Refresh backups">
+            <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_backups", "Refresh backups")} aria-label={t("actions.refresh_backups", "Refresh backups")}>
               <RefreshCw size={17} />
             </button>
-            <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} title="Upload backup" aria-label="Upload backup">
+            <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} title={t("actions.upload_backup", "Upload backup")} aria-label={t("actions.upload_backup", "Upload backup")}>
               <Upload size={17} />
             </button>
             <input
@@ -2166,14 +2174,14 @@ function BackupView(props: BackupViewProps) {
           <div>
             <p className="settings-intro">{t("settings.backups_intro")}</p>
             <div className="backup-metrics">
-              <span>{sortedBackups.length} backups</span>
-              <span>{formatBytes(totalSize)} total</span>
-              <span>Latest {latestBackup ? formatDate(latestBackup.modified) : "none"}</span>
+              <span>{t("settings.backups_count", { count: sortedBackups.length, defaultValue: "{{count}} backups" })}</span>
+              <span>{t("settings.backups_total", { size: formatBytes(totalSize), defaultValue: "{{size}} total" })}</span>
+              <span>{t("settings.backups_latest", { value: latestBackup ? formatDate(latestBackup.modified) : t("common.none", "none"), defaultValue: "Latest {{value}}" })}</span>
             </div>
           </div>
           <button className="primary" onClick={() => setCreateOpen(true)} disabled={!props.canBackup || props.loading}>
             <Archive size={16} />
-            Initialize new backup
+            {t("actions.initialize_backup", "Initialize new backup")}
           </button>
         </div>
 
@@ -2194,14 +2202,14 @@ function BackupView(props: BackupViewProps) {
                   <strong title={backup.key}>{backup.name || backup.key}</strong>
                   <span>{formatBytes(backup.size)} · {formatDate(backup.modified)}</span>
                 </div>
-                <nav className="backup-row-actions" aria-label={`${backup.name || backup.key} actions`}>
-                  <button className="icon-button" onClick={() => props.onDownload(backup)} title="Download" aria-label="Download">
+                <nav className="backup-row-actions" aria-label={t("common.item_actions", { name: backup.name || backup.key, defaultValue: "{{name}} actions" })}>
+                  <button className="icon-button" onClick={() => props.onDownload(backup)} title={t("actions.download", "Download")} aria-label={t("actions.download", "Download")}>
                     <Download size={16} />
                   </button>
-                  <button className="icon-button" onClick={() => props.onRestore(backup)} title="Restore" aria-label="Restore">
+                  <button className="icon-button" onClick={() => props.onRestore(backup)} title={t("actions.restore", "Restore")} aria-label={t("actions.restore", "Restore")}>
                     <FileUp size={16} />
                   </button>
-                  <button className="icon-button danger" onClick={() => props.onDelete(backup)} title="Delete" aria-label="Delete">
+                  <button className="icon-button danger" onClick={() => props.onDelete(backup)} title={t("actions.delete", "Delete")} aria-label={t("actions.delete", "Delete")}>
                     <Trash2 size={16} />
                   </button>
                 </nav>
@@ -2226,7 +2234,7 @@ function BackupView(props: BackupViewProps) {
                 checked={autoBackupsEnabled}
                 onChange={(event) => toggleAutoBackups(event.target.checked)}
               />
-              Enable auto backups
+              {t("settings.enable_auto_backups", "Enable auto backups")}
             </label>
             {autoBackupsEnabled && (
               <div className="settings-accordion-card settings-form-block">
@@ -2239,7 +2247,7 @@ function BackupView(props: BackupViewProps) {
                 </header>
                 <div className="settings-form-row two">
                   <label>
-                    Cron expression
+                    {t("settings.cron_expression", "Cron expression")}
                     <input
                       id="backups-cron"
                       name="backups.cron"
@@ -2253,7 +2261,7 @@ function BackupView(props: BackupViewProps) {
                     />
                   </label>
                   <label>
-                    Max @auto backups to keep
+                    {t("settings.max_auto_backups", "Max @auto backups to keep")}
                     <input
                       id="backups-cron-max-keep"
                       name="backups.cronMaxKeep"
@@ -2283,8 +2291,8 @@ function BackupView(props: BackupViewProps) {
             <section className="settings-accordion-card settings-form-block">
               <header>
                 <div>
-                  <strong>Backup S3 storage</strong>
-                  <span>{backupS3Enabled ? String(backupS3.bucket ?? "no bucket") : "local backups filesystem"}</span>
+                  <strong>{t("settings.backup_s3_storage", "Backup S3 storage")}</strong>
+                  <span>{backupS3Enabled ? String(backupS3.bucket ?? t("settings.no_bucket", "no bucket")) : t("settings.local_backup_filesystem", "local backups filesystem")}</span>
                 </div>
                 <HardDrive size={18} />
               </header>
@@ -2296,13 +2304,13 @@ function BackupView(props: BackupViewProps) {
                   checked={backupS3Enabled}
                   onChange={(event) => updateSetting(["backups", "s3", "enabled"], event.target.checked)}
                 />
-                Store backups in S3 storage
+                {t("settings.store_backups_s3", "Store backups in S3 storage")}
               </label>
               {backupS3Enabled && (
                 <>
                   <div className="settings-form-row three">
                     <label>
-                      Endpoint
+                      {t("settings.endpoint", "Endpoint")}
                       <input
                         id="backups-s3-endpoint"
                         name="backups.s3.endpoint"
@@ -2314,7 +2322,7 @@ function BackupView(props: BackupViewProps) {
                       />
                     </label>
                     <label>
-                      Bucket
+                      {t("settings.bucket", "Bucket")}
                       <input
                         id="backups-s3-bucket"
                         name="backups.s3.bucket"
@@ -2326,7 +2334,7 @@ function BackupView(props: BackupViewProps) {
                       />
                     </label>
                     <label>
-                      Region
+                      {t("settings.region", "Region")}
                       <input
                         id="backups-s3-region"
                         name="backups.s3.region"
@@ -2340,7 +2348,7 @@ function BackupView(props: BackupViewProps) {
                   </div>
                   <div className="settings-form-row two">
                     <label>
-                      Access key
+                      {t("settings.access_key", "Access key")}
                       <input
                         id="backups-s3-access-key"
                         name="backups.s3.accessKey"
@@ -2352,7 +2360,7 @@ function BackupView(props: BackupViewProps) {
                       />
                     </label>
                     <label>
-                      Secret
+                      {t("settings.secret", "Secret")}
                       <input
                         id="backups-s3-secret"
                         name="backups.s3.secret"
@@ -2372,7 +2380,7 @@ function BackupView(props: BackupViewProps) {
                       checked={Boolean(backupS3.forcePathStyle)}
                       onChange={(event) => updateSetting(["backups", "s3", "forcePathStyle"], event.target.checked)}
                     />
-                    Force path-style addressing
+                    {t("settings.force_path_style", "Force path-style addressing")}
                   </label>
                 </>
               )}
@@ -2381,7 +2389,7 @@ function BackupView(props: BackupViewProps) {
             <div className="backup-options-actions">
               <button className="primary" type="button" onClick={props.onSave} disabled={props.loading}>
                 <Save size={16} />
-                Save changes
+                {t("actions.save_changes", "Save changes")}
               </button>
             </div>
           </div>
@@ -2389,14 +2397,13 @@ function BackupView(props: BackupViewProps) {
       </section>
 
       {createOpen && (
-        <Modal title="Initialize new backup" onClose={closeCreateModal}>
+        <Modal title={t("actions.initialize_backup", "Initialize new backup")} onClose={closeCreateModal}>
           <div className="modal-grid backup-create-modal">
             <div className="settings-alert">
-              During backup generation the database can be temporarily locked and concurrent write requests may fail.
-              Files stored in S3 are not included in the generated local ZIP backup.
+              {t("settings.backup_create_warning", "During backup generation the database can be temporarily locked and concurrent write requests may fail. Files stored in S3 are not included in the generated local ZIP backup.")}
             </div>
             <label>
-              Backup name
+              {t("settings.backup_name", "Backup name")}
               <input
                 id="backup-name"
                 name="backupName"
@@ -2404,18 +2411,18 @@ function BackupView(props: BackupViewProps) {
                 pattern="^[a-z0-9_-]+\\.zip$"
                 value={props.backupName}
                 onChange={(event) => props.onBackupName(event.target.value)}
-                placeholder="Leave empty to autogenerate"
+                placeholder={t("settings.backup_name_placeholder", "Leave empty to autogenerate")}
               />
             </label>
-            <p className="settings-help-text">Must be in the format [a-z0-9_-].zip</p>
+            <p className="settings-help-text">{t("settings.backup_name_help", "Must be in the format [a-z0-9_-].zip")}</p>
             <div className="modal-actions">
               <button type="button" className="subtle" onClick={closeCreateModal} disabled={props.loading}>
                 <X size={16} />
-                Cancel
+                {t("actions.cancel", "Cancel")}
               </button>
               <button type="button" className="primary" onClick={startBackup} disabled={!props.canBackup || props.loading}>
                 <Archive size={16} />
-                Start backup
+                {t("actions.start_backup", "Start backup")}
               </button>
             </div>
           </div>
@@ -2450,9 +2457,9 @@ function CronsView(props: CronsViewProps) {
   return (
     <section className="settings-page">
       <SettingsPageHeader
-        section="Crons"
+        section={t("settings.nav.crons", "Crons")}
         actions={
-          <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh crons" aria-label="Refresh crons">
+          <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_crons", "Refresh crons")} aria-label={t("actions.refresh_crons", "Refresh crons")}>
             <RefreshCw size={17} />
           </button>
         }
@@ -2460,8 +2467,8 @@ function CronsView(props: CronsViewProps) {
       <section className="surface crons-surface">
         <div className="cron-list-header">
           <div>
-            <p className="settings-intro">Registered app cron jobs</p>
-            <span>{sortedCrons.length} jobs</span>
+            <p className="settings-intro">{t("settings.crons_intro", "Registered app cron jobs")}</p>
+            <span>{t("settings.crons_count", { count: sortedCrons.length, defaultValue: "{{count}} jobs" })}</span>
           </div>
         </div>
 
@@ -2470,8 +2477,8 @@ function CronsView(props: CronsViewProps) {
             <article className="cron-list-item empty">
               <Clock3 size={20} />
               <div>
-                <strong>No registered crons found.</strong>
-                <span>App cron jobs are registered by the runtime or enabled settings.</span>
+                <strong>{t("settings.no_crons", "No registered crons found.")}</strong>
+                <span>{t("settings.no_crons_desc", "App cron jobs are registered by the runtime or enabled settings.")}</span>
               </div>
             </article>
           ) : (
@@ -2482,12 +2489,12 @@ function CronsView(props: CronsViewProps) {
                   <strong title={cron.id}>{cron.id}</strong>
                   <code>{cron.expression}</code>
                 </div>
-                <nav className="cron-row-actions" aria-label={`${cron.id} actions`}>
+                <nav className="cron-row-actions" aria-label={t("common.item_actions", { name: cron.id, defaultValue: "{{name}} actions" })}>
                   <button
                     className={runningCronId === cron.id ? "icon-button busy" : "icon-button"}
                     onClick={() => runCron(cron)}
-                    title="Run"
-                    aria-label="Run"
+                    title={t("actions.run", "Run")}
+                    aria-label={t("actions.run", "Run")}
                     disabled={props.loading || Boolean(runningCronId)}
                   >
                     <Play size={16} />
@@ -2498,7 +2505,7 @@ function CronsView(props: CronsViewProps) {
           )}
         </div>
       </section>
-      <p className="settings-footnote">App cron jobs can be registered programmatically; enabled backup schedules are listed here too.</p>
+      <p className="settings-footnote">{t("settings.crons_footnote", "App cron jobs can be registered programmatically; enabled backup schedules are listed here too.")}</p>
     </section>
   );
 }
@@ -2539,15 +2546,15 @@ function SettingsView(props: SettingsViewProps) {
   return (
     <section className="settings-page">
       <SettingsPageHeader
-        section="Application"
+        section={t("settings.nav.application", "Application")}
         actions={
           <>
-          <button className="icon-button" onClick={props.onRefresh} title="Refresh settings" aria-label="Refresh settings">
+          <button className="icon-button" onClick={props.onRefresh} title={t("actions.refresh_settings", "Refresh settings")} aria-label={t("actions.refresh_settings", "Refresh settings")}>
             <RefreshCw size={17} />
           </button>
           <button className="primary" onClick={props.onSave} disabled={props.loading}>
             <Save size={16} />
-            Save settings
+            {t("actions.save_settings", "Save settings")}
           </button>
           </>
         }
@@ -2556,7 +2563,7 @@ function SettingsView(props: SettingsViewProps) {
       <section className="surface application-settings-form">
         <div className="settings-form-row primary-fields">
           <label>
-            Application name
+            {t("settings.application_name", "Application name")}
             <input
               id="meta-app-name"
               name="meta.appName"
@@ -2566,7 +2573,7 @@ function SettingsView(props: SettingsViewProps) {
             />
           </label>
           <label>
-            Application URL
+            {t("settings.application_url", "Application URL")}
             <input
               id="meta-app-url"
               name="meta.appURL"
@@ -2576,7 +2583,7 @@ function SettingsView(props: SettingsViewProps) {
             />
           </label>
           <label>
-            Accent color
+            {t("settings.accent_color", "Accent color")}
             <input
               id="meta-accent-color"
               name="meta.accentColor"
@@ -2596,7 +2603,7 @@ function SettingsView(props: SettingsViewProps) {
               checked={Boolean(meta.hideControls)}
               onChange={(event) => updateSetting(["meta", "hideControls"], event.target.checked)}
             />
-            Hide/Lock collection and record controls
+            {t("settings.hide_controls", "Hide/Lock collection and record controls")}
           </label>
         </div>
 
@@ -2604,14 +2611,14 @@ function SettingsView(props: SettingsViewProps) {
           <article className="settings-accordion-card">
             <header>
               <div>
-                <strong>Logs</strong>
-                <span>Retention and request metadata</span>
+                <strong>{t("nav.logs", "Logs")}</strong>
+                <span>{t("settings.logs_desc", "Retention and request metadata")}</span>
               </div>
               <Activity size={18} />
             </header>
             <div className="settings-form-row two">
               <label>
-                Max days
+                {t("settings.max_days", "Max days")}
                 <input
                   id="logs-max-days"
                   name="logs.maxDays"
@@ -2622,7 +2629,7 @@ function SettingsView(props: SettingsViewProps) {
                 />
               </label>
               <label>
-                Min level
+                {t("settings.min_level", "Min level")}
                 <input
                   id="logs-min-level"
                   name="logs.minLevel"
@@ -2640,7 +2647,7 @@ function SettingsView(props: SettingsViewProps) {
                 checked={Boolean(logs.logIP)}
                 onChange={(event) => updateSetting(["logs", "logIP"], event.target.checked)}
               />
-              Log request IP
+              {t("settings.log_request_ip", "Log request IP")}
             </label>
             <label className="check-row switch-row">
               <input
@@ -2650,15 +2657,15 @@ function SettingsView(props: SettingsViewProps) {
                 checked={Boolean(logs.logAuthId)}
                 onChange={(event) => updateSetting(["logs", "logAuthId"], event.target.checked)}
               />
-              Log auth record id
+              {t("settings.log_auth_id", "Log auth record id")}
             </label>
           </article>
 
           <article className="settings-accordion-card">
             <header>
               <div>
-                <strong>Batch requests</strong>
-                <span>Server-side batch request limits</span>
+                <strong>{t("settings.batch_requests", "Batch requests")}</strong>
+                <span>{t("settings.batch_desc", "Server-side batch request limits")}</span>
               </div>
               <Archive size={18} />
             </header>
@@ -2670,11 +2677,11 @@ function SettingsView(props: SettingsViewProps) {
                 checked={Boolean(batch.enabled)}
                 onChange={(event) => updateSetting(["batch", "enabled"], event.target.checked)}
               />
-              Enable batch API
+              {t("settings.enable_batch_api", "Enable batch API")}
             </label>
             <div className="settings-form-row three">
               <label>
-                Max requests
+                {t("settings.max_requests", "Max requests")}
                 <input
                   id="batch-max-requests"
                   name="batch.maxRequests"
@@ -2684,7 +2691,7 @@ function SettingsView(props: SettingsViewProps) {
                 />
               </label>
               <label>
-                Timeout
+                {t("settings.timeout", "Timeout")}
                 <input
                   id="batch-timeout"
                   name="batch.timeout"
@@ -2694,7 +2701,7 @@ function SettingsView(props: SettingsViewProps) {
                 />
               </label>
               <label>
-                Max body size
+                {t("settings.max_body_size", "Max body size")}
                 <input
                   id="batch-max-body-size"
                   name="batch.maxBodySize"
@@ -2709,13 +2716,13 @@ function SettingsView(props: SettingsViewProps) {
           <article className="settings-accordion-card">
             <header>
               <div>
-                <strong>Trusted proxy</strong>
-                <span>Forwarded IP header handling</span>
+                <strong>{t("settings.trusted_proxy", "Trusted proxy")}</strong>
+                <span>{t("settings.trusted_proxy_desc", "Forwarded IP header handling")}</span>
               </div>
               <Server size={18} />
             </header>
             <label>
-              Trusted headers
+              {t("settings.trusted_headers", "Trusted headers")}
               <input
                 id="trusted-proxy-headers"
                 name="trustedProxy.headers"
@@ -2733,20 +2740,20 @@ function SettingsView(props: SettingsViewProps) {
                 checked={Boolean(trustedProxy.useLeftmostIP)}
                 onChange={(event) => updateSetting(["trustedProxy", "useLeftmostIP"], event.target.checked)}
               />
-              Use leftmost IP
+              {t("settings.use_leftmost_ip", "Use leftmost IP")}
             </label>
           </article>
 
           <article className="settings-accordion-card">
             <header>
               <div>
-                <strong>Superusers</strong>
-                <span>Restrict dashboard access by IP</span>
+                <strong>{t("settings.superusers", "Superusers")}</strong>
+                <span>{t("settings.superusers_desc", "Restrict dashboard access by IP")}</span>
               </div>
               <Shield size={18} />
             </header>
             <label>
-              Allowed IPs
+              {t("settings.allowed_ips", "Allowed IPs")}
               <input
                 id="superuser-ips"
                 name="superuserIPs"
@@ -2757,8 +2764,8 @@ function SettingsView(props: SettingsViewProps) {
               />
             </label>
             <div className="settings-inline-metrics">
-              <span>{Array.isArray(rateLimits.rules) ? rateLimits.rules.length : 0} rate limit rules</span>
-              <span>{Array.isArray(rateLimits.excludedIPs) ? rateLimits.excludedIPs.length : 0} excluded IPs</span>
+              <span>{t("settings.rate_limit_rules", { count: Array.isArray(rateLimits.rules) ? rateLimits.rules.length : 0, defaultValue: "{{count}} rate limit rules" })}</span>
+              <span>{t("settings.excluded_ips", { count: Array.isArray(rateLimits.excludedIPs) ? rateLimits.excludedIPs.length : 0, defaultValue: "{{count}} excluded IPs" })}</span>
             </div>
           </article>
         </section>
@@ -2766,7 +2773,7 @@ function SettingsView(props: SettingsViewProps) {
 
       <section className="surface settings-editor advanced-settings-editor">
         <label>
-          Advanced JSON
+          {t("settings.advanced_json", "Advanced JSON")}
           <textarea
             id="settings-json"
             name="settingsJson"
@@ -2787,11 +2794,12 @@ type SettingValueCardProps = {
 };
 
 function SettingValueCard(props: SettingValueCardProps) {
+  const { t } = useTranslation();
   return (
     <article className="setting-card">
       <span>{props.title}</span>
-      <strong title={props.value}>{props.value || "not set"}</strong>
-      <code title={props.detail}>{props.detail || "not set"}</code>
+      <strong title={props.value}>{props.value || t("common.not_set", "not set")}</strong>
+      <code title={props.detail}>{props.detail || t("common.not_set", "not set")}</code>
     </article>
   );
 }
@@ -2810,6 +2818,7 @@ type MailSettingsViewProps = {
 };
 
 function MailSettingsView(props: MailSettingsViewProps) {
+  const { t } = useTranslation();
   const [showMoreOptions, setShowMoreOptions] = useState(false);
   const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
   const meta = settingsObject(draftSettings, "meta");
@@ -2829,19 +2838,19 @@ function MailSettingsView(props: MailSettingsViewProps) {
   return (
     <section className="settings-page">
       <SettingsPageHeader
-        section="Mail settings"
+        section={t("settings.nav.mail", "Mail settings")}
         actions={
           <button className="primary" onClick={props.onSave} disabled={props.loading}>
             <Save size={16} />
-            Save settings
+            {t("actions.save_settings", "Save settings")}
           </button>
         }
       />
       <section className="surface settings-config-form mail-settings-form">
-        <p className="settings-intro">Configure common settings for sending emails.</p>
+        <p className="settings-intro">{t("settings.mail_intro", "Configure common settings for sending emails.")}</p>
         <div className="settings-form-row two">
           <label>
-            Sender name
+            {t("settings.sender_name", "Sender name")}
             <input
               id="meta-sender-name"
               name="meta.senderName"
@@ -2853,7 +2862,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
             />
           </label>
           <label>
-            Sender address
+            {t("settings.sender_address", "Sender address")}
             <input
               id="meta-sender-address"
               name="meta.senderAddress"
@@ -2875,10 +2884,10 @@ function MailSettingsView(props: MailSettingsViewProps) {
               checked={Boolean(smtp.enabled)}
               onChange={(event) => updateSetting(["smtp", "enabled"], event.target.checked)}
             />
-            Use SMTP mail server
+            {t("settings.use_smtp", "Use SMTP mail server")}
           </label>
           <p className="settings-help-text">
-            By default PocketBase uses the server sendmail command. SMTP is recommended for better deliverability.
+            {t("settings.smtp_help", "By default PocketBase uses the server sendmail command. SMTP is recommended for better deliverability.")}
           </p>
         </div>
 
@@ -2887,13 +2896,13 @@ function MailSettingsView(props: MailSettingsViewProps) {
             <header>
               <div>
                 <strong>SMTP</strong>
-                <span>{`${String(smtp.host ?? "no host")}:${String(smtp.port ?? "")}`}</span>
+                <span>{`${String(smtp.host ?? t("settings.no_host", "no host"))}:${String(smtp.port ?? "")}`}</span>
               </div>
               <Server size={18} />
             </header>
             <div className="settings-form-row three">
               <label>
-                SMTP server host
+                {t("settings.smtp_host", "SMTP server host")}
                 <input
                   id="smtp-host"
                   name="smtp.host"
@@ -2905,7 +2914,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
                 />
               </label>
               <label>
-                Port
+                {t("settings.port", "Port")}
                 <input
                   id="smtp-port"
                   name="smtp.port"
@@ -2918,7 +2927,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
                 />
               </label>
               <label>
-                Username
+                {t("settings.username", "Username")}
                 <input
                   id="smtp-username"
                   name="smtp.username"
@@ -2931,7 +2940,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
             </div>
             <div className="settings-form-row two">
               <label>
-                Password
+                {t("auth.password", "Password")}
                 <input
                   id="smtp-password"
                   name="smtp.password"
@@ -2944,26 +2953,26 @@ function MailSettingsView(props: MailSettingsViewProps) {
               </label>
               <div className="settings-inline-actions">
                 <button type="button" className="subtle" onClick={() => setShowMoreOptions((value) => !value)}>
-                  {showMoreOptions ? "Hide more options" : "Show more options"}
+                  {showMoreOptions ? t("actions.hide_more_options", "Hide more options") : t("actions.show_more_options", "Show more options")}
                 </button>
               </div>
             </div>
             {showMoreOptions && (
               <div className="settings-form-row three">
                 <label>
-                  TLS encryption
+                  {t("settings.tls_encryption", "TLS encryption")}
                   <select
                     id="smtp-tls"
                     name="smtp.tls"
                     value={String(Boolean(smtp.tls))}
                     onChange={(event) => updateSetting(["smtp", "tls"], event.target.value === "true")}
                   >
-                    <option value="false">Auto (StartTLS)</option>
-                    <option value="true">Always</option>
+                    <option value="false">{t("settings.auto_starttls", "Auto (StartTLS)")}</option>
+                    <option value="true">{t("settings.always", "Always")}</option>
                   </select>
                 </label>
                 <label>
-                  AUTH method
+                  {t("settings.auth_method", "AUTH method")}
                   <select
                     id="smtp-auth-method"
                     name="smtp.authMethod"
@@ -2975,13 +2984,13 @@ function MailSettingsView(props: MailSettingsViewProps) {
                   </select>
                 </label>
                 <label>
-                  EHLO/HELO domain
+                  {t("settings.ehlo_domain", "EHLO/HELO domain")}
                   <input
                     id="smtp-local-name"
                     name="smtp.localName"
                     type="text"
                     autoComplete="off"
-                    placeholder="Default to localhost"
+                    placeholder={t("settings.default_localhost", "Default to localhost")}
                     value={String(smtp.localName ?? "")}
                     onChange={(event) => updateSetting(["smtp", "localName"], event.target.value)}
                   />
@@ -2995,14 +3004,14 @@ function MailSettingsView(props: MailSettingsViewProps) {
       <section className="surface settings-section">
         <div className="section-heading">
           <div>
-            <h2>Test email</h2>
-            <p>Send a test auth email with the current mail configuration.</p>
+            <h2>{t("settings.test_email", "Test email")}</h2>
+            <p>{t("settings.test_email_desc", "Send a test auth email with the current mail configuration.")}</p>
           </div>
           <Mail size={18} />
         </div>
         <div className="settings-form-grid">
           <label>
-            Recipient
+            {t("settings.recipient", "Recipient")}
             <input
               id="test-email-recipient"
               name="testEmailRecipient"
@@ -3014,7 +3023,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
             />
           </label>
           <label>
-            Template
+            {t("settings.template", "Template")}
             <select
               id="test-email-template"
               name="testEmailTemplate"
@@ -3030,7 +3039,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
           </label>
           <button className="primary apply-button" onClick={props.onTest} disabled={props.loading || !props.email.trim()}>
             <Play size={16} />
-            Send test
+            {t("actions.send_test", "Send test")}
           </button>
         </div>
       </section>
@@ -3050,6 +3059,7 @@ type StorageSettingsViewProps = {
 };
 
 function StorageSettingsView(props: StorageSettingsViewProps) {
+  const { t } = useTranslation();
   const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
   const storage = settingsObject(draftSettings, "s3");
   const originalStorage = settingsObject(props.settings, "s3");
@@ -3066,18 +3076,18 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
   return (
     <section className="settings-page">
       <SettingsPageHeader
-        section="File storage"
+        section={t("settings.nav.storage", "File storage")}
         actions={
           <button className="primary" onClick={props.onSave} disabled={props.loading}>
             <Save size={16} />
-            Save settings
+            {t("actions.save_settings", "Save settings")}
           </button>
         }
       />
       <section className="surface settings-config-form storage-settings-form">
         <div className="settings-intro">
-          <p>By default PocketBase uses and recommends the local file system to store uploaded files.</p>
-          <p>Alternatively, you can use an S3 compatible external storage when disk space is limited.</p>
+          <p>{t("settings.storage_intro_local", "By default PocketBase uses and recommends the local file system to store uploaded files.")}</p>
+          <p>{t("settings.storage_intro_s3", "Alternatively, you can use an S3 compatible external storage when disk space is limited.")}</p>
         </div>
         <label className="check-row switch-row">
           <input
@@ -3087,25 +3097,25 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
             checked={storageEnabled}
             onChange={(event) => updateSetting(["s3", "enabled"], event.target.checked)}
           />
-          Use S3 storage
+          {t("settings.use_s3_storage", "Use S3 storage")}
         </label>
         {changedStorageMode && (
           <div className="settings-alert">
-            Existing uploaded files need to be migrated manually between the local file system and S3 storage.
+            {t("settings.storage_migration_warning", "Existing uploaded files need to be migrated manually between the local file system and S3 storage.")}
           </div>
         )}
         {storageEnabled && (
           <section className="settings-accordion-card settings-form-block">
             <header>
               <div>
-                <strong>S3 configuration</strong>
-                <span>{String(storage.bucket ?? "no bucket")}</span>
+                <strong>{t("settings.s3_configuration", "S3 configuration")}</strong>
+                <span>{String(storage.bucket ?? t("settings.no_bucket", "no bucket"))}</span>
               </div>
               <HardDrive size={18} />
             </header>
             <div className="settings-form-row three">
               <label>
-                Endpoint
+                {t("settings.endpoint", "Endpoint")}
                 <input
                   id="s3-endpoint"
                   name="s3.endpoint"
@@ -3117,7 +3127,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
                 />
               </label>
               <label>
-                Bucket
+                {t("settings.bucket", "Bucket")}
                 <input
                   id="s3-bucket"
                   name="s3.bucket"
@@ -3129,7 +3139,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
                 />
               </label>
               <label>
-                Region
+                {t("settings.region", "Region")}
                 <input
                   id="s3-region"
                   name="s3.region"
@@ -3143,7 +3153,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
             </div>
             <div className="settings-form-row two">
               <label>
-                Access key
+                {t("settings.access_key", "Access key")}
                 <input
                   id="s3-access-key"
                   name="s3.accessKey"
@@ -3155,7 +3165,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
                 />
               </label>
               <label>
-                Secret
+                {t("settings.secret", "Secret")}
                 <input
                   id="s3-secret"
                   name="s3.secret"
@@ -3175,7 +3185,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
                 checked={Boolean(storage.forcePathStyle)}
                 onChange={(event) => updateSetting(["s3", "forcePathStyle"], event.target.checked)}
               />
-              Force path-style addressing
+              {t("settings.force_path_style", "Force path-style addressing")}
             </label>
           </section>
         )}
@@ -3183,14 +3193,14 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
       <section className="surface settings-section">
         <div className="section-heading">
           <div>
-            <h2>S3 connection</h2>
-            <p>Check the configured storage or backups filesystem target.</p>
+            <h2>{t("settings.s3_connection", "S3 connection")}</h2>
+            <p>{t("settings.s3_connection_desc", "Check the configured storage or backups filesystem target.")}</p>
           </div>
           <Server size={18} />
         </div>
         <div className="settings-form-grid compact">
           <label>
-            Target
+            {t("settings.target", "Target")}
             <select id="s3-test-target" name="s3TestTarget" value={props.target} onChange={(event) => props.onTarget(event.target.value)}>
               <option value="storage">storage</option>
               <option value="backups">backups</option>
@@ -3198,7 +3208,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
           </label>
           <button className="primary apply-button" onClick={props.onTest} disabled={props.loading}>
             <Play size={16} />
-            Test S3
+            {t("actions.test_s3", "Test S3")}
           </button>
         </div>
       </section>
@@ -3220,6 +3230,7 @@ type CollectionTransferViewProps = {
 };
 
 function CollectionTransferView(props: CollectionTransferViewProps) {
+  const { t } = useTranslation();
   const importing = props.mode === "import";
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
@@ -3289,15 +3300,15 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
     const allSelected = selectedExportIds.length > 0 && selectedExportIds.length === exportCollections.length;
     return (
       <section className="settings-page">
-        <SettingsPageHeader section="Export collections" />
+        <SettingsPageHeader section={t("settings.nav.export", "Export collections")} />
         <p className="settings-intro sync-page-intro">
-          Below you'll find your current collections configuration that you could import in another PocketBase environment.
+          {t("transfer.export_intro", "Below you'll find your current collections configuration that you could import in another PocketBase environment.")}
         </p>
         <section className="surface transfer-surface export-transfer-surface">
           <aside className="export-collection-list">
             <label className="check-row export-select-all">
               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
-              Select all
+              {t("actions.select_all", "Select all")}
             </label>
             <div className="export-collection-items">
               {exportCollections.map((collection) => (
@@ -3312,20 +3323,20 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
           <section className="export-preview-panel">
             <div className="surface-toolbar">
               <div className="table-meta transfer-meta">
-                <span>{selectedExportCollections.length} selected</span>
+                <span>{t("transfer.selected_count", { count: selectedExportCollections.length, defaultValue: "{{count}} selected" })}</span>
               </div>
               <div className="top-actions">
                 <button className="subtle" onClick={props.onExport}>
                   <RefreshCw size={16} />
-                  Refresh
+                  {t("actions.refresh", "Refresh")}
                 </button>
                 <button className="subtle" onClick={() => props.onCopy(selectedExportJson)} disabled={selectedExportCollections.length === 0}>
                   <Copy size={16} />
-                  Copy JSON
+                  {t("actions.copy_json", "Copy JSON")}
                 </button>
                 <button className="primary" onClick={downloadExport} disabled={selectedExportCollections.length === 0}>
                   <Download size={16} />
-                  Download as JSON
+                  {t("actions.download_json", "Download as JSON")}
                 </button>
               </div>
             </div>
@@ -3338,24 +3349,24 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
 
   return (
     <section className="settings-page">
-      <SettingsPageHeader section="Import collections" />
+      <SettingsPageHeader section={t("settings.nav.import", "Import collections")} />
       <section className="surface transfer-surface import-transfer-surface">
         <div className="settings-section">
           <div className="section-heading">
             <div>
-              <h2>Collections</h2>
-              <p>Paste below the collections configuration you want to import or load it from a JSON file.</p>
+              <h2>{t("transfer.collections", "Collections")}</h2>
+              <p>{t("transfer.import_intro", "Paste below the collections configuration you want to import or load it from a JSON file.")}</p>
             </div>
             <Upload size={18} />
           </div>
           <div className="top-actions import-file-actions">
             <button type="button" className="subtle" onClick={() => fileInputRef.current?.click()}>
               <Upload size={16} />
-              Load from JSON file
+              {t("actions.load_json_file", "Load from JSON file")}
             </button>
             <button type="button" className="subtle" onClick={clearImport} disabled={!props.draft.trim()}>
               <X size={16} />
-              Clear
+              {t("actions.clear", "Clear")}
             </button>
             <input
               ref={fileInputRef}
@@ -3366,7 +3377,7 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
             />
           </div>
           <label className="import-json-field">
-            Collections JSON
+            {t("transfer.collections_json", "Collections JSON")}
             <textarea
               id="import-collections-json"
               name="collectionsJson"
@@ -3375,7 +3386,7 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
               spellCheck={false}
             />
           </label>
-          {importInvalid && <div className="form-error">Invalid collections configuration.</div>}
+          {importInvalid && <div className="form-error">{t("transfer.invalid_config", "Invalid collections configuration.")}</div>}
           {Boolean(importedCollections?.length) && !importInvalid && (
             <label className="check-row switch-row">
               <input
@@ -3384,7 +3395,7 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
                 checked={props.deleteMissing}
                 onChange={(event) => props.onDeleteMissing(event.target.checked)}
               />
-              Delete missing collections
+              {t("transfer.delete_missing", "Delete missing collections")}
             </label>
           )}
         </div>
@@ -3392,13 +3403,13 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
         <div className="settings-section import-review-panel">
           <div className="section-heading">
             <div>
-              <h2>Detected changes</h2>
-              <p>{importedCollections?.length ? `${importedCollections.length} imported collections parsed` : "No imported collections parsed yet."}</p>
+              <h2>{t("transfer.detected_changes", "Detected changes")}</h2>
+              <p>{importedCollections?.length ? t("transfer.parsed_count", { count: importedCollections.length, defaultValue: "{{count}} imported collections parsed" }) : t("transfer.parsed_none", "No imported collections parsed yet.")}</p>
             </div>
             <ListFilter size={18} />
           </div>
           {importedCollections?.length && !importHasChanges && !importInvalid ? (
-            <div className="settings-alert info">Your collections configuration is already up-to-date.</div>
+            <div className="settings-alert info">{t("transfer.up_to_date", "Your collections configuration is already up-to-date.")}</div>
           ) : (
             <div className="import-change-list">
               {importChanges.deleted.map((collection) => (
@@ -3412,7 +3423,7 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
               ))}
               {!importChanges.deleted.length && !importChanges.changed.length && !importChanges.added.length && (
                 <article className="import-change-row empty">
-                  <span>No changes detected</span>
+                  <span>{t("transfer.no_changes", "No changes detected")}</span>
                 </article>
               )}
             </div>
@@ -3420,18 +3431,18 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
           <div className="transfer-actions">
             <button className="primary" type="button" onClick={() => setReviewOpen(true)} disabled={props.loading || !canReview}>
               <CheckSquare2 size={16} />
-              Review
+              {t("actions.review", "Review")}
             </button>
           </div>
         </div>
       </section>
       {reviewOpen && (
-        <Modal title="Review collections import" onClose={() => setReviewOpen(false)} wide>
+        <Modal title={t("transfer.review_title", "Review collections import")} onClose={() => setReviewOpen(false)} wide>
           <div className="modal-grid import-review-modal">
             <div className="import-review-summary">
-              <span>{importChanges.added.length} added</span>
-              <span>{importChanges.changed.length} changed</span>
-              <span>{importChanges.deleted.length} deleted</span>
+              <span>{t("transfer.added_count", { count: importChanges.added.length, defaultValue: "{{count}} added" })}</span>
+              <span>{t("transfer.changed_count", { count: importChanges.changed.length, defaultValue: "{{count}} changed" })}</span>
+              <span>{t("transfer.deleted_count", { count: importChanges.deleted.length, defaultValue: "{{count}} deleted" })}</span>
             </div>
             <div className="import-change-list compact">
               {importChanges.deleted.map((collection) => (
@@ -3445,16 +3456,16 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
               ))}
             </div>
             <div className="settings-alert">
-              Importing will apply schema changes to the current database. Review destructive changes before continuing.
+              {t("transfer.import_warning", "Importing will apply schema changes to the current database. Review destructive changes before continuing.")}
             </div>
             <div className="modal-actions">
               <button type="button" className="subtle" onClick={() => setReviewOpen(false)}>
                 <X size={16} />
-                Cancel
+                {t("actions.cancel", "Cancel")}
               </button>
               <button type="button" className="primary" onClick={confirmImport} disabled={props.loading}>
                 <Upload size={16} />
-                Import collections
+                {t("actions.import_collections", "Import collections")}
               </button>
             </div>
           </div>
@@ -3472,9 +3483,16 @@ type TransferChangeRowProps = {
 };
 
 function TransferChangeRow({ label, tone, collection, previousName }: TransferChangeRowProps) {
+  const { t } = useTranslation();
+  const translatedLabel =
+    label === "Added"
+      ? t("transfer.change_added", "Added")
+      : label === "Changed"
+        ? t("transfer.change_changed", "Changed")
+        : t("transfer.change_deleted", "Deleted");
   return (
     <article className="import-change-row">
-      <span className={`sync-change-label ${tone}`}>{label}</span>
+      <span className={`sync-change-label ${tone}`}>{translatedLabel}</span>
       <div>
         {previousName && previousName !== collection.name && (
           <>
@@ -3499,24 +3517,25 @@ type SqlViewProps = {
 };
 
 function SqlView(props: SqlViewProps) {
+  const { t } = useTranslation();
   const columns = props.result?.columns ?? [];
   const rows = props.result?.rows ?? [];
   return (
     <section className="settings-page">
-      <SettingsPageHeader section="SQL console" />
+      <SettingsPageHeader section={t("settings.nav.sql", "SQL console")} />
       <div className="sql-layout">
         <section className="surface sql-editor">
           <div className="surface-toolbar">
             <div className="table-meta transfer-meta">
-              <span>Superuser SQL console</span>
+              <span>{t("sql.superuser_console", "Superuser SQL console")}</span>
             </div>
             <button className="primary" onClick={props.onRun} disabled={props.loading || !props.query.trim()}>
               <Play size={16} />
-              Run query
+              {t("actions.run_query", "Run query")}
             </button>
           </div>
           <label className="sql-textarea">
-            Query
+            {t("sql.query", "Query")}
             <textarea
               id="sql-query"
               name="sqlQuery"
@@ -3529,22 +3548,22 @@ function SqlView(props: SqlViewProps) {
 
         <section className="surface sql-result">
           <div className="table-meta">
-            <span>{Number(props.result?.affectedRows ?? 0)} affected rows</span>
-            <span>{rows.length} result rows</span>
+            <span>{t("sql.affected_rows", { count: Number(props.result?.affectedRows ?? 0), defaultValue: "{{count}} affected rows" })}</span>
+            <span>{t("sql.result_rows", { count: rows.length, defaultValue: "{{count}} result rows" })}</span>
             {props.error && <span className="danger">{props.error}</span>}
           </div>
           <div className="table-wrap">
             <table className="sql-table">
               <thead>
                 <tr>
-                  {columns.length === 0 ? <th>Result</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
+                  {columns.length === 0 ? <th>{t("sql.result", "Result")}</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
                     <td className="empty-row" colSpan={Math.max(1, columns.length)}>
-                      No rows
+                      {t("sql.no_rows", "No rows")}
                     </td>
                   </tr>
                 ) : (
@@ -3594,9 +3613,9 @@ function LogsView(props: LogsViewProps) {
   return (
     <section className="logs-page">
       <div className="logs-chart-strip">
-        <div className="logs-chart-bars" aria-label="Log activity">
+        <div className="logs-chart-bars" aria-label={t("logs.activity", "Log activity")}>
           {chartStats.length === 0 ? (
-            <span className="logs-chart-empty">No log activity</span>
+            <span className="logs-chart-empty">{t("logs.no_activity", "No log activity")}</span>
           ) : (
             chartStats.map((item) => {
               const totalValue = Number(item.total || 0);
@@ -3613,10 +3632,10 @@ function LogsView(props: LogsViewProps) {
       </div>
 
       <header className="page-header logs-page-header">
-        <nav className="breadcrumbs" aria-label="Breadcrumb">
-          <span>Logs</span>
+        <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
+          <span>{t("nav.logs", "Logs")}</span>
         </nav>
-        <button className="icon-button page-circle" onClick={props.onRefresh} title="Refresh logs" aria-label="Refresh logs">
+        <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_logs", "Refresh logs")} aria-label={t("actions.refresh_logs", "Refresh logs")}>
           <RefreshCw size={17} />
         </button>
         <div className="searchbar logs-searchbar">
@@ -3625,21 +3644,21 @@ function LogsView(props: LogsViewProps) {
             id="logs-filter"
             name="logsFilter"
             autoComplete="off"
-            aria-label="Search term or filter"
+            aria-label={t("logs.search_aria", "Search term or filter")}
             value={props.filter}
             onChange={(event) => props.onFilter(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") props.onRefresh();
             }}
-            placeholder="Search term or filter like `level > 0`"
+            placeholder={t("logs.search_placeholder", "Search term or filter like `level > 0`")}
           />
         </div>
         <button className="subtle apply-button" onClick={props.onRefresh} disabled={props.loading}>
           <ListFilter size={16} />
-          Apply
+          {t("actions.apply", "Apply")}
         </button>
         <div className="logs-header-meta">
-          <span>{statsTotal} hourly events</span>
+          <span>{t("logs.hourly_events", { count: statsTotal, defaultValue: "{{count}} hourly events" })}</span>
         </div>
       </header>
 
@@ -3647,12 +3666,12 @@ function LogsView(props: LogsViewProps) {
         <table className="logs-table">
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Method</th>
-              <th>Status</th>
+              <th>{t("logs.time", "Time")}</th>
+              <th>{t("logs.method", "Method")}</th>
+              <th>{t("logs.status", "Status")}</th>
               <th>URL</th>
-              <th>Auth</th>
-              <th>Exec</th>
+              <th>{t("logs.auth", "Auth")}</th>
+              <th>{t("logs.exec", "Exec")}</th>
               <th className="actions-col">{t("collections.actions")}</th>
             </tr>
           </thead>
@@ -3660,7 +3679,7 @@ function LogsView(props: LogsViewProps) {
             {props.logs.length === 0 ? (
               <tr>
                 <td className="empty-row" colSpan={7}>
-                  No logs
+                  {t("logs.no_logs", "No logs")}
                 </td>
               </tr>
             ) : (
@@ -3686,7 +3705,7 @@ function LogsView(props: LogsViewProps) {
                     </td>
                     <td>{formatExecTime(data.execTime)}</td>
                     <td className="row-actions">
-                      <button className="icon-button" onClick={() => setSelected(log)} title="Inspect log" aria-label="Inspect log">
+                      <button className="icon-button" onClick={() => setSelected(log)} title={t("logs.inspect", "Inspect log")} aria-label={t("logs.inspect", "Inspect log")}>
                         <ChevronRight size={16} />
                       </button>
                     </td>
@@ -3699,12 +3718,12 @@ function LogsView(props: LogsViewProps) {
       </div>
 
       <footer className="page-footer">
-        <span>Total: {total}</span>
-        <span>{props.logs.length} visible</span>
+        <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
+        <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
       </footer>
 
       {selected && (
-        <Modal title={`Log ${selected.id}`} onClose={() => setSelected(null)} wide>
+        <Modal title={t("logs.log_title", { id: selected.id, defaultValue: "Log {{id}}" })} onClose={() => setSelected(null)} wide>
           <pre className="json-panel log-json">{JSON.stringify(selected, null, 2)}</pre>
         </Modal>
       )}
@@ -3768,7 +3787,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
   });
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("fields");
-  const tabs = useMemo(() => collectionModalTabs(type), [type]);
+  const tabs = useMemo(() => collectionModalTabs(type, t), [type, t]);
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -3780,7 +3799,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     event.preventDefault();
     try {
       const parsedFields = JSON.parse(fields || "[]") as FieldSchema[];
-      if (!Array.isArray(parsedFields)) throw new Error("Fields must be an array.");
+      if (!Array.isArray(parsedFields)) throw new Error(t("errors.fields_must_be_array", "Fields must be an array."));
       onSubmit({
         name: name.trim(),
         type,
@@ -3875,7 +3894,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     }));
   }
 
-  const fieldsPreview = useMemo(() => parseFieldsPreview(fields), [fields]);
+  const fieldsPreview = useMemo(() => parseFieldsPreview(fields, t), [fields, t]);
 
   function updateFields(nextFields: FieldSchema[]) {
     setFields(JSON.stringify(nextFields, null, 2));
@@ -3920,12 +3939,20 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
   }
 
   return (
-    <Modal title={state.mode === "edit" ? `Edit ${collection?.name}` : "New collection"} onClose={onClose} wide>
+    <Modal
+      title={
+        state.mode === "edit"
+          ? t("collections.edit_collection_title", { name: collection?.name, defaultValue: "Edit {{name}}" })
+          : t("actions.new_collection", "New collection")
+      }
+      onClose={onClose}
+      wide
+    >
       <form className="modal-grid collection-upsert-form" onSubmit={submit}>
         <section className="collection-modal-head">
           <div className="collection-name-field">
             <label>
-              Name{collection?.system ? " (system)" : ""}
+              {t("common.name", "Name")}{collection?.system ? ` (${t("collections.system", "system")})` : ""}
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -3936,11 +3963,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               />
             </label>
           </div>
-          <div className="collection-type-switch" aria-label="Collection type">
+          <div className="collection-type-switch" aria-label={t("collections.collection_type", "Collection type")}>
             {[
-              { id: "base", label: "Base", icon: Database },
-              { id: "view", label: "View", icon: Code2 },
-              { id: "auth", label: "Auth", icon: Shield }
+              { id: "base", label: t("collections.type_base", "Base"), icon: Database },
+              { id: "view", label: t("collections.type_view", "View"), icon: Code2 },
+              { id: "auth", label: t("collections.type_auth", "Auth"), icon: Shield }
             ].map((option) => {
               const Icon = option.icon;
               return (
@@ -3959,7 +3986,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           </div>
         </section>
 
-        <nav className="collection-modal-tabs" aria-label="Collection editor tabs">
+        <nav className="collection-modal-tabs" aria-label={t("collections.editor_tabs", "Collection editor tabs")}>
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -3976,8 +4003,12 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           <section className="field-builder-panel collection-tab-panel">
           <header>
             <div>
-              <strong>Fields</strong>
-              <span>{fieldsPreview.error ? "Invalid fields JSON" : `${fieldsPreview.fields.length} configured fields`}</span>
+              <strong>{t("collections.fields", "Fields")}</strong>
+              <span>
+                {fieldsPreview.error
+                  ? t("collections.invalid_fields_json", "Invalid fields JSON")
+                  : t("collections.configured_fields", { count: fieldsPreview.fields.length, defaultValue: "{{count}} configured fields" })}
+              </span>
             </div>
             <div className="field-builder-actions">
               {["text", "number", "bool", "email", "file", "json", "relation"].map((fieldType) => (
@@ -3993,7 +4024,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           ) : (
             <div className="field-builder-list">
               {fieldsPreview.fields.length === 0 ? (
-                <p className="sidebar-empty">No fields configured</p>
+                <p className="sidebar-empty">{t("collections.no_fields_configured", "No fields configured")}</p>
               ) : (
                 fieldsPreview.fields.map((field, index) => (
                   <FieldEditor
@@ -4008,7 +4039,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
             </div>
           )}
           <label>
-            Fields JSON
+            {t("collections.fields_json", "Fields JSON")}
             <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
           </label>
           </section>
@@ -4017,7 +4048,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         {activeTab === "query" && (
           <section className="collection-query-panel collection-tab-panel">
             <label>
-              View query
+              {t("collections.view_query", "View query")}
               <textarea
                 value={viewQuery}
                 onChange={(event) => setViewQuery(event.target.value)}
@@ -4032,11 +4063,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           <section className="auth-config-grid collection-tab-panel">
             <article className="auth-config-card">
               <header>
-                <strong>Password auth</strong>
+                <strong>{t("collections.password_auth", "Password auth")}</strong>
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={passwordEnabled} onChange={(event) => setPasswordEnabled(event.target.checked)} />
-                Enabled
+                {t("common.enabled", "Enabled")}
               </label>
               <div className="stacked-checks">
                 <label className="check-row">
@@ -4045,7 +4076,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                     checked={identityFields.includes("email")}
                     onChange={() => toggleIdentityField("email")}
                   />
-                  Email identity
+                  {t("collections.email_identity", "Email identity")}
                 </label>
                 <label className="check-row">
                   <input
@@ -4053,7 +4084,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                     checked={identityFields.includes("username")}
                     onChange={() => toggleIdentityField("username")}
                   />
-                  Username identity
+                  {t("collections.username_identity", "Username identity")}
                 </label>
               </div>
             </article>
@@ -4064,11 +4095,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={otpEnabled} onChange={(event) => setOtpEnabled(event.target.checked)} />
-                Enabled
+                {t("common.enabled", "Enabled")}
               </label>
               <div className="two-col compact">
                 <label>
-                  Duration (s)
+                  {t("collections.duration_seconds", "Duration (s)")}
                   <input
                     type="number"
                     min={60}
@@ -4077,7 +4108,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                   />
                 </label>
                 <label>
-                  Length
+                  {t("collections.length", "Length")}
                   <input
                     type="number"
                     min={4}
@@ -4095,10 +4126,10 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={mfaEnabled} onChange={(event) => setMfaEnabled(event.target.checked)} />
-                Enabled
+                {t("common.enabled", "Enabled")}
               </label>
               <label>
-                Duration (s)
+                {t("collections.duration_seconds", "Duration (s)")}
                 <input
                   type="number"
                   min={60}
@@ -4114,7 +4145,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               </header>
               <label className="check-row">
                 <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} />
-                Enabled
+                {t("common.enabled", "Enabled")}
               </label>
               <div className="provider-option-grid">
                 {oauthProviders.map((provider) => (
@@ -4148,14 +4179,14 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                         </header>
                         <div className="two-col oauth-provider-fields">
                           <label>
-                            Client ID
+                            {t("settings.client_id", "Client ID")}
                             <input
                               value={config.clientId ?? ""}
                               onChange={(event) => updateOauthProviderConfig(providerName, { clientId: event.target.value })}
                             />
                           </label>
                           <label>
-                            Client Secret
+                            {t("settings.client_secret", "Client Secret")}
                             <input
                               value={config.clientSecret ?? ""}
                               onChange={(event) => updateOauthProviderConfig(providerName, { clientSecret: event.target.value })}
@@ -4164,14 +4195,14 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                         </div>
                         <div className="two-col oauth-provider-fields">
                           <label>
-                            Auth URL
+                            {t("settings.auth_url", "Auth URL")}
                             <input
                               value={config.authURL ?? ""}
                               onChange={(event) => updateOauthProviderConfig(providerName, { authURL: event.target.value })}
                             />
                           </label>
                           <label>
-                            Token URL
+                            {t("settings.token_url", "Token URL")}
                             <input
                               value={config.tokenURL ?? ""}
                               onChange={(event) => updateOauthProviderConfig(providerName, { tokenURL: event.target.value })}
@@ -4179,7 +4210,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                           </label>
                         </div>
                         <label>
-                          User Info URL
+                          {t("settings.user_info_url", "User Info URL")}
                           <input
                             value={config.userInfoURL ?? ""}
                             onChange={(event) => updateOauthProviderConfig(providerName, { userInfoURL: event.target.value })}
@@ -4187,7 +4218,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                         </label>
                         <div className="two-col oauth-provider-fields">
                           <label>
-                            Scopes
+                            {t("settings.scopes", "Scopes")}
                             <input
                               value={Array.isArray(config.scopes) ? config.scopes.join(", ") : ""}
                               onChange={(event) => updateOauthProviderConfig(providerName, { scopes: splitScopes(event.target.value) })}
@@ -4215,7 +4246,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           <section className="collection-rules-panel collection-tab-panel">
             <div className="rules-helper">
               <div>
-                <strong>Available fields</strong>
+                <strong>{t("collections.available_fields", "Available fields")}</strong>
                 <div className="chips">
                   {fieldsPreview.fields.length === 0 ? (
                     <span>id</span>
@@ -4227,7 +4258,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                 </div>
               </div>
               <div>
-                <strong>Request fields</strong>
+                <strong>{t("collections.request_fields", "Request fields")}</strong>
                 <div className="chips">
                   {["@request.auth.*", "@request.body.*", "@request.query.*", "@collection.*"].map((item) => (
                     <span key={item}>{item}</span>
@@ -4238,7 +4269,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
             <div className="rules-grid official">
               {collectionRuleKeys(type).map((key) => (
                 <label key={key}>
-                  {collectionRuleLabel(key)}
+                  {collectionRuleLabel(key, t)}
                   <textarea
                     value={rules[key]}
                     onChange={(event) => setRules({ ...rules, [key]: event.target.value })}
@@ -4255,11 +4286,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         <div className="modal-actions">
           <button type="button" className="subtle" onClick={onClose}>
             <X size={16} />
-            Cancel
+            {t("actions.cancel", "Cancel")}
           </button>
           <button className="primary" type="submit">
             <Save size={16} />
-            Save
+            {t("actions.save", "Save")}
           </button>
         </div>
       </form>
@@ -4279,6 +4310,7 @@ type RecordModalProps = {
 };
 
 function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps) {
+  const { t } = useTranslation();
   const fileFields = (collection.fields ?? []).filter((field) => field.type === "file" && !field.hidden);
   const editableFields = (collection.fields ?? []).filter(
     (field) => field.type !== "file" && !field.hidden && !field.system
@@ -4355,7 +4387,7 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
     setSaving(true);
     try {
       const parsedPayload = JSON.parse(json || "{}") as Record<string, unknown>;
-      if (!isPlainObject(parsedPayload)) throw new Error("Record payload must be an object.");
+      if (!isPlainObject(parsedPayload)) throw new Error(t("errors.record_payload_object", "Record payload must be an object."));
       await onSubmit(parsedPayload, files, { close });
       setBasePayload(parsedPayload);
       setPayload(parsedPayload);
@@ -4370,28 +4402,36 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
   }
 
   return (
-    <Modal title={state.record ? `Edit ${state.record.id}` : `New ${collection.name}`} onClose={onClose} wide>
+    <Modal
+      title={
+        state.record
+          ? t("records.edit_record_title", { id: state.record.id, defaultValue: "Edit {{id}}" })
+          : t("records.new_record_title", { name: collection.name, defaultValue: "New {{name}}" })
+      }
+      onClose={onClose}
+      wide
+    >
       <form className="modal-grid record-upsert-form" onSubmit={(event) => submit(event, true)}>
         {initialDraft && (
           <div className="draft-alert">
             <div>
-              <strong>Unsaved draft</strong>
-              <span>This record has locally saved changes.</span>
+              <strong>{t("records.unsaved_draft", "Unsaved draft")}</strong>
+              <span>{t("records.unsaved_draft_desc", "This record has locally saved changes.")}</span>
             </div>
             <button type="button" className="subtle" onClick={restoreDraft}>
               <RotateCcw size={15} />
-              Restore draft
+              {t("actions.restore_draft", "Restore draft")}
             </button>
-            <button type="button" className="icon-button" onClick={discardDraft} title="Discard draft" aria-label="Discard draft">
+            <button type="button" className="icon-button" onClick={discardDraft} title={t("actions.discard_draft", "Discard draft")} aria-label={t("actions.discard_draft", "Discard draft")}>
               <X size={15} />
             </button>
           </div>
         )}
 
         {showTabs && (
-          <nav className="record-modal-tabs" aria-label="Record editor tabs">
+          <nav className="record-modal-tabs" aria-label={t("records.editor_tabs", "Record editor tabs")}>
             <button type="button" className={activeTab === "main" ? "active" : ""} onClick={() => setActiveTab("main")}>
-              Account
+              {t("records.account", "Account")}
               {changed && activeTab !== "main" && <span className="tab-dot" />}
             </button>
             <button
@@ -4399,7 +4439,7 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
               className={activeTab === "providers" ? "active" : ""}
               onClick={() => setActiveTab("providers")}
             >
-              Auth providers
+              {t("records.auth_providers", "Auth providers")}
             </button>
           </nav>
         )}
@@ -4411,13 +4451,13 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
             <section className="record-form-panel">
               <div className="section-heading compact">
                 <div>
-                  <h2>{collection.type === "auth" ? "Account" : "Fields"}</h2>
-                  <p>{editableFields.length} editable fields</p>
+                  <h2>{collection.type === "auth" ? t("records.account", "Account") : t("collections.fields", "Fields")}</h2>
+                  <p>{t("records.editable_fields_count", { count: editableFields.length, defaultValue: "{{count}} editable fields" })}</p>
                 </div>
               </div>
               <div className="record-field-grid">
                 {editableFields.length === 0 ? (
-                  <p className="sidebar-empty">No editable fields</p>
+                  <p className="sidebar-empty">{t("records.no_editable_fields", "No editable fields")}</p>
                 ) : (
                   editableFields.map((field) => (
                     <RecordFieldControl
@@ -4467,19 +4507,19 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
         <div className="modal-actions record-footer-actions">
           <button type="button" className="subtle" onClick={onClose}>
             <X size={16} />
-            Close
+            {t("actions.close", "Close")}
           </button>
           <button type="button" className="subtle" onClick={resetForm} disabled={!changed || saving}>
             <RotateCcw size={16} />
-            Reset form
+            {t("actions.reset_form", "Reset form")}
           </button>
           <span className="modal-actions-spacer" />
           <button className="primary" type="submit" disabled={saving}>
             <Save size={16} />
-            {state.record ? "Save changes" : "Create"}
+            {state.record ? t("actions.save_changes", "Save changes") : t("actions.create", "Create")}
           </button>
           <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={saving}>
-            Save and continue
+            {t("actions.save_and_continue", "Save and continue")}
           </button>
         </div>
       </form>
@@ -4488,11 +4528,12 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
 }
 
 function AuthProvidersPanel({ collection, record }: { collection: CollectionSchema; record?: RecordItem }) {
+  const { t } = useTranslation();
   const providers = collection.oauth2?.providers ?? [];
   return (
     <section className="auth-providers-panel">
       {providers.length === 0 ? (
-        <EmptyState icon={Shield} title="No auth providers configured" />
+        <EmptyState icon={Shield} title={t("records.no_auth_providers", "No auth providers configured")} />
       ) : (
         providers.map((provider) => (
           <article className="auth-provider-row" key={provider.name}>
@@ -4501,9 +4542,9 @@ function AuthProvidersPanel({ collection, record }: { collection: CollectionSche
             </div>
             <div>
               <strong>{provider.name}</strong>
-              <span>{provider.clientId ? "configured" : "missing credentials"}</span>
+              <span>{provider.clientId ? t("common.configured", "configured") : t("settings.missing_credentials", "missing credentials")}</span>
             </div>
-            <code>{String(record?.[`${provider.name}Id`] ?? "not linked")}</code>
+            <code>{String(record?.[`${provider.name}Id`] ?? t("records.not_linked", "not linked"))}</code>
           </article>
         ))
       )}
@@ -4526,12 +4567,13 @@ type ModalProps = {
 };
 
 function Modal({ title, onClose, wide, children }: ModalProps) {
+  const { t } = useTranslation();
   return (
     <div className="modal-backdrop" role="presentation">
       <section className={wide ? "modal wide" : "modal"} role="dialog" aria-modal="true" aria-label={title}>
         <header>
           <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} title="Close" aria-label="Close">
+          <button className="icon-button" onClick={onClose} title={t("actions.close", "Close")} aria-label={t("actions.close", "Close")}>
             <X size={18} />
           </button>
         </header>
@@ -4547,25 +4589,26 @@ type OAuthResultModalProps = {
 };
 
 function OAuthResultModal({ result, onClose }: OAuthResultModalProps) {
+  const { t } = useTranslation();
   return (
-    <Modal title={`OAuth2 Result: ${result.provider.displayName || result.provider.name}`} onClose={onClose} wide>
+    <Modal title={t("auth.oauth_result_title", { name: result.provider.displayName || result.provider.name, defaultValue: "OAuth2 Result: {{name}}" })} onClose={onClose} wide>
       <div className="modal-grid">
         <div className="summary-row compact">
-          <span>Token</span>
+          <span>{t("common.token", "Token")}</span>
           <code>{result.response.token}</code>
         </div>
         <label>
-          Record
+          {t("records.record", "Record")}
           <textarea value={JSON.stringify(result.response.record, null, 2)} readOnly spellCheck={false} />
         </label>
         <label>
-          Meta
+          {t("records.meta", "Meta")}
           <textarea value={JSON.stringify(result.response.meta ?? {}, null, 2)} readOnly spellCheck={false} />
         </label>
         <div className="modal-actions">
           <button type="button" className="subtle" onClick={onClose}>
             <X size={16} />
-            Close
+            {t("actions.close", "Close")}
           </button>
         </div>
       </div>
@@ -4577,7 +4620,7 @@ function StatusPill({ health, loading }: { health: HealthResponse["data"] | null
   const { t } = useTranslation();
   return (
     <span className={loading ? "status busy" : health ? "status ready" : "status offline"}>
-      {loading ? "syncing" : health ? "online" : "offline"}
+      {loading ? t("status.syncing", "syncing") : health ? t("status.online", "online") : t("status.offline", "offline")}
     </span>
   );
 }
@@ -4688,7 +4731,12 @@ function splitScopes(value: string | string[] | undefined) {
   return items.map((item) => item.trim()).filter(Boolean);
 }
 
-function waitForOAuthResult(expectedState: string, popup: Window, timeoutMs = 120000) {
+function waitForOAuthResult(
+  expectedState: string,
+  popup: Window,
+  messages: { closed: string; timeout: string },
+  timeoutMs = 120000
+) {
   sessionStorage.removeItem("pbj-oauth2-result");
   return new Promise<{ state: string; code: string; error: string }>((resolve, reject) => {
     let settled = false;
@@ -4739,11 +4787,11 @@ function waitForOAuthResult(expectedState: string, popup: Window, timeoutMs = 12
         // ignore invalid storage payloads
       }
       if (popup.closed) {
-        finish(() => reject(new Error("OAuth2 popup was closed before authentication completed.")));
+        finish(() => reject(new Error(messages.closed)));
       }
     }, 250);
     timeoutId = window.setTimeout(() => {
-      finish(() => reject(new Error("OAuth2 popup timed out.")));
+      finish(() => reject(new Error(messages.timeout)));
     }, timeoutMs);
   });
 }
@@ -4795,19 +4843,19 @@ function isSystemCollection(collection: CollectionSchema) {
   return Boolean(collection.system) || collection.name.startsWith("_");
 }
 
-function viewMeta(view: ViewName, collection: CollectionSchema | null) {
+function viewMeta(view: ViewName, collection: CollectionSchema | null, t: TFunction) {
   const titles: Record<ViewName, { title: string; eyebrow: string }> = {
-    records: { title: collection?.name ?? "Collections", eyebrow: collection?.type ?? "Admin console" },
-    schema: { title: collection?.name ?? "Collections", eyebrow: "Schema" },
-    settings: { title: "Settings", eyebrow: "Application" },
-    mail: { title: "Mail settings", eyebrow: "Application" },
-    storage: { title: "File storage", eyebrow: "Application" },
-    backups: { title: "Backups", eyebrow: "Maintenance" },
-    crons: { title: "Crons", eyebrow: "Scheduler" },
-    export: { title: "Export collections", eyebrow: "System" },
-    import: { title: "Import collections", eyebrow: "System" },
-    sql: { title: "SQL console", eyebrow: "System" },
-    logs: { title: "Logs", eyebrow: "Observability" }
+    records: { title: collection?.name ?? t("nav.collections", "Collections"), eyebrow: collection?.type ?? t("common.admin_console", "Admin console") },
+    schema: { title: collection?.name ?? t("nav.collections", "Collections"), eyebrow: t("collections.schema", "Schema") },
+    settings: { title: t("nav.settings", "Settings"), eyebrow: t("settings.nav.application", "Application") },
+    mail: { title: t("settings.nav.mail", "Mail settings"), eyebrow: t("settings.nav.application", "Application") },
+    storage: { title: t("settings.nav.storage", "File storage"), eyebrow: t("settings.nav.application", "Application") },
+    backups: { title: t("settings.nav.backups", "Backups"), eyebrow: t("settings.maintenance", "Maintenance") },
+    crons: { title: t("settings.nav.crons", "Crons"), eyebrow: t("settings.scheduler", "Scheduler") },
+    export: { title: t("settings.nav.export", "Export collections"), eyebrow: t("settings.nav.system", "System") },
+    import: { title: t("settings.nav.import", "Import collections"), eyebrow: t("settings.nav.system", "System") },
+    sql: { title: t("settings.nav.sql", "SQL console"), eyebrow: t("settings.nav.system", "System") },
+    logs: { title: t("nav.logs", "Logs"), eyebrow: t("logs.observability", "Observability") }
   };
   return titles[view];
 }
@@ -4960,33 +5008,33 @@ function readRecordDraft(key: string) {
   }
 }
 
-function parseFieldsPreview(value: string) {
+function parseFieldsPreview(value: string, t: TFunction) {
   try {
     const parsed = JSON.parse(value || "[]");
-    if (!Array.isArray(parsed)) return { fields: [] as FieldSchema[], error: "Fields must be an array." };
+    if (!Array.isArray(parsed)) return { fields: [] as FieldSchema[], error: t("errors.fields_must_be_array", "Fields must be an array.") };
     return { fields: parsed as FieldSchema[], error: "" };
   } catch (error) {
     return { fields: [] as FieldSchema[], error: errorMessage(error) };
   }
 }
 
-function collectionModalTabs(type: string) {
+function collectionModalTabs(type: string, t: TFunction) {
   if (type === "view") {
     return [
-      { id: "query", label: "Query" },
-      { id: "rules", label: "API rules" }
+      { id: "query", label: t("sql.query", "Query") },
+      { id: "rules", label: t("collections.api_rules", "API rules") }
     ];
   }
   if (type === "auth") {
     return [
-      { id: "fields", label: "Fields" },
-      { id: "rules", label: "API rules" },
-      { id: "auth", label: "Options" }
+      { id: "fields", label: t("collections.fields", "Fields") },
+      { id: "rules", label: t("collections.api_rules", "API rules") },
+      { id: "auth", label: t("common.options", "Options") }
     ];
   }
   return [
-    { id: "fields", label: "Fields" },
-    { id: "rules", label: "API rules" }
+    { id: "fields", label: t("collections.fields", "Fields") },
+    { id: "rules", label: t("collections.api_rules", "API rules") }
   ];
 }
 
@@ -4995,13 +5043,13 @@ function collectionRuleKeys(type: string): RuleKey[] {
   return ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"];
 }
 
-function collectionRuleLabel(key: RuleKey) {
+function collectionRuleLabel(key: RuleKey, t: TFunction) {
   const labels: Record<RuleKey, string> = {
-    listRule: "List/Search rule",
-    viewRule: "View rule",
-    createRule: "Create rule",
-    updateRule: "Update rule",
-    deleteRule: "Delete rule"
+    listRule: t("collections.list_search_rule", "List/Search rule"),
+    viewRule: t("collections.view_rule", "View rule"),
+    createRule: t("collections.create_rule", "Create rule"),
+    updateRule: t("collections.update_rule", "Update rule"),
+    deleteRule: t("collections.delete_rule", "Delete rule")
   };
   return labels[key];
 }
@@ -5047,8 +5095,8 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
   const commonMeta = (
     <span className="record-field-meta">
       {field.type}
-      {field.required ? " / required" : ""}
-      {field.unique ? " / unique" : ""}
+      {field.required ? ` / ${t("collections.required", "required")}` : ""}
+      {field.unique ? ` / ${t("collections.unique", "unique")}` : ""}
     </span>
   );
 
@@ -5179,7 +5227,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
                    />
                    {opt}
                  </label>
-               )) : <span style={{color: 'var(--text-subtle)'}}>No options configured</span>}
+               )) : <span style={{color: 'var(--text-subtle)'}}>{t("fields.no_options_configured", "No options configured")}</span>}
             </div>
           </label>
        );
@@ -5196,7 +5244,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
           value={value === undefined || value === null ? "" : String(value)}
           onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         >
-          <option value="">-- Select --</option>
+          <option value="">{t("fields.select_placeholder", "-- Select --")}</option>
           {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
         </select>
       </label>
