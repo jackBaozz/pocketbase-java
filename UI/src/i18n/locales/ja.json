@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "collections": "コレクション",
+    "logs": "ログ",
+    "settings": "設定",
+    "users": "ユーザー"
+  },
+  "actions": {
+    "add_record": "レコード追加",
+    "new_collection": "新規コレクション",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "edit": "編集",
+    "view": "表示",
+    "logout": "ログアウト",
+    "search": "検索",
+    "refresh": "更新",
+    "create": "作成",
+    "update": "更新する"
+  },
+  "common": {
+    "loading": "読み込み中...",
+    "error": "エラー",
+    "success": "成功",
+    "name": "名前",
+    "type": "タイプ",
+    "created": "作成日",
+    "updated": "更新日",
+    "options": "オプション",
+    "id": "ID"
+  },
+  "settings": {
+    "application": "アプリケーション",
+    "mail": "メール設定",
+    "storage": "ストレージ",
+    "backups": "バックアップ",
+    "admin": "管理画面",
+    "oauth2": "OAuth2",
+    "auth_providers": "認証プロバイダー"
+  },
+  "auth": {
+    "login": "ログイン",
+    "email": "メールアドレス",
+    "password": "パスワード",
+    "remember_me": "ログイン状態を保持",
+    "sign_in": "サインイン"
+  }
+}

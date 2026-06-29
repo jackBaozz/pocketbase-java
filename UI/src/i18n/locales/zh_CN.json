@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "collections": "数据集合",
+    "logs": "系统日志",
+    "settings": "系统设置",
+    "users": "用户管理"
+  },
+  "actions": {
+    "add_record": "添加记录",
+    "new_collection": "新建集合",
+    "save": "保存",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "view": "查看",
+    "logout": "退出登录",
+    "search": "搜索",
+    "refresh": "刷新",
+    "create": "创建",
+    "update": "更新"
+  },
+  "common": {
+    "loading": "加载中...",
+    "error": "错误",
+    "success": "成功",
+    "name": "名称",
+    "type": "类型",
+    "created": "创建时间",
+    "updated": "更新时间",
+    "options": "选项",
+    "id": "ID"
+  },
+  "settings": {
+    "application": "应用设置",
+    "mail": "邮件设置",
+    "storage": "存储设置",
+    "backups": "数据备份",
+    "admin": "管理员面板",
+    "oauth2": "OAuth2",
+    "auth_providers": "认证提供商"
+  },
+  "auth": {
+    "login": "登录",
+    "email": "邮箱",
+    "password": "密码",
+    "remember_me": "记住我",
+    "sign_in": "登录系统"
+  }
+}

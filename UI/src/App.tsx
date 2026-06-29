@@ -39,6 +39,10 @@ import type { FormEvent, ReactNode, RefObject } from "react";
 import { AuthActionPages } from "./AuthActionPages";
 import { FieldEditor } from "./components/FieldEditor";
 
+import { useTranslation } from "react-i18next";
+import { LanguageSelector } from "./components/LanguageSelector";
+
+
 type HealthResponse = {
   data: {
     canBackup: boolean;
@@ -335,6 +339,7 @@ const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
 function App() {
+  const { t } = useTranslation();
   const [hash, setHash] = useState(window.location.hash);
   useEffect(() => {
     const handler = () => setHash(window.location.hash);
@@ -1104,7 +1109,7 @@ function App() {
             disabled={!authenticated || !selectedName}
           >
             <Database size={15} />
-            Collections
+            {t("nav.collections")}
           </button>
           <button
             className={view === "logs" ? "header-link active" : "header-link"}
@@ -1112,7 +1117,7 @@ function App() {
             disabled={!authenticated}
           >
             <Activity size={15} />
-            Logs
+            {t("nav.logs")}
           </button>
           <button
             className={settingsView ? "header-link active" : "header-link"}
@@ -1120,15 +1125,16 @@ function App() {
             disabled={!authenticated}
           >
             <Settings size={15} />
-            Settings
+            {t("nav.settings")}
           </button>
         </nav>
         <div className="header-tools">
+          <LanguageSelector />
           <StatusPill health={health} loading={loading} />
-          <button className="icon-button header-icon" onClick={refreshAll} title="Refresh" aria-label="Refresh">
+          <button className="icon-button header-icon" onClick={refreshAll} title={t("actions.refresh")} aria-label={t("actions.refresh")}>
             <RefreshCw size={17} />
           </button>
-          <button className="icon-button header-icon danger" onClick={logout} title="Logout" aria-label="Logout" disabled={!token}>
+          <button className="icon-button header-icon danger" onClick={logout} title={t("actions.logout")} aria-label={t("actions.logout")} disabled={!token}>
             <LogOut size={17} />
           </button>
         </div>

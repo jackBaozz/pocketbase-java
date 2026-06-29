@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "collections": "Коллекции",
+    "logs": "Журналы",
+    "settings": "Настройки",
+    "users": "Пользователи"
+  },
+  "actions": {
+    "add_record": "Добавить запись",
+    "new_collection": "Новая коллекция",
+    "save": "Сохранить",
+    "cancel": "Отмена",
+    "delete": "Удалить",
+    "edit": "Изменить",
+    "view": "Просмотр",
+    "logout": "Выйти",
+    "search": "Поиск",
+    "refresh": "Обновить",
+    "create": "Создать",
+    "update": "Обновить"
+  },
+  "common": {
+    "loading": "Загрузка...",
+    "error": "Ошибка",
+    "success": "Успех",
+    "name": "Имя",
+    "type": "Тип",
+    "created": "Создано",
+    "updated": "Изменено",
+    "options": "Опции",
+    "id": "ID"
+  },
+  "settings": {
+    "application": "Приложение",
+    "mail": "Почта",
+    "storage": "Хранилище",
+    "backups": "Резервные копии",
+    "admin": "Панель админа",
+    "oauth2": "OAuth2",
+    "auth_providers": "Провайдеры"
+  },
+  "auth": {
+    "login": "Войти",
+    "email": "Email",
+    "password": "Пароль",
+    "remember_me": "Запомнить меня",
+    "sign_in": "Войти"
+  }
+}

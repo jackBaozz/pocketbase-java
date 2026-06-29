@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "collections": "Colecciones",
+    "logs": "Registros",
+    "settings": "Ajustes",
+    "users": "Usuarios"
+  },
+  "actions": {
+    "add_record": "Añadir Registro",
+    "new_collection": "Nueva Colección",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "view": "Ver",
+    "logout": "Cerrar sesión",
+    "search": "Buscar",
+    "refresh": "Actualizar",
+    "create": "Crear",
+    "update": "Actualizar"
+  },
+  "common": {
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito",
+    "name": "Nombre",
+    "type": "Tipo",
+    "created": "Creado",
+    "updated": "Actualizado",
+    "options": "Opciones",
+    "id": "ID"
+  },
+  "settings": {
+    "application": "Aplicación",
+    "mail": "Ajustes de correo",
+    "storage": "Almacenamiento",
+    "backups": "Copias de seguridad",
+    "admin": "Panel de Admin",
+    "oauth2": "OAuth2",
+    "auth_providers": "Proveedores de Auth"
+  },
+  "auth": {
+    "login": "Iniciar sesión",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "remember_me": "Recuérdame",
+    "sign_in": "Entrar"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "nav": {
+    "collections": "Collections",
+    "logs": "Logs",
+    "settings": "Settings",
+    "users": "Users"
+  },
+  "actions": {
+    "add_record": "Add Record",
+    "new_collection": "New Collection",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "view": "View",
+    "logout": "Logout",
+    "search": "Search",
+    "refresh": "Refresh",
+    "create": "Create",
+    "update": "Update"
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "name": "Name",
+    "type": "Type",
+    "created": "Created",
+    "updated": "Updated",
+    "options": "Options",
+    "id": "ID"
+  },
+  "settings": {
+    "application": "Application",
+    "mail": "Mail Settings",
+    "storage": "Storage",
+    "backups": "Backups",
+    "admin": "Admin UI",
+    "oauth2": "OAuth2",
+    "auth_providers": "Auth Providers"
+  },
+  "auth": {
+    "login": "Login",
+    "email": "Email",
+    "password": "Password",
+    "remember_me": "Remember me",
+    "sign_in": "Sign In"
+  }
+}
