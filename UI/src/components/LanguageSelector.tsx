@@ -28,10 +28,11 @@ export const LanguageSelector: React.FC = () => {
   const currentLang = LANGUAGES.find(l => l.code === i18n.resolvedLanguage) || LANGUAGES[0];
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div style={{ position: 'relative' }} ref={dropdownRef}>
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+        className="header-link"
         title="Change language"
       >
         <Globe size={16} />
@@ -39,23 +40,52 @@ export const LanguageSelector: React.FC = () => {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 z-10 mt-2 w-48 origin-top-right rounded-md bg-white shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-          <div className="py-1" role="menu" aria-orientation="vertical">
-            {LANGUAGES.map((lang) => (
-              <button
-                key={lang.code}
-                onClick={() => changeLanguage(lang.code)}
-                className={`block w-full px-4 py-2 text-left text-sm ${
-                  i18n.resolvedLanguage === lang.code
-                    ? 'bg-indigo-50 text-indigo-700'
-                    : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                }`}
-                role="menuitem"
-              >
-                {lang.label}
-              </button>
-            ))}
-          </div>
+        <div style={{
+          position: 'absolute',
+          right: 0,
+          top: '100%',
+          marginTop: '4px',
+          zIndex: 100,
+          background: 'var(--surfaceColor)',
+          border: '1px solid var(--surfaceAlt2Color)',
+          borderRadius: 'var(--borderRadius)',
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+          minWidth: '120px',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {LANGUAGES.map((lang) => (
+            <button
+              key={lang.code}
+              onClick={() => changeLanguage(lang.code)}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                background: i18n.resolvedLanguage === lang.code ? 'var(--surfaceAlt2Color)' : 'transparent',
+                color: i18n.resolvedLanguage === lang.code ? 'var(--surfaceTxtColor)' : 'var(--surfaceTxtHintColor)',
+                border: 'none',
+                padding: '8px 16px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                if (i18n.resolvedLanguage !== lang.code) {
+                  e.currentTarget.style.background = 'var(--surfaceAlt1Color)';
+                  e.currentTarget.style.color = 'var(--surfaceTxtColor)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (i18n.resolvedLanguage !== lang.code) {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'var(--surfaceTxtHintColor)';
+                }
+              }}
+            >
+              {lang.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
