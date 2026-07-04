@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.opentest4j.TestAbortedException;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -48,7 +49,7 @@ public class AdminUiPlaywrightTest {
     static void initAll() {
         TestDatabaseFactory.init();
         playwright = Playwright.create();
-        browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true).setChannel("chrome"));
+        browser = launchBrowser();
     }
 
     @AfterAll
@@ -67,8 +68,34 @@ public class AdminUiPlaywrightTest {
         server = LocalPocketBase.start(config);
         baseUrl = "http://localhost:" + server.port();
 
-        context = browser.newContext();
+        context = browser.newContext(new Browser.NewContextOptions().setLocale("en-US"));
+        context.addInitScript("window.localStorage.setItem('i18nextLng', 'en');");
         page = context.newPage();
+    }
+
+    private static Browser launchBrowser() {
+        RuntimeException lastFailure = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true).setChannel("chrome"));
+            } catch (RuntimeException e) {
+                lastFailure = e;
+                try {
+                    Thread.sleep(500L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new TestAbortedException("Interrupted while launching Chrome for Admin UI Playwright tests.", interrupted);
+                }
+            }
+        }
+        try {
+            return playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
+        } catch (RuntimeException e) {
+            if (lastFailure != null) {
+                e.addSuppressed(lastFailure);
+            }
+            throw new TestAbortedException("Chrome/Chromium is unavailable for Admin UI Playwright tests.", e);
+        }
     }
 
     @AfterEach
@@ -263,7 +290,7 @@ public class AdminUiPlaywrightTest {
         page.waitForSelector(".modal-backdrop", new Page.WaitForSelectorOptions().setTimeout(5000));
 
         // Verify the modal has the expected structure
-        assertTrue(page.content().contains("New collection"), "Modal title should be 'New collection'");
+        page.waitForSelector(".modal[aria-label='New Collection']", new Page.WaitForSelectorOptions().setTimeout(5000));
 
         // Verify the Name input exists
         page.waitForSelector("input[placeholder='posts']", new Page.WaitForSelectorOptions().setTimeout(5000));

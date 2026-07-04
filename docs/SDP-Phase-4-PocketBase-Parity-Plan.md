@@ -11,7 +11,7 @@ This document outlines the roadmap for Phase 4. It excludes all tasks successful
 
 The primary goal of Phase 4 is to transition the Java implementation from an SQLite MVP to a robust, multi-database production-ready runtime.
 
-- **Storage Parity**: SQLite relational storage replaces the JSON file store as the default, and MySQL/PostgreSQL are verified as fully-supported production backends.
+- **Storage Parity**: JSONL-backed local storage remains an acceptable default for lightweight/dev usage, while SQLite/MySQL/PostgreSQL are verified through the relational storage path for production parity work.
 - **Durable Auth & Lifecycle**: Implement persistent tokens, OTP, OAuth2 code flows, and SMTP mail delivery.
 - **Unified File & Backup SPI**: Support S3 and local storage, complete with transactions, thumbnails, and ZIP-based backups.
 - **Rule, SSE, Batch Parity**: Implement the complete rule query parameters, SSE realtime updates, transactional batch changes, and raw SQL queries.
@@ -58,12 +58,13 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 - [ ] **CI pipeline integration**: Configure optional/required MySQL and PostgreSQL test execution in the project's CI configuration.
 - *Acceptance Criteria*: Verification suites run on real MySQL and PostgreSQL databases.
 
-#### [x] P4-A05: SQLite Default Engine & Migration Paths
-- [x] **Default SQLite configuration**: Switch the server's default configuration to use the SQLite relational store instead of the JSON file store.
-- [x] **JSON-to-SQLite migrator**: Write an automated command/bootstrapper that reads existing JSON file stores and writes them into SQLite tables.
-- [x] **JSON storage deprecation**: Remove or mark the legacy JSON storage engine as deprecated, maintaining it only as a fallback adapter.
-- [x] **Documentation updates**: Revise the README, setup guides, and CLI parameter descriptions to reflect the SQLite-first default.
-- *Acceptance Criteria*: A fresh server launch bootstraps using SQLite without requiring extra flags, and existing JSON databases migrate without data loss.
+#### [x] P4-A05: JSONL Default Engine & Relational Migration Paths
+- [x] **Default JSONL configuration**: Keep the server's default configuration on the lightweight JSONL-backed local store for dev/native-friendly usage.
+- [x] **SQLite opt-in path**: Keep `-Dstorage=sqlite` as the relational parity baseline and preserve MySQL/PostgreSQL profile switches.
+- [x] **JSON-to-JSONL compatibility**: Read legacy `.json` record files and write current record files as `.jsonl`.
+- [x] **Relational migration path**: Keep explicit relational storage profiles available for parity validation and production-style deployments.
+- [x] **Documentation updates**: Revise this Phase 4 plan to reflect the JSONL-default decision instead of a SQLite-first default.
+- *Acceptance Criteria*: A fresh server launch bootstraps using JSONL without requiring extra flags, and relational storage remains available through explicit storage flags.
 
 ---
 
@@ -254,7 +255,7 @@ This workstream maintains GraalVM compatibility and prepares release pipelines.
 
 1. **Database dialect configuration** (P4-A01, P4-A02)
 2. **Schema migration compiler** (P4-A03)
-3. **Multi-database integration and SQLite defaults** (P4-A04, P4-A05)
+3. **Multi-database integration and JSONL default paths** (P4-A04, P4-A05)
 4. **Auth actions, OTP persistence, and OAuth2 flow** (P4-C01, P4-C02, P4-C03)
 5. **SMTP mail delivery** (P4-C04)
 6. **File Storage provider and backup integration** (P4-D01, P4-D02, P4-D03)

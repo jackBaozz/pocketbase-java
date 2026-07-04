@@ -369,8 +369,12 @@ public class AuthRepository extends BaseRepository {
     }
 
     public void confirmPasswordReset(String collection, JsonNode body) {
-        AuthProcessor.confirmPasswordReset(storeContext, tokenService, collection, body);
-        invalidateAuthRequestToken(body);
+        String token = actionToken(body);
+        database.transactional(() -> {
+            consumeAuthRequestToken(collection, token, "passwordReset");
+            AuthProcessor.confirmPasswordReset(storeContext, tokenService, collection, body);
+            return null;
+        });
     }
 
     public void requestVerification(String collection, JsonNode body) {
@@ -383,8 +387,12 @@ public class AuthRepository extends BaseRepository {
     }
 
     public void confirmVerification(String collection, JsonNode body) {
-        AuthProcessor.confirmVerification(storeContext, tokenService, collection, body);
-        invalidateAuthRequestToken(body);
+        String token = actionToken(body);
+        database.transactional(() -> {
+            consumeAuthRequestToken(collection, token, "verification");
+            AuthProcessor.confirmVerification(storeContext, tokenService, collection, body);
+            return null;
+        });
     }
 
     public void requestEmailChange(String collection, JsonNode body, RequestPrincipal principal) {
@@ -397,8 +405,12 @@ public class AuthRepository extends BaseRepository {
     }
 
     public void confirmEmailChange(String collection, JsonNode body) {
-        AuthProcessor.confirmEmailChange(storeContext, tokenService, collection, body);
-        invalidateAuthRequestToken(body);
+        String token = actionToken(body);
+        database.transactional(() -> {
+            consumeAuthRequestToken(collection, token, "emailChange");
+            AuthProcessor.confirmEmailChange(storeContext, tokenService, collection, body);
+            return null;
+        });
     }
 
     public Map<String, Object> impersonate(String collection, String id, JsonNode body, Map<String, String> query) {
@@ -947,13 +959,48 @@ public class AuthRepository extends BaseRepository {
                 .execute();
     }
 
-    private void invalidateAuthRequestToken(JsonNode body) {
-        if (body != null && body.has("token")) {
-            String token = body.get("token").asText();
-            if (!token.isBlank()) {
-                database.dsl().deleteFrom(qt("_authRequests")).where(qfs("token").eq(token)).execute();
-            }
+    private String actionToken(JsonNode body) {
+        if (body == null || !body.hasNonNull("token") || body.get("token").asText().isBlank()) {
+            throw invalidAuthRequestToken();
         }
+        return body.get("token").asText();
+    }
+
+    private void consumeAuthRequestToken(String collection, String token, String type) {
+        CollectionSchema schema = storeContext.getCollection(collection);
+        var request = database.dsl()
+                .select(qfs("id"), qfs("type"), qfs("collectionId"), qfs("collectionName"), qfs("expires"))
+                .from(qt("_authRequests"))
+                .where(qfs("token").eq(token))
+                .fetchOne();
+        if (request == null) {
+            throw invalidAuthRequestToken();
+        }
+        if (!type.equals(request.get(qfs("type"), String.class))) {
+            throw invalidAuthRequestToken();
+        }
+        String collectionId = request.get(qfs("collectionId"), String.class);
+        String collectionName = request.get(qfs("collectionName"), String.class);
+        if (schema == null
+                || (!schema.id.equals(collectionId) && !schema.name.equals(collectionName))) {
+            throw invalidAuthRequestToken();
+        }
+        String expires = request.get(qfs("expires"), String.class);
+        try {
+            if (expires == null || Instant.parse(expires).isBefore(Instant.now())) {
+                throw invalidAuthRequestToken();
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw invalidAuthRequestToken();
+        }
+        database.dsl().deleteFrom(qt("_authRequests")).where(qfs("token").eq(token)).execute();
+    }
+
+    private ApiException invalidAuthRequestToken() {
+        return new ApiException(400, "Invalid or expired token.",
+                ApiErrors.invalidField("token", "Invalid or expired token."));
     }
 
     private Duration tokenDuration(CollectionSchema.TokenConfig config, long fallbackSeconds) {

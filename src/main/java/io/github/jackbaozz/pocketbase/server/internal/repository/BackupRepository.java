@@ -1,11 +1,14 @@
 package io.github.jackbaozz.pocketbase.server.internal.repository;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
+import io.github.jackbaozz.pocketbase.server.spi.FileStorageProvider;
+import io.github.jackbaozz.pocketbase.server.spi.StorageProviderFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -29,6 +32,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -47,6 +51,10 @@ public class BackupRepository extends BaseRepository {
     }
 
     public Map<String, Object> listBackups(int page, int perPage) {
+        Optional<FileStorageProvider> s3 = backupS3Provider();
+        if (s3.isPresent()) {
+            return listS3Backups(s3.get(), page, perPage);
+        }
         try {
             Path backupsDir = dataDir.resolve("backups");
             Files.createDirectories(backupsDir);
@@ -73,6 +81,16 @@ public class BackupRepository extends BaseRepository {
     }
 
     public void deleteBackup(String key) {
+        Optional<FileStorageProvider> s3 = backupS3Provider();
+        if (s3.isPresent()) {
+            validateBackupKey(key);
+            if (s3.get().stat(key).isEmpty()) {
+                throw new ApiException(404, "Backup not found.");
+            }
+            s3.get().delete(key);
+            deleteCachedS3Backup(key);
+            return;
+        }
         try {
             Path backup = backupFileRequired(key);
             Files.delete(backup);
@@ -97,9 +115,6 @@ public class BackupRepository extends BaseRepository {
 
     public Map<String, Object> createBackup(JsonNode body) {
         try {
-            Path backupsDir = dataDir.resolve("backups");
-            Files.createDirectories(backupsDir);
-
             String name;
             if (body != null && body.has("name") && !body.get("name").isNull() && !body.get("name").asText().isBlank()) {
                 name = body.get("name").asText().trim();
@@ -111,6 +126,29 @@ public class BackupRepository extends BaseRepository {
                 name = "pb_backup_" + Instant.now().toString().replace(":", "-").replace(".", "-") + ".zip";
             }
 
+            Optional<FileStorageProvider> s3 = backupS3Provider();
+            if (s3.isPresent()) {
+                if (s3.get().stat(name).isPresent()) {
+                    throw new ApiException(400, "Backup already exists.",
+                            ApiErrors.notUniqueField("name"));
+                }
+                Path tempFile = Files.createTempFile(dataDir, ".create-backup-", ".zip");
+                try {
+                    try (OutputStream output = Files.newOutputStream(tempFile)) {
+                        writeBackupZip(output);
+                    }
+                    long size = Files.size(tempFile);
+                    try (InputStream input = Files.newInputStream(tempFile)) {
+                        s3.get().put(name, input, size, "application/zip");
+                    }
+                    return s3BackupItem(s3.get(), name).orElseGet(() -> backupItem(name, size, Instant.now().toEpochMilli()));
+                } finally {
+                    Files.deleteIfExists(tempFile);
+                }
+            }
+
+            Path backupsDir = dataDir.resolve("backups");
+            Files.createDirectories(backupsDir);
             Path backupFile = backupsDir.resolve(name);
             if (Files.exists(backupFile)) {
                 throw new ApiException(400, "Backup already exists.",
@@ -137,17 +175,27 @@ public class BackupRepository extends BaseRepository {
         }
         Path backupFile = null;
         try {
+            Optional<FileStorageProvider> s3 = backupS3Provider();
+            if (s3.isPresent()) {
+                String name = sanitizedBackupName(filename);
+                if (s3.get().stat(name).isPresent()) {
+                    throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
+                }
+                Path temp = Files.createTempFile(dataDir, ".upload-backup-", ".zip");
+                try {
+                    Files.write(temp, bytes, StandardOpenOption.TRUNCATE_EXISTING);
+                    validateBackupZip(temp);
+                    s3.get().put(name, new ByteArrayInputStream(bytes), bytes.length, "application/zip");
+                    return s3BackupItem(s3.get(), name).orElseGet(() -> backupItem(name, bytes.length, Instant.now().toEpochMilli()));
+                } finally {
+                    Files.deleteIfExists(temp);
+                }
+            }
+
             Path backupsDir = dataDir.resolve("backups");
             Files.createDirectories(backupsDir);
 
-            String name = filename;
-            if (name == null || name.isBlank()) {
-                name = "upload_" + IdGenerator.id() + ".zip";
-            }
-            name = name.replaceAll("[^a-zA-Z0-9._-]", "_");
-            if (!name.endsWith(".zip")) {
-                name = name + ".zip";
-            }
+            String name = sanitizedBackupName(filename);
 
             Path targetBackupFile = backupsDir.resolve(name);
             if (Files.exists(targetBackupFile)) {
@@ -187,6 +235,10 @@ public class BackupRepository extends BaseRepository {
             return null;
         }
         validateBackupKey(key);
+        Optional<FileStorageProvider> s3 = backupS3Provider();
+        if (s3.isPresent()) {
+            return cachedS3BackupFile(s3.get(), key);
+        }
         Path backup = dataDir.resolve("backups").resolve(key);
         return Files.exists(backup) && Files.isRegularFile(backup) ? backup : null;
     }
@@ -209,14 +261,151 @@ public class BackupRepository extends BaseRepository {
     }
 
     private void writeBackupZip(Path backupFile) throws IOException {
+        try (OutputStream output = Files.newOutputStream(backupFile, StandardOpenOption.CREATE_NEW)) {
+            writeBackupZip(output);
+        }
+    }
+
+    private void writeBackupZip(OutputStream output) throws IOException {
         byte[] snapshot = mapper.writeValueAsBytes(createSnapshot());
-        try (OutputStream output = Files.newOutputStream(backupFile, StandardOpenOption.CREATE_NEW);
-             ZipOutputStream zip = new ZipOutputStream(output)) {
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
             zip.putNextEntry(new ZipEntry(SNAPSHOT_ENTRY));
             zip.write(snapshot);
             zip.closeEntry();
             zipStorageFiles(zip);
         }
+    }
+
+    private Map<String, Object> listS3Backups(FileStorageProvider provider, int page, int perPage) {
+        List<Map<String, Object>> items = provider.list("").stream()
+                .filter(name -> name.endsWith(".zip"))
+                .filter(name -> !name.contains("/") && !name.contains("\\"))
+                .map(name -> s3BackupItem(provider, name).orElseGet(() -> backupItem(name, 0L, 0L)))
+                .sorted((left, right) -> Long.compare((long) right.get("modified"), (long) left.get("modified")))
+                .collect(Collectors.toCollection(ArrayList::new));
+        return pagedBackupItems(items, page, perPage);
+    }
+
+    private Optional<Map<String, Object>> s3BackupItem(FileStorageProvider provider, String name) {
+        return provider.stat(name).map(stat -> backupItem(name, stat.size(), stat.lastModifiedMillis()));
+    }
+
+    private Map<String, Object> backupItem(String name, long size, long modified) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("key", name);
+        result.put("name", name);
+        result.put("size", size);
+        result.put("modified", modified);
+        return result;
+    }
+
+    private Map<String, Object> pagedBackupItems(List<Map<String, Object>> items, int page, int perPage) {
+        int safePage = Math.max(1, page);
+        int safePerPage = Math.max(1, perPage);
+        int total = items.size();
+        int from = Math.min(total, (safePage - 1) * safePerPage);
+        int to = Math.min(total, from + safePerPage);
+        int totalPages = (int) Math.ceil((double) total / safePerPage);
+        return Map.of(
+                "items", items.subList(from, to),
+                "page", safePage,
+                "perPage", safePerPage,
+                "totalItems", total,
+                "totalPages", totalPages
+        );
+    }
+
+    private String sanitizedBackupName(String filename) {
+        String name = filename;
+        if (name == null || name.isBlank()) {
+            name = "upload_" + IdGenerator.id() + ".zip";
+        }
+        name = name.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (!name.endsWith(".zip")) {
+            name = name + ".zip";
+        }
+        validateBackupKey(name);
+        return name;
+    }
+
+    private Path cachedS3BackupFile(FileStorageProvider provider, String key) {
+        Optional<InputStream> input = provider.get(key);
+        if (input.isEmpty()) {
+            return null;
+        }
+        try (InputStream stream = input.get()) {
+            Path cacheDir = dataDir.resolve("backups").resolve(".s3-cache");
+            Files.createDirectories(cacheDir);
+            Path cached = cacheDir.resolve(key).normalize();
+            if (!cached.startsWith(cacheDir.normalize())) {
+                throw invalidBackupArchive();
+            }
+            Files.copy(stream, cached, StandardCopyOption.REPLACE_EXISTING);
+            return cached;
+        } catch (IOException e) {
+            throw new ApiException(400, "Failed to download backup: " + e.getMessage());
+        }
+    }
+
+    private void deleteCachedS3Backup(String key) {
+        try {
+            Files.deleteIfExists(dataDir.resolve("backups").resolve(".s3-cache").resolve(key).normalize());
+        } catch (IOException ignored) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Optional<FileStorageProvider> backupS3Provider() {
+        try {
+            Map<String, Object> settings = loadRawSettings();
+            Object backupsValue = settings.get("backups");
+            if (!(backupsValue instanceof Map<?, ?> backupsMap)) {
+                return Optional.empty();
+            }
+            Object s3Value = backupsMap.get("s3");
+            if (!(s3Value instanceof Map<?, ?> s3Map)) {
+                return Optional.empty();
+            }
+            Map<String, Object> s3 = mapper.convertValue(s3Map, new TypeReference<Map<String, Object>>() {});
+            if (!truthy(s3.get("enabled"))) {
+                return Optional.empty();
+            }
+            return Optional.of(StorageProviderFactory.createS3Provider(s3));
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException(400, "Failed to initialize S3 backup storage: " + e.getMessage());
+        }
+    }
+
+    private Map<String, Object> loadRawSettings() {
+        try {
+            var result = database.dsl()
+                    .select(qfs("value"))
+                    .from(qt("_params"))
+                    .where(qfs("id").eq("settings"))
+                    .fetchOne();
+            if (result == null) {
+                return Map.of();
+            }
+            String value = result.get(qfs("value"));
+            if (value == null || value.isBlank()) {
+                return Map.of();
+            }
+            return mapper.readValue(value, new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            return Map.of();
+        }
+    }
+
+    private boolean truthy(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return value != null && switch (String.valueOf(value).trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "", "0", "false", "no" -> false;
+            default -> true;
+        };
     }
 
     private Map<String, Object> createSnapshot() {

@@ -17,8 +17,10 @@ public class StorageProviderFactory {
         String region = (String) config.get("region");
         String bucket = (String) config.get("bucket");
         String accessKey = (String) config.get("accessKey");
-        String secretKey = (String) config.get("secretKey");
+        String secretKey = config.get("secretKey") == null ? (String) config.get("secret") : (String) config.get("secretKey");
+        boolean forcePathStyle = Boolean.TRUE.equals(config.get("forcePathStyle"))
+                || "true".equalsIgnoreCase(String.valueOf(config.get("forcePathStyle")));
         
-        return new S3FileStorageProvider(endpoint, region, bucket, accessKey, secretKey);
+        return new S3FileStorageProvider(endpoint, region, bucket, accessKey, secretKey, forcePathStyle);
     }
 }

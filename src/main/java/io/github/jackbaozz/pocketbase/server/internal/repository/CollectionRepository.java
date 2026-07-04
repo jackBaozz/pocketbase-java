@@ -10,6 +10,7 @@ import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2ProviderManager;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
+import io.github.jackbaozz.pocketbase.server.internal.SchemaMigrationPlanner;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 import org.jooq.Condition;
@@ -412,7 +413,11 @@ public class CollectionRepository extends BaseRepository {
                 : new ArrayList<>();
 
         if (dryRun) {
-            return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
+            return Map.of(
+                    "collections", newOrUpdated,
+                    "deletedCollections", deleted,
+                    "migrationPlan", migrationPlan(existing, newOrUpdated, deleted)
+            );
         }
 
         return database.transactional(() -> {
@@ -434,6 +439,25 @@ public class CollectionRepository extends BaseRepository {
             }
             return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
         });
+    }
+
+    private List<Map<String, Object>> migrationPlan(List<CollectionSchema> existing, List<CollectionSchema> desired, List<String> deleted) {
+        List<Map<String, Object>> plan = new ArrayList<>();
+        for (CollectionSchema next : desired) {
+            CollectionSchema current = existing.stream()
+                    .filter(item -> Objects.equals(item.id, next.id) || Objects.equals(item.name, next.name))
+                    .findFirst()
+                    .orElse(null);
+            plan.addAll(SchemaMigrationPlanner.plan(current, next, database::quoteIdentifier));
+        }
+        for (String deletedName : deleted) {
+            CollectionSchema current = existing.stream()
+                    .filter(item -> Objects.equals(item.name, deletedName))
+                    .findFirst()
+                    .orElse(null);
+            plan.addAll(SchemaMigrationPlanner.plan(current, null, database::quoteIdentifier));
+        }
+        return plan;
     }
 
     public Map<String, Object> collectionScaffolds() {
