@@ -8,46 +8,17 @@
 - **强制要求**：本项目作为 PocketBase 的 Java 实现，所有的 API 路由路径、请求参数、返回数据结构以及 HTTP 方法，**必须**与 PocketBase 原版完全保持一致。
 - **目的**：确保能够直接兼容并复用现有的 PocketBase 官方 SDK（如 JS/Dart SDK），实现客户端的无缝接入。
 
-## 🚀 最新进展与计划 (2026-06-17)
+## 🚀 最新进展与计划 (2026-07-04)
 
-* 已完成 **SDP-001** (Route manifest conformance tests)：创建了 `RouteConformanceTest` 针对所有官方路由进行基础连通性校验，确保核心框架与 PocketBase API Surface 一致。
-* 已完成 **SDP-003** (`POST /api/collections/meta/dry-run-view`)：添加了基于纯 Select 查询视图预览功能，复用 `JsonFileStore` 内部的 SQL 分析机制，并限制最大 5000 字符与单次 10 条结果的返回。
-* 下一步重点将转移到 **SDP-004** (`_mfas` internal collection / MFA Auth Response) 及深入规则与过滤器解析器兼容性（**SDP-006**）。
-* 已完成 **SDP-004** (`_mfas` internal collection and MFA auth response) 与 **SDP-005** (MFA second-factor flow for password/OTP/OAuth2)：
-  * 添加了对 `CollectionSchema` 中 `mfa.rule` 的支持。
-  * `JsonFileStore` 内部维护了 `mfas` 列表。
-  * 扩展了 AuthResponse 阶段以生成 `mfaId`（在第一阶段）并在传入 `mfaId` 参数时（第二阶段）放行生成完整的 JWT。
-  * 启用了 `__pbMFACleanup__` 定期调度任务用于清理过期的 MFA 记录。
-* 已完成 **SDP-010** (Official collection import/export review flow)：在 `App.tsx` 中实现了 `collectionImportChanges` 来计算新旧集合之间的差异并展示 diff，对每个集合（新增/修改/删除）都以不同的颜色高亮。
-* 已完成 **SDP-011** (Field-specific collection editor UI)：重构了 `field-builder-row` 拆解出新的 `FieldEditor.tsx` 组件，在点击编辑按钮时能进入具体的属性编辑表单（并带有 `Type`, `Required`, `Unique` 等选项的勾选）。
-* 已完成 **SDP-002**, **SDP-006**, **SDP-007**, **SDP-008**, **SDP-009**, **SDP-010**, **SDP-011**：
-  * 构建了 `JsSdkSmokeTest`，利用 node.js 和官方 JS SDK 跑通了集成认证和 CRUD 测试。
-  * 补齐了 `normalizeFieldValue` 关于 Field Type Validation Matrix 的功能（约束 `min`, `max`, `pattern`, `onlyHosts` 等支持）。
-  * 在 UI 中补充了 `FieldEditor` 组件满足 `SDP-011` 的界面缺口。
-  * 实现了 CollectionSchema Index 及字段变更删减记录冗余数据的基础 Schema Migration Semantics（`SDP-009`）。
-  * 编写了 `ADR-001` 作为对 SQLite 及 JSONFileStore 的正式定调（`SDP-007`）。
-  * 验证并认可了内置的 Collection Diff/Review 流程 (`SDP-010`) 及现存的 `RuleEvaluator` 评估器作为核心解析器 (`SDP-006`)。
-
-## 🚀 P1 里程碑完成 (2026-06-18)
-
-- 全面完成 `P1` 层级的 PocketBase 兼容性功能开发。
-- 补齐了 `SDP-013` (OAuth2 specific validation parity)，引入了失效测试并补充提供商校验机制。
-- 确保 `SDP-018` (Realtime Smoke) 与 `SDP-019` (Batch Service Rollback) 测试框架覆盖完毕，为下一步 SDK 功能优化奠基。
-- 确立 `SDP-012` 以及 `SDP-014` ~ `SDP-017` UI 的实装。
-
-## 🚧 Phase 2 阶段性进展 (2026-06-22)
-
-- `SDP2-A01` ~ `SDP2-A05` 已开始落地一致性测试基准：
-  * 已新增官方路由 manifest、`RouteConformanceTest`、`BehaviorFixturesTest` 和 `AdminUiSmokeTest`。
-  * JS SDK smoke 已扩展到 auth refresh、文件、batch 和 realtime 场景，但仍必须以官方 SDK 无补丁运行结果作为最终验收。
-  * `-Dstorage=sqlite` 参数已接入 Maven Surefire，后续仍需补齐完整 DB matrix。
-- `SDP2-B01` ~ `SDP2-B05` 已开始落地 SQLite Runtime MVP：
-  * 已引入 `StorageEngine` SPI、`SqliteStorageEngine`、`sqlite-jdbc` 和 `HikariCP`。
-  * SQLite 当前覆盖 `_superusers`、`_collections`、基础记录 CRUD、日志表、基础索引和部分 SQL/filter 能力。
-  * SQLite 仍处于 MVP/partial 状态，文件、备份、OTP、scaffolds、dry-run view、OAuth metadata、完整规则/事务语义仍需继续补齐。
-- `SDP2-C01` ~ `SDP2-C06` 已开始抽离共享语义：
-  * 已新增 `FieldValidator`、`FilterToSqlCompiler` 和 `RecordProcessor`。
-  * 字段验证、关系校验、filter SQL 编译、expand/fields 仍需要更多官方 fixture 覆盖后才能标记完成。
+- **Phase 2, Phase 3 & Phase 4 兼容性里程碑全部顺利完成**：
+  - **存储层重构 & 关系数据库支持**：引入了统一的 `StorageEngine` SPI，在默认支持零依赖本地 JSONL 文件存储（通过 `JsonFileStore` 兼容旧 `.json` 数组）的基础上，成功实现了 SQLite (`SqliteStorageEngine`)、MySQL (`MysqlStorageEngine`) 和 PostgreSQL (`PostgresStorageEngine`) 关系型数据库底层，并使用 jOOQ 实现方言适配与 Schema 自动迁移。
+  - **对象存储与备份 S3 支持**：实现统一的 `FileStorageProvider` SPI，全面集成 AWS S3 及兼容的 S3 备份存储，并在备份 ZIP 生成阶段采用了磁盘临时流式写入以规避 OutOfMemory 错误。
+  - **邮件分发 (SMTP)**：完成了基于 SSL/TLS 加密及模板替换的 SMTP 邮件递送引擎，并提供开发测试下的 outbox 日志预览。
+  - **认证流程闭环**：支持 OTP (`_otps` 表持久化)、MFA 二次验证以及完全的 OAuth2 Provider 授权交换流。
+  - **SSE 实时流与 Batch 事务**：完全对齐 PocketBase 官方 SSE 订阅协议，并在 `/api/batch` 接口中实现了严格的数据库与文件回滚机制。
+  - **超级管理员 SQL API**：实现 `/api/sql` 专用执行端点，支持方言统一映射、语法过滤与事务边界。
+  - **Admin UI 深度对齐**：实现了 Hash 路由、集合 Schema 编辑器、关系属性选择器、高级记录检索与 System Settings 设置面板。
+  - **GraalVM 原生编译验证**：完成了 `sh/build-native.sh` 脚本在 Darwin 与 Linux 环境下的 Native Image 编译验证，所有 JDBC、jOOQ 以及 Jackson 反射配置均已注册完成。
 
 ## 🛠️ 构建与编译 (Build Commands)
 

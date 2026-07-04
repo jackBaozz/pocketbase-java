@@ -16,12 +16,13 @@
 | HTTP 客户端 | JDK HttpClient | `java.net.http.HttpClient` |
 | HTTP 服务端 | JDK HttpServer | `com.sun.net.httpserver.HttpServer` |
 | JSON 处理 | Jackson | `jackson-databind` + `jackson-datatype-jsr310` |
-| 本地持久化 | JSON 文件 | `pb_schema.json` + `records/*.json` |
+| 本地持久化 | JSON/JSONL文件 | 默认使用 `pb_schema.json` + `records/*.jsonl` (向下兼容 `.json` 数组) |
+| 关系型存储 | jOOQ + HikariCP | 支持 SQLite (默认)、MySQL、PostgreSQL 数据库，且支持 schema 自动迁移与 DDL 事务 |
 | 密码哈希 | PBKDF2 | `PBKDF2WithHmacSHA256` |
 | Token | HMAC JWT-like | `HmacSHA256` |
 | 构建工具 | Maven | 3.9+ |
 | 测试框架 | JUnit Jupiter | JUnit 5 |
-| CI | GitHub Actions | JDK 17 / 21 / 25 矩阵 |
+| CI | GitHub Actions | JDK 17 / 21 / 25 矩阵 (含多数据库及原生镜像编译测试) |
 | Admin UI | React + Vite | `UI/` 源码，`npm run build` 输出到 `src/main/resources/pocketbase-admin/` |
 
 ---
@@ -46,7 +47,9 @@ SDK 不直接依赖 Spring、OkHttp、Retrofit 等框架，避免把使用方锁
 
 - **启动层** (`PocketBaseServer`, `LocalPocketBase`, `ServerConfig`): 解析 CLI 参数、启动 `HttpServer`、暴露可测试的程序化入口。
 - **HTTP 层** (`HttpApi`): 处理 PocketBase 风格路由、JSON 响应、错误结构、CORS 和 Admin UI 静态资源。
-- **存储层** (`JsonFileStore`): 管理集合 schema、记录数据、file storage、backup/restore、superuser bootstrap、auth 登录、access rules、简单查询和持久化。
+- **存储抽象层** (`StorageEngine`): 定义统一的存储引擎 SPI（支持事务、集合定义、记录 CRUD、系统设置、活动日志、备份等）。具体实现包含：
+  - `JsonFileStore` (默认): 轻量级本地文件存储，数据持久化至 JSON/JSONL 格式。
+  - `SqliteStorageEngine` / `MysqlStorageEngine` / `PostgresStorageEngine`: 基于 jOOQ 和 HikariCP 的关系型数据库实现，提供对原生 SQLite、MySQL、PostgreSQL 数据库的支持及 schema 自动迁移。
 - **上传层** (`MultipartFormData`, `UploadedFile`, `ThumbnailGenerator`): 解析 record create/update 的 `multipart/form-data`，将 file 字段落盘，并为配置过的图片生成按需缩略图。
 - **Realtime 层** (`RealtimeHub`): 维护 SSE client、订阅 topic、官方 `subscriptions[]`/`options.query` 参数解析和记录变更事件分发。
 - **安全层** (`PasswordHasher`, `TokenService`): PBKDF2 密码哈希和 HMAC-SHA256 token 签发/校验。
@@ -72,16 +75,16 @@ SDK 不直接依赖 Spring、OkHttp、Retrofit 等框架，避免把使用方锁
 | 模块 | 类 | 能力 |
 | --- | --- | --- |
 | 记录 API | `CollectionService` | list / getOne / create / update / delete |
-| 认证 API | `CollectionService`, `JsonFileStore` | authWithPassword / requestOtp / authWithOtp / authRefresh / listAuthMethods / verification / password reset / email change / impersonate |
+| 认证 API | `CollectionService`, `StorageEngine` | authWithPassword / requestOtp / authWithOtp / authRefresh / listAuthMethods / verification / password reset / email change / impersonate |
 | 集合 API | `CollectionsService` | list / getOne / create / update / delete / scaffolds / oauth2Providers / importCollections / truncate，支持 `ListOptions` 查询参数 |
 | 认证状态 | `AuthStore` | token 保存、清理、自动注入 Bearer 请求头 |
 | 错误处理 | `PocketBaseException` | HTTP 状态码、请求方法、URI、响应体、错误结构 |
 | 服务端运行时 | `PocketBaseServer` | `serve --http ... --dir ...` |
-| SQL API | `SqlService`, `JsonFileStore` | `POST /api/sql`，superuser-only，JSON runtime 轻量 SQL 子集和写事务回滚 |
+| SQL API | `SqlService`, `StorageEngine` | `POST /api/sql`，superuser-only，支持原生 SQL 执行与事务回滚 |
 | 服务端 API | `HttpApi` | health / bootstrap / collections / records / batch / auth / sql / settings / settings test helpers / logs / crons |
-| 服务端存储 | `JsonFileStore` | schema、records JSON、auth request/test email outbox、settings、activity logs、storage 文件持久化、SQL 子集和 backup/restore |
+| 服务端存储 | `StorageEngine` (JSONL / Relational) | schema、records JSONL 或数据库表、auth request/test email outbox、settings、activity logs、文件持久化和 backup/restore |
 | 文件字段 | `MultipartFormData`, `UploadedFile`, `ThumbnailGenerator`, `FilesService` | multipart 上传、MIME/大小校验、protected file token、`thumb` 缩略图和 `/api/files` 访问 |
-| Relation 展开 | `JsonFileStore` | `expand` relation 路径解析和目标 `viewRule` 过滤 |
+| Relation 展开 | `StorageEngine` | `expand` relation 路径解析和目标 `viewRule` 过滤 |
 | Realtime | `RealtimeHub` | `/api/realtime` SSE 连接、订阅和记录变更推送 |
 | 访问规则 | `RuleEvaluator` | list/view/create/update/delete rules、filter 常用表达式和 `@collection.*` 聚合字段匹配 |
 | Admin UI | `UI/`, `pocketbase-admin` | React/Vite 源码、superuser 初始化、登录、集合/记录管理、auth collection OTP/MFA/OAuth2 配置、file 字段上传、备份、settings、logs 和 crons 操作 |

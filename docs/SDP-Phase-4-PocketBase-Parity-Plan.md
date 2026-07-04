@@ -55,7 +55,7 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 #### [x] P4-A04: MySQL and PostgreSQL Database Profiles
 - [x] **Startup permission probes**: Add startup validation to verify that the DSN credentials have the necessary database permissions (CREATE, SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, DROP).
 - [x] **Collation & encoding validation**: Verify that database connection character encoding is UTF-8 (utf8mb4 for MySQL) and collations match PocketBase requirements on startup.
-- [ ] **CI pipeline integration**: Configure optional/required MySQL and PostgreSQL test execution in the project's CI configuration.
+- [x] **CI pipeline integration**: Configure optional/required MySQL and PostgreSQL test execution in the project's CI configuration.
 - *Acceptance Criteria*: Verification suites run on real MySQL and PostgreSQL databases.
 
 #### [x] P4-A05: JSONL Default Engine & Relational Migration Paths

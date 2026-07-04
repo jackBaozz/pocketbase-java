@@ -20,18 +20,19 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 
 ## 核心特性
 
-- **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，运行时仅引入 Jackson 用于 JSON 处理，保持极小的体积与侵入性。
-- **标准 API 映射**: 完美对齐 `/api/collections/{collection}/records`、`auth-with-password` 等官方 PocketBase REST API 规范。
-- **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
-- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及日志查看等功能；前端源码位于 `UI/`，构建产物内嵌至 Java resources。
-- **本地持久化**: 以结构化的 JSON 文件存储。`pb_data/pb_schema.json` 存储集合结构，`pb_data/records/*.json` 存储记录，`pb_data/pb_settings.json` 和 `pb_data/logs.json` 存储配置与日志。
-- **文件管理与缩略图**: 支持 `multipart/form-data` 上传，文件存储在 `pb_data/storage/{collectionId}/{recordId}` 下，通过 `/api/files/{collection}/{record}/{filename}` 进行访问；支持 MIME 类型与大小校验、Protected File Token 以及图片缩略图自动生成。
-- **备份与还原**: 支持在 `pb_data/backups` 下创建、上传、下载、删除及还原 Zip 格式备份。
+- **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，核心运行时依赖极少，保持极小的体积与资源占用，且便于 Native Image 编译。
+- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范，包括 `/api/collections/{collection}/records`、`auth-with-password`、OTP、MFA 以及 OAuth2 认证流程。
+- **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
+- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能；前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
+- **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用零依赖的本地 JSONL 格式存储记录，并且可以通过 `-Dstorage=sqlite` (或 `mysql`/`postgresql`) 一键启用基于 jOOQ 与 HikariCP 的关系型数据库存储引擎，支持自动 schema 迁移与 DDL 事务。
+- **文件管理与 S3 支持**: 提供 `FileStorageProvider` SPI，支持本地文件系统及 AWS S3 或兼容的对象存储服务，支持多媒体缩略图自动生成、MIME 类型/大小校验和 Protected File Token 安全控制。
+- **备份与还原**: 支持在本地或 S3 远端创建、上传、下载、删除和恢复 Zip 格式的数据备份，具备事务级安全性与自动过期清理。
+- **邮件服务 (SMTP)**: 整合了支持 SSL/TLS 安全通道的 SMTP 客户端发送，支持模板渲染与变量替换，并提供开发测试用的本地 outbox 邮件输出日志。
 - **安全基础**: 超级管理员与 Auth 记录密码采用 PBKDF2 哈希，登录与 auth 刷新 Token 均基于 HMAC-SHA256 签名。
 - **Realtime (SSE)**: 支持 `/api/realtime` Server-Sent Events 连接，支持记录级订阅、官方 `subscriptions[]`/`options.query` 格式、`filter`/`expand`/`fields` 选项，并复用 collection access rules 过滤可见记录。
 - **Batch API**: 支持批量对记录进行 create/update/upsert/delete 操作，任何子请求失败时自动回滚整批记录和 storage 文件。
-- **SQL API**: 超级管理员专用的 `POST /api/sql` 接口，内置轻量级 SQL 解析子集，支持标准的事务回滚，不引入 JDBC/ORM 等 native 负担。
-- **GraalVM 友好**: 不使用动态代理，核心模型采用 Java Record/普通类，反射配置集中由 Jackson 限定，便于构建 GraalVM Native Image 二进制。
+- **SQL API**: 超级管理员专用的 `POST /api/sql` 接口，支持原生 SQL 执行、事务回滚以及各数据库方言自动适配。
+- **GraalVM 原生镜像友好**: 整个框架经过精简和优化，消除了动态代理，所有 JDBC 驱动、jOOQ 方言、S3 客户端和 Jackson 反射映射均显式注册并验证，支持一键编译为无 VM 依赖的单文件原生二进制。
 
 ---
 

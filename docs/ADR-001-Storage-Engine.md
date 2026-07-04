@@ -1,18 +1,24 @@
-# ADR-001: Storage Engine and Native Compatibility
+# ADR-001: Relational Storage Engine and Multi-Database Parity
 
 ## Context
 
-The Java implementation of PocketBase currently uses `JsonFileStore` as a lightweight, memory-backed storage engine. This works well for rapid development and basic functional tests, but falls short of PocketBase's official SQLite capabilities (complex transactions, JSON column indexing, full SQL planner, true concurrent writes).
-The goal is to maintain GraalVM native image compatibility while eventually achieving true parity with the PocketBase ecosystem.
+The Java implementation of PocketBase initially used `JsonFileStore` (writing plain JSON arrays) as a lightweight, memory-backed storage engine. While sufficient for early prototyping and basic testing, it lacked robust transaction boundaries, dynamic database schema migrations, and standard SQL filter compiling required for true parity with PocketBase.
+
+The objective was to introduce a relational database storage engine using SQLite as the default embedded engine (and MySQL/PostgreSQL as external databases) while preserving GraalVM native image compatibility.
 
 ## Decision
 
-1. **Retain JSON Store for Dev/Test**: We will retain `JsonFileStore` as the default development and testing backend. It has zero external dependencies, making native compilation trivial, and provides a decent baseline.
-2. **Introduce SQLite Backend interface later**: We will not force a SQLite (e.g. `xerial/sqlite-jdbc` or GraalVM SQLite) dependency immediately without a GraalVM native smoke test. Due to JNI complexities, introducing JDBC SQLite directly into a native image might cause compatibility regressions.
-3. **Acceptance criteria for SQLite**: Before integrating SQLite, a proof of concept MUST demonstrate CRUD, indexing, unique constraints, and SQL execution within a GraalVM native image build without external shared libraries issues across Darwin/Linux/Windows.
-4. **Current Status (SDP-007 Completed)**: This document serves as the formal decision to hold off on SQLite until native-image proof is validated in a separate branch, completing SDP-007's requirement of formalizing the engine path.
+1. **Implement Unified `StorageEngine` SPI**: We introduced a clean storage boundary that abstracts database interactions. This allows the runtime to switch dynamically between JSON Lines file storage and relational databases (SQLite, MySQL, PostgreSQL).
+2. **Transition JSON Store to JSON Lines (`.jsonl`)**: To improve performance and prevent OOM issues under large collections, the default local file-store format was refactored to write each record on a new line (JSON Lines), with backward compatibility to read older JSON arrays during migration.
+3. **Adopt jOOQ and HikariCP for Relational Engines**: We integrated jOOQ for dialect-aware query compilation and schema generation, alongside HikariCP for connection pooling. Relational implementations are:
+   - `SqliteStorageEngine` (SQLite) - the default relational engine baseline.
+   - `MysqlStorageEngine` (MySQL) - external database support.
+   - `PostgresStorageEngine` (PostgreSQL) - external database support.
+4. **Achieve GraalVM Native Image Support**: We successfully configured and tested Native Image compilation for all three relational dialects, registering dynamic reflection profiles for the JDBC drivers (`sqlite-jdbc`, MySQL, and PostgreSQL) and HikariCP.
+5. **Establish Relational Matrix CI Testing**: Relational engines are verified via automated CI test suites running SQLite, MySQL, and PostgreSQL test profiles.
 
 ## Consequences
 
-- The system will continue to lack true SQL engine constraints and deep SQL parsing for the `POST /api/sql` interface when using `JsonFileStore`.
-- Development velocity for UI/SDK parity remains high due to zero storage layer friction.
+- The server defaults to the lightweight JSONL storage provider for zero-dependency development/testing, but production-grade deployments can seamlessly opt into fully-compliant Relational Storage engines (SQLite/MySQL/PostgreSQL) via `-Dstorage` flag.
+- PocketBase-style rules and filters are compiled into SQL queries dynamically based on the active database dialect.
+- The `POST /api/sql` endpoint enables full transactional query execution against relational engines for superusers.

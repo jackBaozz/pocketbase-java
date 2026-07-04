@@ -22,18 +22,19 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 
 ## Key Features
 
-- **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The runtime only imports Jackson for JSON handling, keeping dependencies and footprints extremely small.
-- **Standard API Mapping**: Strictly aligns with `/api/collections/{collection}/records`, `auth-with-password`, and other official PocketBase REST API specifications.
-- **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on Spring/Tomcat.
-- **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, configuration editing, and activity logs. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
-- **Local Persistence**: Stores everything in structured JSON files: `pb_data/pb_schema.json` for collection schemas, `pb_data/records/*.json` for records, and `pb_data/pb_settings.json` and `pb_data/logs.json` for settings and activity logs.
-- **File Management & Thumbnails**: Supports `multipart/form-data` uploads. Files are stored under `pb_data/storage/{collectionId}/{recordId}` and are accessible via `/api/files/{collection}/{record}/{filename}`. Supports MIME/size checks, Protected File Token, and automatic image thumbnail generation.
-- **Backup & Restore**: Supports creating, uploading, downloading, deleting, and restoring zip backups under `pb_data/backups`.
+- **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The core runtime has extremely minimal dependencies, keeping the resource footprint small and native compilation trivial.
+- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (e.g. `/api/collections/{collection}/records`, `auth-with-password`, OTP, MFA, and OAuth2 provider flows).
+- **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
+- **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
+- **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. Run with zero-dependency default local file storage (using JSON Lines `.jsonl` for records and `.json` for metadata) or opt into relational database storage (SQLite, MySQL, or PostgreSQL) via `-Dstorage` flag, powered by jOOQ and HikariCP.
+- **File Management & S3 Support**: Supports local or AWS S3-compatible file storage providers (`FileStorageProvider` SPI). Handles multipart uploads, size/MIME constraints, Protected File Tokens, and automatic image thumbnail generation.
+- **Backup & Restore**: Supports creating, uploading, downloading, deleting, and restoring zip backups under local storage or remote S3 backup paths, complete with transaction safety and automatic cleanups.
+- **Mail Delivery (SMTP)**: Integrates SMTP client delivery supporting SSL/TLS, custom templates with variable substitutions, and a dry-run/local outbox logger for developer testing.
 - **Security Basics**: Superuser and auth record passwords are hashed using PBKDF2. Auth token generation and verification are signed using HMAC-SHA256.
 - **Realtime (SSE)**: Supports `/api/realtime` Server-Sent Events (SSE) connections, record-level subscriptions, official `subscriptions[]`/`options.query` format, `filter`/`expand`/`fields` parameters, and enforces collection access rules for visible records.
-- **Batch API**: Supports batch record create/update/upsert/delete. Automatically rolls back all records and storage files if any sub-request fails.
-- **SQL API**: A superuser-only `POST /api/sql` endpoint. Contains a lightweight SQL parser subset and supports transactions, avoiding heavy dependencies like JDBC/ORM.
-- **GraalVM Friendly**: Avoids dynamic proxies. Core models use Java Record or plain classes. Reflection configuration is tightly limited by Jackson, facilitating GraalVM Native Image builds.
+- **Batch API**: Supports atomic batch record create/update/upsert/delete. Automatically rolls back all database modifications and storage files if any sub-request fails.
+- **SQL API**: A superuser-only `POST /api/sql` endpoint. Supports executing queries directly with transaction support and database dialect normalization.
+- **GraalVM Native Image Ready**: Designed from the ground up without dynamic proxies or complex reflection. JDBC drivers, jOOQ templates, S3 clients, and Jackson configurations are fully registered and validated for native executable packaging.
 
 ---
 
