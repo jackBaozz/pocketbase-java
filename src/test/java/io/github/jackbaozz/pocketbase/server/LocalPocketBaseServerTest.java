@@ -2,10 +2,14 @@ package io.github.jackbaozz.pocketbase.server;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
 import io.github.jackbaozz.pocketbase.client.AuthResponse;
 import io.github.jackbaozz.pocketbase.client.PocketBaseClient;
 import io.github.jackbaozz.pocketbase.client.RecordList;
+import io.github.jackbaozz.pocketbase.server.internal.SystemCollections;
+import io.github.jackbaozz.pocketbase.server.internal.TokenService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -34,7 +38,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPairGenerator;
 import java.security.spec.ECGenParameterSpec;
+import java.time.Duration;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -171,6 +177,1132 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void searchPaginationMatchesOfficialProviderContract() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "search_contract_posts",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "title", "type", "text"))
+        ));
+        JsonNode recordB = request("POST", "/api/collections/search_contract_posts/records", token, Map.of("title", "B"));
+        request("POST", "/api/collections/search_contract_posts/records", token, Map.of("title", "A"));
+        request("POST", "/api/collections/search_contract_posts/records", token, Map.of("title", "C"));
+
+        JsonNode second = request(
+                "GET",
+                "/api/collections/search_contract_posts/records?page=2&perPage=1&sort=%2Btitle&skipTotal=1&fields=id",
+                token,
+                null
+        );
+        assertEquals(2, second.get("page").asInt());
+        assertEquals(1, second.get("perPage").asInt());
+        assertEquals(-1, second.get("totalItems").asInt());
+        assertEquals(-1, second.get("totalPages").asInt());
+        assertEquals(recordB.get("id").asText(), second.get("items").get(0).get("id").asText());
+        assertFalse(second.get("items").get(0).has("title"));
+        assertFalse(second.get("items").get(0).has("collectionName"));
+
+        JsonNode normalized = request(
+                "GET",
+                "/api/collections/search_contract_posts/records?page=0&perPage=0&sort=title",
+                token,
+                null
+        );
+        assertEquals(1, normalized.get("page").asInt());
+        assertEquals(30, normalized.get("perPage").asInt());
+        assertEquals(3, normalized.get("totalItems").asInt());
+
+        JsonNode capped = request(
+                "GET",
+                "/api/collections/search_contract_posts/records?perPage=9999&skipTotal=True",
+                token,
+                null
+        );
+        assertEquals(1000, capped.get("perPage").asInt());
+        assertEquals(-1, capped.get("totalItems").asInt());
+        assertEquals(3, capped.get("items").size());
+
+        String collectionFilter = URLEncoder.encode("name = 'search_contract_posts'", StandardCharsets.UTF_8);
+        JsonNode collections = request(
+                "GET",
+                "/api/collections?filter=" + collectionFilter + "&skipTotal=t",
+                token,
+                null
+        );
+        assertEquals(30, collections.get("perPage").asInt());
+        assertEquals(-1, collections.get("totalItems").asInt());
+        assertEquals(-1, collections.get("totalPages").asInt());
+        assertEquals(1, collections.get("items").size());
+
+        JsonNode logs = request("GET", "/api/logs?perPage=9999&skipTotal=T&sort=-@rowid", token, null);
+        assertEquals(1000, logs.get("perPage").asInt());
+        assertEquals(-1, logs.get("totalItems").asInt());
+        assertEquals(-1, logs.get("totalPages").asInt());
+        assertTrue(logs.get("items").size() >= 1);
+
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?page=invalid",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?perPage=invalid",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?skipTotal=invalid",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?sort=title,title,title,title,title,title,title,title,title",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?sort=" + "a".repeat(256),
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?filter=" + "a".repeat(3501),
+                token,
+                null
+        ).statusCode());
+
+        String superuserFilter = URLEncoder.encode(
+                "@collection.search_contract_posts.title = 'B'",
+                StandardCharsets.UTF_8
+        );
+        assertEquals(403, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?filter=" + superuserFilter,
+                null,
+                null
+        ).statusCode());
+        assertEquals(403, rawRequest(
+                "GET",
+                "/api/collections/search_contract_posts/records?sort=@request.auth.id",
+                null,
+                null
+        ).statusCode());
+    }
+
+    @Test
+    void hiddenRecordFieldsAreWritableOnlyBySuperusers() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode hiddenCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "hidden_field_posts",
+                "createRule", "",
+                "listRule", "",
+                "viewRule", "",
+                "updateRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "secret", "type", "text", "hidden", true),
+                        Map.of("name", "attachment", "type", "file", "hidden", true, "maxSelect", 1)
+                )
+        ));
+
+        String recordId = "hidden123456789";
+        JsonNode created = multipartRequest(
+                "POST",
+                "/api/collections/hidden_field_posts/records",
+                null,
+                Map.of("id", recordId, "title", "guest create", "secret", "guest secret"),
+                Map.of("attachment", new MultipartFile(
+                        "guest.txt",
+                        "text/plain",
+                        "guest file".getBytes(StandardCharsets.UTF_8)
+                ))
+        );
+        assertEquals(recordId, created.get("id").asText());
+        assertFalse(created.has("secret"));
+        assertFalse(created.has("attachment"));
+        Path hiddenStorage = tempDir.resolve("storage")
+                .resolve(hiddenCollection.get("id").asText())
+                .resolve(recordId);
+        assertFalse(Files.exists(hiddenStorage));
+
+        JsonNode storedAfterCreate = request(
+                "GET",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                token,
+                null
+        );
+        assertEquals("", storedAfterCreate.path("secret").asText(""));
+        assertEquals("", storedAfterCreate.path("attachment").asText(""));
+
+        JsonNode guestUpdated = request(
+                "PATCH",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                null,
+                Map.of("title", "guest update", "secret", "guest overwrite")
+        );
+        assertEquals("guest update", guestUpdated.get("title").asText());
+        assertFalse(guestUpdated.has("secret"));
+
+        JsonNode superuserUpdated = request(
+                "PATCH",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                token,
+                Map.of("secret", "superuser secret")
+        );
+        assertEquals("superuser secret", superuserUpdated.get("secret").asText());
+
+        JsonNode superuserFileUpdated = multipartRequest(
+                "PATCH",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                token,
+                Map.of(),
+                Map.of("attachment", new MultipartFile(
+                        "superuser.txt",
+                        "text/plain",
+                        "superuser file".getBytes(StandardCharsets.UTF_8)
+                ))
+        );
+        String superuserFilename = superuserFileUpdated.get("attachment").asText();
+        assertTrue(superuserFilename.startsWith("superuser_"));
+
+        multipartRequest(
+                "PATCH",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                null,
+                Map.of(
+                        "secret", "second guest overwrite",
+                        "attachment-", superuserFilename
+                ),
+                Map.of("attachment", new MultipartFile(
+                        "guest-overwrite.txt",
+                        "text/plain",
+                        "guest overwrite".getBytes(StandardCharsets.UTF_8)
+                ))
+        );
+        JsonNode storedAfterGuestUpdate = request(
+                "GET",
+                "/api/collections/hidden_field_posts/records/" + recordId,
+                token,
+                null
+        );
+        assertEquals("superuser secret", storedAfterGuestUpdate.get("secret").asText());
+        assertEquals(superuserFilename, storedAfterGuestUpdate.get("attachment").asText());
+        try (var files = Files.list(hiddenStorage)) {
+            assertEquals(List.of(superuserFilename), files.map(path -> path.getFileName().toString()).sorted().toList());
+        }
+        assertEquals(
+                "superuser file",
+                Files.readString(hiddenStorage.resolve(superuserFilename), StandardCharsets.UTF_8)
+        );
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "hidden_field_auth",
+                "type", "auth",
+                "createRule", "",
+                "listRule", "",
+                "viewRule", ""
+        ));
+        request(
+                "POST",
+                "/api/collections/hidden_field_auth/records",
+                null,
+                Map.of(
+                        "email", "hidden-password@example.com",
+                        "password", "secret456",
+                        "passwordConfirm", "secret456"
+                )
+        );
+        JsonNode auth = request(
+                "POST",
+                "/api/collections/hidden_field_auth/auth-with-password",
+                null,
+                Map.of("identity", "hidden-password@example.com", "password", "secret456")
+        );
+        assertTrue(auth.hasNonNull("token"));
+    }
+
+    @Test
+    void searchFieldsRejectUnknownAndHiddenClientFields() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "search_field_posts",
+                "listRule", "secret = 'match'",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "secret", "type", "text", "hidden", true)
+                )
+        ));
+        request(
+                "POST",
+                "/api/collections/search_field_posts/records",
+                token,
+                Map.of("title", "visible", "secret", "match")
+        );
+        request(
+                "POST",
+                "/api/collections/search_field_posts/records",
+                token,
+                Map.of("title", "excluded", "secret", "other")
+        );
+
+        JsonNode ruleFiltered = request(
+                "GET",
+                "/api/collections/search_field_posts/records?sort=title",
+                null,
+                null
+        );
+        assertEquals(1, ruleFiltered.get("totalItems").asInt());
+        assertEquals("visible", ruleFiltered.get("items").get(0).get("title").asText());
+        assertFalse(ruleFiltered.get("items").get(0).has("secret"));
+
+        String visibleFilter = URLEncoder.encode("title = 'visible'", StandardCharsets.UTF_8);
+        assertEquals(1, request(
+                "GET",
+                "/api/collections/search_field_posts/records?filter=" + visibleFilter,
+                null,
+                null
+        ).get("totalItems").asInt());
+
+        String hiddenFilter = URLEncoder.encode("secret = 'match'", StandardCharsets.UTF_8);
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_field_posts/records?filter=" + hiddenFilter,
+                null,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_field_posts/records?sort=secret",
+                null,
+                null
+        ).statusCode());
+
+        JsonNode superuserHidden = request(
+                "GET",
+                "/api/collections/search_field_posts/records?filter=" + hiddenFilter + "&sort=secret",
+                token,
+                null
+        );
+        assertEquals(1, superuserHidden.get("totalItems").asInt());
+        assertEquals("match", superuserHidden.get("items").get(0).get("secret").asText());
+
+        String unknownFilter = URLEncoder.encode("missing = 'value'", StandardCharsets.UTF_8);
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_field_posts/records?filter=" + unknownFilter,
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/search_field_posts/records?sort=missing",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections?filter=" + unknownFilter,
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections?sort=missing",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/logs?filter=" + unknownFilter,
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/logs?sort=missing",
+                token,
+                null
+        ).statusCode());
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/logs/stats?filter=" + unknownFilter,
+                token,
+                null
+        ).statusCode());
+    }
+
+    @Test
+    void filterModifiersMatchOfficialResolverSemantics() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "filter_modifier_posts",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of(
+                                "name", "tags",
+                                "type", "select",
+                                "options", Map.of(
+                                        "values", List.of("blue", "red", "green"),
+                                        "maxSelect", 3
+                                )
+                        )
+                )
+        ));
+        request("POST", "/api/collections/filter_modifier_posts/records", token, Map.of(
+                "title", "Bravo",
+                "tags", List.of("blue")
+        ));
+        request("POST", "/api/collections/filter_modifier_posts/records", token, Map.of(
+                "title", "alpha",
+                "tags", List.of("red", "green")
+        ));
+        request("POST", "/api/collections/filter_modifier_posts/records", token, Map.of(
+                "title", "CHARLIE",
+                "tags", List.of()
+        ));
+
+        String lowerFilter = URLEncoder.encode("title:lower = 'alpha'", StandardCharsets.UTF_8);
+        JsonNode lower = request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + lowerFilter,
+                null,
+                null
+        );
+        assertEquals(1, lower.get("totalItems").asInt());
+        assertEquals("alpha", lower.get("items").get(0).get("title").asText());
+
+        String lengthFilter = URLEncoder.encode("tags:length = 2", StandardCharsets.UTF_8);
+        JsonNode length = request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + lengthFilter,
+                null,
+                null
+        );
+        assertEquals(1, length.get("totalItems").asInt());
+        assertEquals("alpha", length.get("items").get(0).get("title").asText());
+
+        String eachFilter = URLEncoder.encode("tags:each = 'green'", StandardCharsets.UTF_8);
+        assertEquals(1, request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + eachFilter,
+                null,
+                null
+        ).get("totalItems").asInt());
+
+        JsonNode sorted = request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?sort=title:lower&fields=title",
+                null,
+                null
+        );
+        assertEquals(List.of("alpha", "Bravo", "CHARLIE"), List.of(
+                sorted.get("items").get(0).get("title").asText(),
+                sorted.get("items").get(1).get("title").asText(),
+                sorted.get("items").get(2).get("title").asText()
+        ));
+
+        String issetFilter = URLEncoder.encode("@request.query.flag:isset = true", StandardCharsets.UTF_8);
+        assertEquals(3, request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + issetFilter + "&flag=",
+                token,
+                null
+        ).get("totalItems").asInt());
+        assertEquals(0, request(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + issetFilter,
+                token,
+                null
+        ).get("totalItems").asInt());
+
+        String collectionLower = URLEncoder.encode("name:lower = 'filter_modifier_posts'", StandardCharsets.UTF_8);
+        assertEquals(1, request(
+                "GET",
+                "/api/collections?filter=" + collectionLower,
+                token,
+                null
+        ).get("totalItems").asInt());
+
+        String logLower = URLEncoder.encode("message:lower ~ 'get'", StandardCharsets.UTF_8);
+        assertTrue(request(
+                "GET",
+                "/api/logs?filter=" + logLower,
+                token,
+                null
+        ).get("totalItems").asInt() >= 1);
+
+        String invalidModifier = URLEncoder.encode("title:unknown = 'alpha'", StandardCharsets.UTF_8);
+        HttpResponse<String> invalid = rawRequest(
+                "GET",
+                "/api/collections/filter_modifier_posts/records?filter=" + invalidModifier,
+                token,
+                null
+        );
+        assertEquals(400, invalid.statusCode());
+        assertFieldErrorMessageStartsWith(
+                invalid,
+                400,
+                "Invalid filter.",
+                "filter",
+                "validation_invalid_value",
+                "Unknown filter modifier"
+        );
+    }
+
+    @Test
+    void filterTokenFunctionsMatchOfficialStrftimeAndGeoDistanceSemantics() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "filter_function_places",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "occurred", "type", "text"),
+                        Map.of("name", "location", "type", "geoPoint")
+                )
+        ));
+        request("POST", "/api/collections/filter_function_places/records", token, Map.of(
+                "title", "Near July",
+                "occurred", "2026-07-18T10:30:45.123Z",
+                "location", Map.of("lon", 0.1, "lat", 0)
+        ));
+        request("POST", "/api/collections/filter_function_places/records", token, Map.of(
+                "title", "Far August",
+                "occurred", "2026-08-03T09:15:00Z",
+                "location", Map.of("lon", 40, "lat", 20)
+        ));
+
+        JsonNode month = request(
+                "GET",
+                "/api/collections/filter_function_places/records?filter="
+                        + URLEncoder.encode("strftime('%Y-%m', occurred) = '2026-07'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(1, month.get("totalItems").asInt());
+        assertEquals("Near July", month.get("items").get(0).get("title").asText());
+
+        JsonNode shifted = request(
+                "GET",
+                "/api/collections/filter_function_places/records?filter="
+                        + URLEncoder.encode(
+                        "strftime('%F', occurred, 'start of month', '+1 month') = '2026-08-01'",
+                        StandardCharsets.UTF_8
+                ),
+                null,
+                null
+        );
+        assertEquals(1, shifted.get("totalItems").asInt());
+        assertEquals("Near July", shifted.get("items").get(0).get("title").asText());
+
+        JsonNode distance = request(
+                "GET",
+                "/api/collections/filter_function_places/records?filter="
+                        + URLEncoder.encode(
+                        "geoDistance(location.lon, location.lat, 0, 0) < 20",
+                        StandardCharsets.UTF_8
+                ),
+                null,
+                null
+        );
+        assertEquals(1, distance.get("totalItems").asInt());
+        assertEquals("Near July", distance.get("items").get(0).get("title").asText());
+
+        HttpResponse<String> invalid = rawRequest(
+                "GET",
+                "/api/collections/filter_function_places/records?filter="
+                        + URLEncoder.encode("geoDistance(location.lon, 0) < 20", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertFieldErrorMessageStartsWith(
+                invalid,
+                400,
+                "Invalid filter.",
+                "filter",
+                "validation_invalid_value",
+                "[geoDistance] expected 4 arguments"
+        );
+    }
+
+    @Test
+    void relationFilterAndSortPathsMatchOfficialMultiMatchSemantics() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode teams = request("POST", "/api/collections", token, Map.of(
+                "name", "relation_teams",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "name", "type", "text"))
+        ));
+        JsonNode authors = request("POST", "/api/collections", token, Map.of(
+                "name", "relation_authors",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "name", "type", "text"),
+                        Map.of("name", "secret", "type", "text", "hidden", true),
+                        Map.of("name", "team", "type", "relation", "collectionId", teams.get("id").asText())
+                )
+        ));
+        request("POST", "/api/collections", token, Map.of(
+                "name", "relation_posts",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "author", "type", "relation", "collectionId", authors.get("id").asText()),
+                        Map.of(
+                                "name", "reviewers",
+                                "type", "relation",
+                                "collectionId", authors.get("id").asText(),
+                                "maxSelect", 3
+                        )
+                )
+        ));
+
+        JsonNode math = request("POST", "/api/collections/relation_teams/records", token, Map.of("name", "Math"));
+        JsonNode compilers = request("POST", "/api/collections/relation_teams/records", token, Map.of("name", "Compilers"));
+        JsonNode kernels = request("POST", "/api/collections/relation_teams/records", token, Map.of("name", "Kernels"));
+        JsonNode ada = request("POST", "/api/collections/relation_authors/records", token, Map.of(
+                "name", "Ada",
+                "secret", "math-secret",
+                "team", math.get("id").asText()
+        ));
+        JsonNode grace = request("POST", "/api/collections/relation_authors/records", token, Map.of(
+                "name", "Grace",
+                "secret", "compiler-secret",
+                "team", compilers.get("id").asText()
+        ));
+        JsonNode linus = request("POST", "/api/collections/relation_authors/records", token, Map.of(
+                "name", "Linus",
+                "secret", "kernel-secret",
+                "team", kernels.get("id").asText()
+        ));
+
+        request("POST", "/api/collections/relation_posts/records", token, Map.of(
+                "title", "Mixed reviewers",
+                "author", ada.get("id").asText(),
+                "reviewers", List.of(ada.get("id").asText(), grace.get("id").asText())
+        ));
+        request("POST", "/api/collections/relation_posts/records", token, Map.of(
+                "title", "Grace only",
+                "author", grace.get("id").asText(),
+                "reviewers", List.of(grace.get("id").asText())
+        ));
+        request("POST", "/api/collections/relation_posts/records", token, Map.of(
+                "title", "Ada review",
+                "author", linus.get("id").asText(),
+                "reviewers", List.of(ada.get("id").asText())
+        ));
+
+        JsonNode direct = request(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("author.name = 'Ada'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(1, direct.get("totalItems").asInt());
+        assertEquals("Mixed reviewers", direct.get("items").get(0).get("title").asText());
+
+        JsonNode nested = request(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("author.team.name = 'Math'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(1, nested.get("totalItems").asInt());
+        assertEquals("Mixed reviewers", nested.get("items").get(0).get("title").asText());
+
+        JsonNode allMatch = request(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("reviewers.name = 'Ada'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(1, allMatch.get("totalItems").asInt());
+        assertEquals("Ada review", allMatch.get("items").get(0).get("title").asText());
+
+        JsonNode anyMatch = request(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("reviewers.name ?= 'Ada'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(2, anyMatch.get("totalItems").asInt());
+
+        JsonNode sorted = request(
+                "GET",
+                "/api/collections/relation_posts/records?sort=author.name&fields=title",
+                null,
+                null
+        );
+        assertEquals(List.of("Mixed reviewers", "Grace only", "Ada review"), List.of(
+                sorted.get("items").get(0).get("title").asText(),
+                sorted.get("items").get(1).get("title").asText(),
+                sorted.get("items").get(2).get("title").asText()
+        ));
+
+        JsonNode backRelation = request(
+                "GET",
+                "/api/collections/relation_authors/records?filter="
+                        + URLEncoder.encode("relation_posts_via_author.title ?= 'Mixed reviewers'", StandardCharsets.UTF_8),
+                null,
+                null
+        );
+        assertEquals(1, backRelation.get("totalItems").asInt());
+        assertEquals("Ada", backRelation.get("items").get(0).get("name").asText());
+
+        assertEquals(400, rawRequest(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("author.secret = 'math-secret'", StandardCharsets.UTF_8),
+                null,
+                null
+        ).statusCode());
+        assertEquals(1, request(
+                "GET",
+                "/api/collections/relation_posts/records?filter="
+                        + URLEncoder.encode("author.secret = 'math-secret'", StandardCharsets.UTF_8),
+                token,
+                null
+        ).get("totalItems").asInt());
+
+        request("PATCH", "/api/collections/relation_authors", token, Map.of("listRule", "name != 'Grace'"));
+        String graceFilter = URLEncoder.encode("author.name = 'Grace'", StandardCharsets.UTF_8);
+        assertEquals(0, request(
+                "GET",
+                "/api/collections/relation_posts/records?filter=" + graceFilter,
+                null,
+                null
+        ).get("totalItems").asInt());
+        assertEquals(1, request(
+                "GET",
+                "/api/collections/relation_posts/records?filter=" + graceFilter,
+                token,
+                null
+        ).get("totalItems").asInt());
+
+        request("PATCH", "/api/collections/relation_posts", token, Map.of(
+                "listRule", "author.team.name != 'Kernels'"
+        ));
+        assertEquals(2, request(
+                "GET",
+                "/api/collections/relation_posts/records",
+                null,
+                null
+        ).get("totalItems").asInt());
+        assertEquals(3, request(
+                "GET",
+                "/api/collections/relation_posts/records",
+                token,
+                null
+        ).get("totalItems").asInt());
+    }
+
+    @Test
+    void collectionRulesValidateCompleteResolverPathsOnCreateUpdateAndImport() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode teams = request("POST", "/api/collections", token, Map.of(
+                "name", "rule_teams",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "name", "type", "text"))
+        ));
+        JsonNode authors = request("POST", "/api/collections", token, Map.of(
+                "name", "rule_authors",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "name", "type", "text"),
+                        Map.of("name", "team", "type", "relation", "collectionId", teams.get("id").asText())
+                )
+        ));
+
+        HttpResponse<String> invalidCreate = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_rule_posts",
+                "listRule", "author.missing = ''",
+                "fields", List.of(Map.of(
+                        "name", "author",
+                        "type", "relation",
+                        "collectionId", authors.get("id").asText()
+                ))
+        ));
+        assertEquals(400, invalidCreate.statusCode());
+        assertTrue(mapper.readTree(invalidCreate.body()).get("data").has("listRule"));
+        assertEquals(404, rawRequest("GET", "/api/collections/invalid_rule_posts", token, null).statusCode());
+
+        String validListRule = "author.team.name != ''"
+                + " && strftime('%Y', created) != ''"
+                + " && @collection.rule_teams.name ?!= ''";
+        JsonNode posts = request("POST", "/api/collections", token, Map.of(
+                "name", "rule_posts",
+                "listRule", validListRule,
+                "viewRule", "",
+                "updateRule", "@request.body.author.team.name != ''",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "author", "type", "relation", "collectionId", authors.get("id").asText())
+                )
+        ));
+        assertEquals(validListRule, posts.get("listRule").asText());
+
+        JsonNode backRule = request("PATCH", "/api/collections/rule_authors", token, Map.of(
+                "listRule", "rule_posts_via_author.title ?!= ''"
+        ));
+        assertEquals("rule_posts_via_author.title ?!= ''", backRule.get("listRule").asText());
+
+        HttpResponse<String> invalidNested = rawRequest("PATCH", "/api/collections/rule_posts", token, Map.of(
+                "listRule", "author.missing = ''"
+        ));
+        assertEquals(400, invalidNested.statusCode());
+        assertTrue(mapper.readTree(invalidNested.body()).get("data").has("listRule"));
+
+        HttpResponse<String> invalidCollection = rawRequest("PATCH", "/api/collections/rule_posts", token, Map.of(
+                "listRule", "@collection.rule_teams.missing = ''"
+        ));
+        assertEquals(400, invalidCollection.statusCode());
+        assertTrue(mapper.readTree(invalidCollection.body()).get("data").has("listRule"));
+
+        HttpResponse<String> invalidBodyChanged = rawRequest("PATCH", "/api/collections/rule_posts", token, Map.of(
+                "updateRule", "@request.body.missing:changed = false"
+        ));
+        assertEquals(400, invalidBodyChanged.statusCode());
+        assertTrue(mapper.readTree(invalidBodyChanged.body()).get("data").has("updateRule"));
+
+        JsonNode unchanged = request("GET", "/api/collections/rule_posts", token, null);
+        assertEquals(validListRule, unchanged.get("listRule").asText());
+        assertEquals("@request.body.author.team.name != ''", unchanged.get("updateRule").asText());
+
+        String importedAuthorsId = "pbc_1200000001";
+        String importedPostsId = "pbc_1200000002";
+        HttpResponse<String> imported = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(
+                        Map.of(
+                                "id", importedPostsId,
+                                "name", "rule_import_posts",
+                                "type", "base",
+                                "listRule", "author.name != ''",
+                                "fields", List.of(
+                                        Map.of("name", "title", "type", "text"),
+                                        Map.of(
+                                                "name", "author",
+                                                "type", "relation",
+                                                "collectionId", importedAuthorsId
+                                        )
+                                )
+                        ),
+                        Map.of(
+                                "id", importedAuthorsId,
+                                "name", "rule_import_authors",
+                                "type", "base",
+                                "listRule", "",
+                                "fields", List.of(Map.of("name", "name", "type", "text"))
+                        )
+                )
+        ));
+        assertEquals(204, imported.statusCode());
+        assertEquals(
+                "author.name != ''",
+                request("GET", "/api/collections/rule_import_posts", token, null).get("listRule").asText()
+        );
+    }
+
+    @Test
+    void collectionIndexesAndTimestampsPersistWithOfficialValidation() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> invalid = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_index_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text")),
+                "indexes", List.of("create index idx_invalid on invalid_index_posts (missing)")
+        ));
+        assertEquals(400, invalid.statusCode());
+        assertEquals(
+                "validation_invalid_index_expression",
+                mapper.readTree(invalid.body()).get("data").get("indexes").get("0").get("code").asText()
+        );
+        HttpResponse<String> invalidWhere = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_partial_index_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text")),
+                "indexes", List.of(
+                        "create index idx_invalid_where on invalid_partial_index_posts (title) where missing = 1"
+                )
+        ));
+        assertEquals(400, invalidWhere.statusCode());
+        assertEquals(404, rawRequest(
+                "GET",
+                "/api/collections/invalid_partial_index_posts",
+                token,
+                null
+        ).statusCode());
+
+        HttpResponse<String> duplicated = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "duplicate_index_posts",
+                "indexes", List.of(
+                        "create index idx_duplicate on duplicate_index_posts (created)",
+                        "create index idx_duplicate on duplicate_index_posts (updated)"
+                )
+        ));
+        assertEquals(400, duplicated.statusCode());
+        assertEquals(
+                "validation_duplicated_index_name",
+                mapper.readTree(duplicated.body()).get("data").get("indexes").get("1").get("code").asText()
+        );
+
+        JsonNode created = request("POST", "/api/collections", token, Map.of(
+                "name", "indexed_posts",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "count", "type", "number")
+                ),
+                "indexes", List.of(
+                        "create index idx_indexed_title on anything (title)",
+                        "create unique index idx_indexed_count on indexed_posts (count)"
+                )
+        ));
+        String collectionId = created.get("id").asText();
+        String createdAt = created.get("created").asText();
+        String firstUpdatedAt = created.get("updated").asText();
+        assertFalse(createdAt.isBlank());
+        assertEquals(createdAt, firstUpdatedAt);
+        assertEquals(2, created.get("indexes").size());
+        assertTrue(created.get("indexes").get(0).asText().contains("ON `indexed_posts`"));
+
+        HttpResponse<String> reusedName = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "other_indexed_posts",
+                "indexes", List.of("create index idx_indexed_title on other_indexed_posts (created)")
+        ));
+        assertEquals(400, reusedName.statusCode());
+        assertEquals(
+                "validation_existing_index_name",
+                mapper.readTree(reusedName.body()).get("data").get("indexes").get("0").get("code").asText()
+        );
+
+        Thread.sleep(5);
+        JsonNode updated = request("PATCH", "/api/collections/indexed_posts", token, Map.of(
+                "indexes", List.of("create index idx_indexed_count_v2 on stale_table (count desc)")
+        ));
+        assertEquals(createdAt, updated.get("created").asText());
+        assertFalse(firstUpdatedAt.equals(updated.get("updated").asText()));
+        assertEquals(1, updated.get("indexes").size());
+        assertTrue(updated.get("indexes").get(0).asText().contains("ON `indexed_posts`"));
+
+        HttpResponse<String> invalidUpdate = rawRequest("PATCH", "/api/collections/indexed_posts", token, Map.of(
+                "indexes", List.of("create index idx_broken_update on indexed_posts (count) where missing = 1")
+        ));
+        assertEquals(400, invalidUpdate.statusCode());
+        assertEquals(updated.get("indexes"), request(
+                "GET",
+                "/api/collections/indexed_posts",
+                token,
+                null
+        ).get("indexes"));
+
+        if (Files.exists(tempDir.resolve("pocketbase.db"))) {
+            assertEquals(List.of("idx_indexed_count_v2"), sqliteCustomIndexNames("indexed_posts"));
+        }
+
+        JsonNode authCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "indexed_auth_users",
+                "type", "auth"
+        ));
+        assertEquals(2, authCollection.get("indexes").size());
+        assertTrue(authCollection.get("indexes").toString().contains("idx_tokenKey_" + authCollection.get("id").asText()));
+        assertTrue(authCollection.get("indexes").toString().contains("idx_email_" + authCollection.get("id").asText()));
+        if (Files.exists(tempDir.resolve("pocketbase.db"))) {
+            assertEquals(
+                    List.of(
+                            "idx_email_" + authCollection.get("id").asText(),
+                            "idx_tokenKey_" + authCollection.get("id").asText()
+                    ),
+                    sqliteCustomIndexNames("indexed_auth_users")
+            );
+        }
+
+        server.close();
+        start();
+        token = loginToken();
+        JsonNode restarted = request("GET", "/api/collections/" + collectionId, token, null);
+        assertEquals(createdAt, restarted.get("created").asText());
+        assertEquals(updated.get("updated").asText(), restarted.get("updated").asText());
+        assertEquals(updated.get("indexes"), restarted.get("indexes"));
+        assertEquals(2, request(
+                "GET",
+                "/api/collections/" + authCollection.get("id").asText(),
+                token,
+                null
+        ).get("indexes").size());
+
+        JsonNode selected = request(
+                "GET",
+                "/api/collections/" + collectionId + "?fields=id,indexes,created,updated",
+                token,
+                null
+        );
+        assertTrue(selected.has("indexes"));
+        assertTrue(selected.has("created"));
+        assertTrue(selected.has("updated"));
+        assertFalse(selected.has("name"));
+    }
+
+    @Test
+    void generatedCollectionAndFieldIdsMatchOfficialChecksumsAndRemainStable() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode created = request("POST", "/api/collections", token, Map.of(
+                "name", "checksum_posts",
+                "type", "base",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "count", "type", "number")
+                )
+        ));
+        assertEquals("pbc_1988362547", created.get("id").asText());
+        assertEquals(List.of("id", "title", "count"), fieldNames(created));
+        assertEquals("text3208210256", created.get("fields").get(0).get("id").asText());
+        assertEquals("text724990059", created.get("fields").get(1).get("id").asText());
+        assertEquals("number2245608546", created.get("fields").get(2).get("id").asText());
+
+        JsonNode renamed = request("PATCH", "/api/collections/checksum_posts", token, Map.of(
+                "name", "checksum_posts_renamed",
+                "fields", List.of(
+                        Map.of(
+                                "id", created.get("fields").get(0).get("id").asText(),
+                                "name", "id",
+                                "type", "text",
+                                "required", true,
+                                "system", true
+                        ),
+                        Map.of(
+                                "id", created.get("fields").get(1).get("id").asText(),
+                                "name", "title",
+                                "type", "text"
+                        ),
+                        Map.of("name", "published", "type", "bool")
+                )
+        ));
+        assertEquals("pbc_1988362547", renamed.get("id").asText());
+        assertEquals("text724990059", renamed.get("fields").get(1).get("id").asText());
+        assertEquals("bool1748787223", renamed.get("fields").get(2).get("id").asText());
+
+        JsonNode explicit = request("POST", "/api/collections", token, Map.of(
+                "id", "custom_collection_id",
+                "name", "explicit_ids",
+                "fields", List.of(Map.of(
+                        "id", "custom_field_id",
+                        "name", "title",
+                        "type", "text"
+                ))
+        ));
+        assertEquals("custom_collection_id", explicit.get("id").asText());
+        assertEquals("custom_field_id", explicit.get("fields").get(1).get("id").asText());
+
+        request("POST", "/api/collections", token, Map.of(
+                "id", "pbc_1702033289",
+                "name", "checksum_collision_blocker"
+        ));
+        JsonNode collision = request("POST", "/api/collections", token, Map.of(
+                "name", "checksum_users",
+                "type", "auth"
+        ));
+        assertEquals("pbc_17020332892", collision.get("id").asText());
+        assertTrue(collision.get("indexes").toString().contains("pbc_17020332892"));
+
+        assertEquals(204, rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "name", "checksum_import",
+                        "type", "base",
+                        "fields", List.of(Map.of("name", "newField", "type", "text"))
+                ))
+        )).statusCode());
+        JsonNode imported = request("GET", "/api/collections/checksum_import", token, null);
+        assertEquals("pbc_2131258802", imported.get("id").asText());
+        assertEquals(List.of("id", "newField"), fieldNames(imported));
+        assertEquals("text872197786", imported.get("fields").get(1).get("id").asText());
+
+        server.close();
+        start();
+        token = loginToken();
+        JsonNode restarted = request("GET", "/api/collections/checksum_posts_renamed", token, null);
+        assertEquals("pbc_1988362547", restarted.get("id").asText());
+        assertEquals("text724990059", restarted.get("fields").get(1).get("id").asText());
+        assertEquals("bool1748787223", restarted.get("fields").get(2).get("id").asText());
+    }
+
+    @Test
+    void legacyRelationalCollectionMetadataColumnsUpgradeOnRestart() throws Exception {
+        if (!"sqlite".equals(System.getProperty("storage"))) {
+            return;
+        }
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+        JsonNode collection = request("POST", "/api/collections", token, Map.of(
+                "name", "legacy_index_metadata",
+                "fields", List.of(Map.of("name", "title", "type", "text")),
+                "indexes", List.of("create index idx_legacy_title on legacy_index_metadata (title)")
+        ));
+        server.close();
+
+        try (var connection = java.sql.DriverManager.getConnection(
+                "jdbc:sqlite:" + tempDir.resolve("pocketbase.db").toAbsolutePath());
+             var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE _collections DROP COLUMN indexes");
+            statement.execute("ALTER TABLE _collections DROP COLUMN created");
+            statement.execute("ALTER TABLE _collections DROP COLUMN updated");
+        }
+
+        start();
+        token = loginToken();
+        JsonNode migrated = request("GET", "/api/collections/" + collection.get("id").asText(), token, null);
+        assertFalse(migrated.get("created").asText().isBlank());
+        assertFalse(migrated.get("updated").asText().isBlank());
+        assertEquals(1, migrated.get("indexes").size());
+        assertTrue(migrated.get("indexes").get(0).asText().contains("idx_legacy_title"));
+        assertEquals(List.of("idx_legacy_title"), sqliteCustomIndexNames("legacy_index_metadata"));
+    }
+
+    @Test
     void collectionMetaApisReturnScaffoldsAndOAuth2Providers() throws Exception {
         start();
         bootstrapSuperuser();
@@ -183,14 +1315,822 @@ class LocalPocketBaseServerTest {
         assertEquals("base", scaffolds.get("base").get("type").asText());
         assertEquals("auth", scaffolds.get("auth").get("type").asText());
         assertEquals("view", scaffolds.get("view").get("type").asText());
-        assertTrue(fieldNames(scaffolds.get("auth")).containsAll(List.of("email", "password", "verified")));
+        assertAuthSystemFields(scaffolds.get("auth"));
         assertTrue(scaffolds.get("view").has("viewQuery"));
 
         JsonNode providers = request("GET", "/api/collections/meta/oauth2-providers", token, null);
         List<String> names = providerNames(providers);
-        assertTrue(names.containsAll(List.of("apple", "github", "google", "microsoft", "oidc")));
+        assertEquals(32, providers.size());
+        assertEquals("apple", providers.get(0).get("name").asText());
+        assertTrue(names.containsAll(List.of(
+                "apple",
+                "github",
+                "google",
+                "instagram2",
+                "microsoft",
+                "oidc",
+                "oidc2",
+                "oidc3"
+        )));
+        assertFalse(names.contains("instagram"));
         assertTrue(providers.get(0).has("displayName"));
-        assertTrue(providers.get(0).has("logo"));
+        assertTrue(providers.get(0).get("logo").asText().startsWith("<svg"));
+    }
+
+    @Test
+    void authSystemFieldsAreProtectedAndLegacyCollectionsUpgradeOnRestart() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode superusers = request("GET", "/api/collections/_superusers", token, null);
+        assertAuthSystemFields(superusers);
+        JsonNode superuserAuth = request("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "root@example.com",
+                "password", "secret123"
+        ));
+        assertFalse(superuserAuth.get("record").get("emailVisibility").asBoolean());
+        assertTrue(superuserAuth.get("record").get("verified").asBoolean());
+
+        JsonNode collection = request("POST", "/api/collections", token, Map.of(
+                "name", "legacy_auth_fields",
+                "type", "auth",
+                "fields", List.of(Map.of("name", "displayName", "type", "text"))
+        ));
+        assertAuthSystemFields(collection);
+        assertEquals("displayName", collection.get("fields").get(6).get("name").asText());
+
+        JsonNode record = request("POST", "/api/collections/legacy_auth_fields/records", token, Map.of(
+                "email", "legacy@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "displayName", "Legacy"
+        ));
+        assertFalse(record.get("emailVisibility").asBoolean());
+        assertFalse(record.get("verified").asBoolean());
+
+        server.close();
+        downgradeAuthSystemFieldsFixture("legacy_auth_fields", collection.get("id").asText());
+        start();
+        token = loginToken();
+
+        JsonNode migrated = request("GET", "/api/collections/legacy_auth_fields", token, null);
+        assertAuthSystemFields(migrated);
+        assertEquals("displayName", migrated.get("fields").get(6).get("name").asText());
+
+        JsonNode migratedRecord = request(
+                "GET",
+                "/api/collections/legacy_auth_fields/records/" + record.get("id").asText(),
+                token,
+                null
+        );
+        assertFalse(migratedRecord.get("emailVisibility").asBoolean());
+        assertFalse(migratedRecord.get("verified").asBoolean());
+
+        JsonNode updated = request("PATCH", "/api/collections/legacy_auth_fields", token, Map.of(
+                "fields", migrated.get("fields")
+        ));
+        assertAuthSystemFields(updated);
+    }
+
+    @Test
+    void collectionReservedAndSystemFieldsMatchOfficialValidation() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> reservedCreate = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "reserved_schema_fields",
+                "fields", List.of(
+                        Map.of("name", "expand", "type", "text"),
+                        Map.of("name", "collectionId", "type", "text"),
+                        Map.of("name", "collectionName", "type", "text")
+                )
+        ));
+        assertEquals(400, reservedCreate.statusCode());
+        JsonNode reservedBody = mapper.readTree(reservedCreate.body());
+        assertEquals("Failed to create collection.", reservedBody.get("message").asText());
+        JsonNode reservedErrors = reservedBody.get("data").get("fields");
+        assertEquals("validation_not_in_invalid", reservedErrors.get("1").get("name").get("code").asText());
+        assertEquals("validation_not_in_invalid", reservedErrors.get("2").get("name").get("code").asText());
+        assertEquals("validation_not_in_invalid", reservedErrors.get("3").get("name").get("code").asText());
+
+        JsonNode created = request("POST", "/api/collections", token, Map.of(
+                "name", "protected_schema_fields",
+                "fields", List.of(Map.of("name", "title", "type", "text"))
+        ));
+
+        HttpResponse<String> removedSystemField = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("fields", List.of(Map.of(
+                        "id", created.get("fields").get(1).get("id").asText(),
+                        "name", "title",
+                        "type", "text"
+                )))
+        );
+        assertEquals(400, removedSystemField.statusCode());
+        assertFieldError(
+                removedSystemField,
+                400,
+                "Failed to update collection.",
+                "fields",
+                "validation_system_field_change",
+                "System fields cannot be deleted or renamed."
+        );
+
+        ArrayNode renamedFields = created.get("fields").deepCopy();
+        ((ObjectNode) renamedFields.get(0)).put("name", "renamed_id");
+        HttpResponse<String> renamedSystemField = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("fields", renamedFields)
+        );
+        assertEquals(400, renamedSystemField.statusCode());
+        assertFieldError(
+                renamedSystemField,
+                400,
+                "Failed to update collection.",
+                "fields",
+                "validation_system_field_change",
+                "System fields cannot be deleted or renamed."
+        );
+
+        ArrayNode validFields = created.get("fields").deepCopy();
+        ObjectNode published = mapper.createObjectNode();
+        published.put("name", "published");
+        published.put("type", "bool");
+        validFields.add(published);
+        JsonNode updated = request(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("fields", validFields)
+        );
+        assertEquals(List.of("id", "title", "published"), fieldNames(updated));
+
+        HttpResponse<String> changedCollectionType = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("type", "auth")
+        );
+        assertEquals(400, changedCollectionType.statusCode());
+        assertEquals(
+                "validation_collection_type_change",
+                mapper.readTree(changedCollectionType.body()).get("data").get("type").get("code").asText()
+        );
+
+        HttpResponse<String> changedSystemFlag = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("system", true)
+        );
+        assertEquals(400, changedSystemFlag.statusCode());
+        assertEquals(
+                "validation_collection_system_flag_change",
+                mapper.readTree(changedSystemFlag.body()).get("data").get("system").get("code").asText()
+        );
+
+        ArrayNode changedFieldTypes = updated.get("fields").deepCopy();
+        ((ObjectNode) changedFieldTypes.get(1)).put("type", "number");
+        HttpResponse<String> changedFieldType = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("fields", changedFieldTypes)
+        );
+        assertEquals(400, changedFieldType.statusCode());
+        assertEquals(
+                "validation_field_type_change",
+                mapper.readTree(changedFieldType.body()).get("data").get("fields").get("1").get("code").asText()
+        );
+
+        HttpResponse<String> changedTypeImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", updated.get("id").asText(),
+                        "name", "protected_schema_fields",
+                        "type", "auth",
+                        "fields", updated.get("fields"),
+                        "indexes", updated.get("indexes")
+                ))
+        ));
+        assertEquals(400, changedTypeImport.statusCode());
+        assertEquals(
+                "validation_collection_type_change",
+                mapper.readTree(changedTypeImport.body()).get("data").get("type").get("code").asText()
+        );
+        JsonNode afterRejectedMetadataChanges = request("GET", "/api/collections/protected_schema_fields", token, null);
+        assertEquals("base", afterRejectedMetadataChanges.get("type").asText());
+        assertEquals("text", afterRejectedMetadataChanges.get("fields").get(1).get("type").asText());
+
+        ArrayNode reservedUpdateFields = updated.get("fields").deepCopy();
+        ObjectNode expand = mapper.createObjectNode();
+        expand.put("name", "expand");
+        expand.put("type", "text");
+        reservedUpdateFields.add(expand);
+        HttpResponse<String> reservedUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/protected_schema_fields",
+                token,
+                Map.of("fields", reservedUpdateFields)
+        );
+        assertEquals(400, reservedUpdate.statusCode());
+        assertEquals(
+                "validation_not_in_invalid",
+                mapper.readTree(reservedUpdate.body()).get("data").get("fields").get("3").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> invalidImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", created.get("id").asText(),
+                        "name", "protected_schema_fields",
+                        "type", "base",
+                        "fields", List.of(Map.of(
+                                "id", created.get("fields").get(1).get("id").asText(),
+                                "name", "title",
+                                "type", "text"
+                        ))
+                ))
+        ));
+        assertEquals(400, invalidImport.statusCode());
+        assertFieldError(
+                invalidImport,
+                400,
+                "Failed to import collections.",
+                "fields",
+                "validation_system_field_change",
+                "System fields cannot be deleted or renamed."
+        );
+    }
+
+    @Test
+    void collectionModelIdentifiersAndDuplicatesMatchOfficialValidation() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode original = request("POST", "/api/collections", token, Map.of(
+                "name", "ModelNames",
+                "fields", List.of(Map.of("id", "fieldtitle", "name", "Title", "type", "text"))
+        ));
+
+        HttpResponse<String> invalidId = rawRequest("POST", "/api/collections", token, Map.of(
+                "id", "!invalid",
+                "name", "invalid_collection_id"
+        ));
+        assertEquals(400, invalidId.statusCode());
+        assertEquals(
+                "validation_match_invalid",
+                mapper.readTree(invalidId.body()).get("data").get("id").get("code").asText()
+        );
+
+        HttpResponse<String> duplicateId = rawRequest("POST", "/api/collections", token, Map.of(
+                "id", original.get("id").asText(),
+                "name", "duplicate_collection_id"
+        ));
+        assertEquals(400, duplicateId.statusCode());
+        assertEquals(
+                "validation_invalid_or_existing_id",
+                mapper.readTree(duplicateId.body()).get("data").get("id").get("code").asText()
+        );
+
+        HttpResponse<String> longId = rawRequest("POST", "/api/collections", token, Map.of(
+                "id", "i".repeat(101),
+                "name", "long_collection_id"
+        ));
+        assertEquals(400, longId.statusCode());
+        JsonNode longIdError = mapper.readTree(longId.body()).get("data").get("id");
+        assertEquals("validation_length_out_of_range", longIdError.get("code").asText());
+        assertEquals(1, longIdError.get("params").get("min").asInt());
+        assertEquals(100, longIdError.get("params").get("max").asInt());
+
+        HttpResponse<String> duplicateCase = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "modelnames"
+        ));
+        assertEquals(400, duplicateCase.statusCode());
+        assertEquals(
+                "validation_collection_name_exists",
+                mapper.readTree(duplicateCase.body()).get("data").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> collectionIdName = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", original.get("id").asText()
+        ));
+        assertEquals(400, collectionIdName.statusCode());
+        assertEquals(
+                "validation_collection_name_id_duplicate",
+                mapper.readTree(collectionIdName.body()).get("data").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> internalTable = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "_COLLECTIONS"
+        ));
+        assertEquals(400, internalTable.statusCode());
+        assertEquals(
+                "validation_collection_name_invalid",
+                mapper.readTree(internalTable.body()).get("data").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> viaName = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "alpha_VIA_beta"
+        ));
+        assertEquals(400, viaName.statusCode());
+        assertEquals(
+                "validation_found_via",
+                mapper.readTree(viaName.body()).get("data").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> invalidFormat = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "bad-name"
+        ));
+        assertEquals(400, invalidFormat.statusCode());
+        assertEquals(
+                "validation_match_invalid",
+                mapper.readTree(invalidFormat.body()).get("data").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> longName = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "a".repeat(256)
+        ));
+        assertEquals(400, longName.statusCode());
+        JsonNode longNameError = mapper.readTree(longName.body()).get("data").get("name");
+        assertEquals("validation_length_out_of_range", longNameError.get("code").asText());
+        assertEquals(1, longNameError.get("params").get("min").asInt());
+        assertEquals(255, longNameError.get("params").get("max").asInt());
+
+        String validLongCollectionName = "v".repeat(100);
+        JsonNode validLongIdentifiers = request("POST", "/api/collections", token, Map.of(
+                "name", validLongCollectionName,
+                "fields", List.of(Map.of("id", "numericfield", "name", "1field", "type", "text"))
+        ));
+        assertEquals(validLongCollectionName, validLongIdentifiers.get("name").asText());
+        assertEquals(List.of("id", "1field"), fieldNames(validLongIdentifiers));
+
+        HttpResponse<String> invalidType = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "upper_type",
+                "type", "BASE"
+        ));
+        assertEquals(400, invalidType.statusCode());
+        assertEquals(
+                "validation_in_invalid",
+                mapper.readTree(invalidType.body()).get("data").get("type").get("code").asText()
+        );
+
+        HttpResponse<String> duplicateFieldNames = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "duplicate_field_names",
+                "fields", List.of(
+                        Map.of("id", "fieldone", "name", "Test", "type", "text"),
+                        Map.of("id", "fieldtwo", "name", "test", "type", "bool")
+                )
+        ));
+        assertEquals(400, duplicateFieldNames.statusCode());
+        JsonNode duplicateNameError = mapper.readTree(duplicateFieldNames.body())
+                .get("data").get("fields").get("2").get("name");
+        assertEquals("validation_duplicated_field_name", duplicateNameError.get("code").asText());
+        assertEquals("test", duplicateNameError.get("params").get("fieldName").asText());
+
+        JsonNode replacedDuplicateId = request("POST", "/api/collections", token, Map.of(
+                "name", "duplicate_field_ids",
+                "fields", List.of(
+                        Map.of("id", "samefield", "name", "first", "type", "text"),
+                        Map.of("id", "samefield", "name", "second", "type", "bool")
+                )
+        ));
+        assertEquals(List.of("id", "second"), fieldNames(replacedDuplicateId));
+
+        HttpResponse<String> missingPrimaryKey = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "missing_primary_key",
+                "fields", List.of(Map.of(
+                        "id", "text3208210256",
+                        "name", "title",
+                        "type", "text"
+                ))
+        ));
+        assertEquals(400, missingPrimaryKey.statusCode());
+        assertEquals(
+                "validation_missing_primary_key",
+                mapper.readTree(missingPrimaryKey.body()).get("data").get("fields").get("code").asText()
+        );
+
+        HttpResponse<String> invalidFieldSettings = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_field_settings",
+                "fields", List.of(
+                        Map.of("id", "fieldnull", "name", "null", "type", "text"),
+                        Map.of("id", "fieldformat", "name", "bad-name", "type", "text"),
+                        Map.of("id", "fieldvia", "name", "a_VIA_b", "type", "text"),
+                        Map.of("id", "f".repeat(101), "name", "longId", "type", "text"),
+                        Map.of("id", "longname", "name", "n".repeat(101), "type", "text")
+                )
+        ));
+        assertEquals(400, invalidFieldSettings.statusCode());
+        JsonNode fieldErrors = mapper.readTree(invalidFieldSettings.body()).get("data").get("fields");
+        assertEquals("validation_not_in_invalid", fieldErrors.get("1").get("name").get("code").asText());
+        assertEquals("validation_match_invalid", fieldErrors.get("2").get("name").get("code").asText());
+        assertEquals("validation_found_via", fieldErrors.get("3").get("name").get("code").asText());
+        assertEquals("validation_length_out_of_range", fieldErrors.get("4").get("id").get("code").asText());
+        assertEquals("validation_length_out_of_range", fieldErrors.get("5").get("name").get("code").asText());
+
+        HttpResponse<String> reservedAuthFields = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "reserved_auth_fields",
+                "type", "auth",
+                "fields", List.of(
+                        Map.of("id", "oldpassword", "name", "oldPassword", "type", "text"),
+                        Map.of("id", "passwordconfirm", "name", "passwordConfirm", "type", "text")
+                )
+        ));
+        assertEquals(400, reservedAuthFields.statusCode());
+        JsonNode authFieldErrors = mapper.readTree(reservedAuthFields.body()).get("data").get("fields");
+        assertEquals("validation_reserved_field_name", authFieldErrors.get("6").get("name").get("code").asText());
+        assertEquals("validation_reserved_field_name", authFieldErrors.get("7").get("name").get("code").asText());
+
+        request("POST", "/api/collections", token, Map.of("name", "model_names_target"));
+        HttpResponse<String> aggregateUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/ModelNames",
+                token,
+                Map.of("name", "model_names_target", "type", "auth")
+        );
+        assertEquals(400, aggregateUpdate.statusCode());
+        JsonNode aggregateErrors = mapper.readTree(aggregateUpdate.body()).get("data");
+        assertEquals("validation_collection_name_exists", aggregateErrors.get("name").get("code").asText());
+        assertEquals("validation_collection_type_change", aggregateErrors.get("type").get("code").asText());
+        JsonNode unchanged = request("GET", "/api/collections/ModelNames", token, null);
+        assertEquals("base", unchanged.get("type").asText());
+        assertEquals("ModelNames", unchanged.get("name").asText());
+
+        JsonNode caseRenamed = request(
+                "PATCH",
+                "/api/collections/ModelNames",
+                token,
+                Map.of("name", "MODELNAMES")
+        );
+        assertEquals("MODELNAMES", caseRenamed.get("name").asText());
+
+        HttpResponse<String> invalidImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of("name", "invalid_via_import"))
+        ));
+        assertEquals(400, invalidImport.statusCode());
+        assertEquals(
+                "validation_found_via",
+                mapper.readTree(invalidImport.body()).get("data").get("name").get("code").asText()
+        );
+        assertEquals(404, rawRequest("GET", "/api/collections/invalid_via_import", token, null).statusCode());
+    }
+
+    @Test
+    void superuserRecordsCrudMatchesOfficialSdkFlow() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String rootToken = loginToken();
+
+        assertEquals(403, rawRequest("GET", "/api/collections/_superusers/records", null, null).statusCode());
+        assertEquals(403, rawRequest("GET", "/api/collections/_superusers/records/missing", null, null).statusCode());
+
+        request("POST", "/api/collections", rootToken, Map.of(
+                "name", "regular_auth_users",
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/regular_auth_users/records", rootToken, Map.of(
+                "email", "regular@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        String regularToken = request("POST", "/api/collections/regular_auth_users/auth-with-password", null, Map.of(
+                "identity", "regular@example.com",
+                "password", "secret456"
+        )).get("token").asText();
+        assertEquals(403, rawRequest("GET", "/api/collections/_superusers/records", regularToken, null).statusCode());
+
+        JsonNode second = request("POST", "/api/collections/_superusers/records", rootToken, Map.of(
+                "email", "second-root@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "verified", false
+        ));
+        String secondId = second.get("id").asText();
+        assertTrue(second.get("verified").asBoolean());
+        assertFalse(second.get("emailVisibility").asBoolean());
+        assertFalse(second.has("password"));
+        assertFalse(second.has("tokenKey"));
+
+        JsonNode page = request("GET", "/api/collections/_superusers/records", rootToken, null);
+        assertEquals(30, page.get("perPage").asInt());
+        assertEquals(2, page.get("totalItems").asInt());
+        assertEquals(secondId, request(
+                "GET",
+                "/api/collections/_superusers/records/" + secondId,
+                rootToken,
+                null
+        ).get("id").asText());
+
+        String secondToken = request("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "second-root@example.com",
+                "password", "secret456"
+        )).get("token").asText();
+        JsonNode renamed = request("PATCH", "/api/collections/_superusers/records/" + secondId, rootToken, Map.of(
+                "email", "renamed-root@example.com",
+                "verified", false
+        ));
+        assertEquals("renamed-root@example.com", renamed.get("email").asText());
+        assertTrue(renamed.get("verified").asBoolean());
+        assertEquals(401, rawRequest(
+                "POST",
+                "/api/collections/_superusers/auth-refresh",
+                secondToken,
+                null
+        ).statusCode());
+
+        String renamedToken = request("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "renamed-root@example.com",
+                "password", "secret456"
+        )).get("token").asText();
+        request("PATCH", "/api/collections/_superusers/records/" + secondId, rootToken, Map.of(
+                "password", "changed456",
+                "passwordConfirm", "changed456"
+        ));
+        assertEquals(401, rawRequest(
+                "POST",
+                "/api/collections/_superusers/auth-refresh",
+                renamedToken,
+                null
+        ).statusCode());
+        assertTrue(request("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
+                "identity", "renamed-root@example.com",
+                "password", "changed456"
+        )).hasNonNull("token"));
+
+        assertEquals(204, rawRequest(
+                "DELETE",
+                "/api/collections/_superusers/records/" + secondId,
+                rootToken,
+                null
+        ).statusCode());
+        String rootId = request("POST", "/api/collections/_superusers/auth-refresh", rootToken, null)
+                .get("record").get("id").asText();
+        HttpResponse<String> deleteLast = rawRequest(
+                "DELETE",
+                "/api/collections/_superusers/records/" + rootId,
+                rootToken,
+                null
+        );
+        assertEquals(400, deleteLast.statusCode());
+        assertErrorEnvelope(deleteLast, 400, "You can't delete the only existing superuser.");
+    }
+
+    @Test
+    void authSupportCollectionsCrudMatchesOfficialOwnershipRules() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String rootToken = loginToken();
+
+        JsonNode authCollection = request("POST", "/api/collections", rootToken, Map.of(
+                "name", "system_record_users",
+                "type", "auth"
+        ));
+        String authCollectionId = authCollection.get("id").asText();
+        JsonNode owner = request("POST", "/api/collections/system_record_users/records", rootToken, Map.of(
+                "email", "system-owner@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        String ownerId = owner.get("id").asText();
+        String ownerToken = request("POST", "/api/collections/system_record_users/auth-with-password", null, Map.of(
+                "identity", "system-owner@example.com",
+                "password", "secret456"
+        )).get("token").asText();
+
+        Map<String, Map<String, Object>> payloads = Map.of(
+                "_authOrigins", Map.of(
+                        "collectionRef", authCollectionId,
+                        "recordRef", ownerId,
+                        "fingerprint", "browser-fingerprint"
+                ),
+                "_externalAuths", Map.of(
+                        "collectionRef", authCollectionId,
+                        "recordRef", ownerId,
+                        "provider", "github",
+                        "providerId", "provider-user-1"
+                ),
+                "_mfas", Map.of(
+                        "collectionRef", authCollectionId,
+                        "recordRef", ownerId,
+                        "method", "password"
+                ),
+                "_otps", Map.of(
+                        "collectionRef", authCollectionId,
+                        "recordRef", ownerId,
+                        "password", "12345678",
+                        "sentTo", "system-owner@example.com"
+                )
+        );
+
+        for (Map.Entry<String, Map<String, Object>> entry : payloads.entrySet()) {
+            String collection = entry.getKey();
+            String recordsPath = "/api/collections/" + collection + "/records";
+
+            JsonNode systemSchema = request("GET", "/api/collections/" + collection, rootToken, null);
+            assertTrue(systemSchema.get("system").asBoolean());
+            assertEquals(200, rawRequest("GET", recordsPath, null, null).statusCode());
+            assertEquals(0, request("GET", recordsPath, null, null).get("totalItems").asInt());
+            assertEquals(403, rawRequest("POST", recordsPath, null, entry.getValue()).statusCode());
+            assertEquals(403, rawRequest("POST", recordsPath, ownerToken, entry.getValue()).statusCode());
+
+            JsonNode created = request("POST", recordsPath, rootToken, entry.getValue());
+            String id = created.get("id").asText();
+            assertEquals(ownerId, created.get("recordRef").asText());
+            assertEquals(authCollectionId, created.get("collectionRef").asText());
+            assertFalse(created.has("password"));
+
+            String idFilter = URLEncoder.encode("id = '" + id + "'", StandardCharsets.UTF_8);
+            JsonNode ownerPage = request("GET", recordsPath + "?filter=" + idFilter, ownerToken, null);
+            assertEquals(30, ownerPage.get("perPage").asInt());
+            assertEquals(1, ownerPage.get("totalItems").asInt());
+            assertEquals(id, ownerPage.get("items").get(0).get("id").asText());
+            assertEquals(404, rawRequest("GET", recordsPath + "/" + id, null, null).statusCode());
+            assertEquals(id, request("GET", recordsPath + "/" + id, ownerToken, null).get("id").asText());
+            assertEquals(403, rawRequest("PATCH", recordsPath + "/" + id, ownerToken, entry.getValue()).statusCode());
+
+            if ("_authOrigins".equals(collection) || "_externalAuths".equals(collection)) {
+                assertEquals(204, rawRequest("DELETE", recordsPath + "/" + id, ownerToken, null).statusCode());
+            } else {
+                assertEquals(403, rawRequest("DELETE", recordsPath + "/" + id, ownerToken, null).statusCode());
+                assertEquals(204, rawRequest("DELETE", recordsPath + "/" + id, rootToken, null).statusCode());
+            }
+        }
+
+        assertEquals(400, rawRequest("POST", "/api/collections/_mfas/records", rootToken, Map.of(
+                "collectionRef", "missing_collection",
+                "recordRef", ownerId,
+                "method", "password"
+        )).statusCode());
+        assertEquals(400, rawRequest("POST", "/api/collections/_mfas/records", rootToken, Map.of(
+                "collectionRef", authCollectionId,
+                "recordRef", "missing_record",
+                "method", "password"
+        )).statusCode());
+
+        Map<String, String> persistedIds = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, Object>> entry : payloads.entrySet()) {
+            Map<String, Object> persistentPayload = new LinkedHashMap<>(entry.getValue());
+            if ("_authOrigins".equals(entry.getKey())) {
+                persistentPayload.put("fingerprint", "persistent-fingerprint");
+            }
+            if ("_externalAuths".equals(entry.getKey())) {
+                persistentPayload.put("providerId", "persistent-provider-user");
+            }
+            JsonNode created = request(
+                    "POST",
+                    "/api/collections/" + entry.getKey() + "/records",
+                    rootToken,
+                    persistentPayload
+            );
+            persistedIds.put(entry.getKey(), created.get("id").asText());
+            if ("_authOrigins".equals(entry.getKey()) || "_externalAuths".equals(entry.getKey())) {
+                assertEquals(400, rawRequest(
+                        "POST",
+                        "/api/collections/" + entry.getKey() + "/records",
+                        rootToken,
+                        persistentPayload
+                ).statusCode());
+            }
+        }
+
+        server.close();
+        start();
+        rootToken = loginToken();
+        for (Map.Entry<String, String> entry : persistedIds.entrySet()) {
+            assertEquals(entry.getValue(), request(
+                    "GET",
+                    "/api/collections/" + entry.getKey() + "/records/" + entry.getValue(),
+                    rootToken,
+                    null
+            ).get("id").asText());
+        }
+
+        assertEquals(204, rawRequest(
+                "DELETE",
+                "/api/collections/system_record_users/records/" + ownerId,
+                rootToken,
+                null
+        ).statusCode());
+        for (Map.Entry<String, String> entry : persistedIds.entrySet()) {
+            assertEquals(404, rawRequest(
+                    "GET",
+                    "/api/collections/" + entry.getKey() + "/records/" + entry.getValue(),
+                    rootToken,
+                    null
+            ).statusCode());
+        }
+    }
+
+    @Test
+    void legacySystemCollectionIdsMigrateToOfficialIdsWithoutDataLoss() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+        JsonNode auth = request("POST", "/api/collections/_superusers/auth-refresh", token, null);
+        String rootId = auth.get("record").get("id").asText();
+
+        JsonNode relationCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "system_id_links",
+                "fields", List.of(Map.of(
+                        "name", "owner",
+                        "type", "relation",
+                        "collectionId", SystemCollections.SUPERUSERS_ID
+                ))
+        ));
+        JsonNode origin = request("POST", "/api/collections/_authOrigins/records", token, Map.of(
+                "collectionRef", SystemCollections.SUPERUSERS_ID,
+                "recordRef", rootId,
+                "fingerprint", "legacy-system-id-fixture"
+        ));
+
+        Path officialStorage = tempDir.resolve("storage")
+                .resolve(SystemCollections.SUPERUSERS_ID)
+                .resolve(rootId);
+        Files.createDirectories(officialStorage);
+        Files.writeString(officialStorage.resolve("legacy.txt"), "preserved", StandardCharsets.UTF_8);
+
+        server.close();
+        downgradeSystemCollectionIdsFixture();
+        start();
+        token = loginToken();
+
+        Map<String, String> officialIds = Map.of(
+                SystemCollections.SUPERUSERS, SystemCollections.SUPERUSERS_ID,
+                SystemCollections.MFAS, SystemCollections.MFAS_ID,
+                SystemCollections.OTPS, SystemCollections.OTPS_ID,
+                SystemCollections.EXTERNAL_AUTHS, SystemCollections.EXTERNAL_AUTHS_ID,
+                SystemCollections.AUTH_ORIGINS, SystemCollections.AUTH_ORIGINS_ID
+        );
+        for (Map.Entry<String, String> entry : officialIds.entrySet()) {
+            assertEquals(entry.getValue(), request(
+                    "GET",
+                    "/api/collections/" + entry.getKey(),
+                    token,
+                    null
+            ).get("id").asText());
+        }
+
+        JsonNode refreshed = request("POST", "/api/collections/_superusers/auth-refresh", token, null);
+        assertEquals(SystemCollections.SUPERUSERS_ID, refreshed.get("record").get("collectionId").asText());
+        assertEquals(rootId, refreshed.get("record").get("id").asText());
+        JsonNode legacyAliasAuth = request(
+                "POST",
+                "/api/collections/" + SystemCollections.LEGACY_SUPERUSERS_ID + "/auth-with-password",
+                null,
+                Map.of("identity", "root@example.com", "password", "secret123")
+        );
+        assertEquals(SystemCollections.SUPERUSERS_ID, legacyAliasAuth.get("record").get("collectionId").asText());
+        assertEquals(SystemCollections.SUPERUSERS_ID, request(
+                "POST",
+                "/api/collections/" + SystemCollections.LEGACY_SUPERUSERS_ID + "/auth-refresh",
+                legacyAliasAuth.get("token").asText(),
+                null
+        ).get("record").get("collectionId").asText());
+
+        JsonNode migratedOrigin = request(
+                "GET",
+                "/api/collections/_authOrigins/records/" + origin.get("id").asText(),
+                token,
+                null
+        );
+        assertEquals(SystemCollections.SUPERUSERS_ID, migratedOrigin.get("collectionRef").asText());
+
+        JsonNode migratedRelation = request(
+                "GET",
+                "/api/collections/" + relationCollection.get("id").asText(),
+                token,
+                null
+        );
+        JsonNode ownerField = null;
+        for (JsonNode field : migratedRelation.get("fields")) {
+            if ("owner".equals(field.path("name").asText())) {
+                ownerField = field;
+                break;
+            }
+        }
+        assertNotNull(ownerField);
+        assertEquals(SystemCollections.SUPERUSERS_ID, ownerField.get("collectionId").asText());
+
+        JsonNode superusers = request("GET", "/api/collections/_superusers", token, null);
+        assertFalse(fieldNames(superusers).contains("name"));
+        assertTrue(fieldNames(superusers).containsAll(List.of("created", "updated")));
+        assertEquals(86_400L, superusers.get("authToken").get("duration").asLong());
+        assertEquals("text3208210256", superusers.get("fields").get(0).get("id").asText());
+
+        assertEquals("preserved", Files.readString(
+                tempDir.resolve("storage")
+                        .resolve(SystemCollections.SUPERUSERS_ID)
+                        .resolve(rootId)
+                        .resolve("legacy.txt"),
+                StandardCharsets.UTF_8
+        ));
+        assertFalse(Files.exists(tempDir.resolve("storage").resolve(SystemCollections.LEGACY_SUPERUSERS_ID)));
     }
 
     @Test
@@ -239,6 +2179,381 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void healthDiagnosticsAreVisibleOnlyToSuperusers() throws Exception {
+        start();
+
+        HttpResponse<String> guestResponse = rawRequest("GET", "/api/health", null, null);
+        assertEquals(200, guestResponse.statusCode());
+        JsonNode guest = mapper.readTree(guestResponse.body());
+        assertEquals(200, guest.get("code").asInt());
+        assertEquals("API is healthy.", guest.get("message").asText());
+        assertTrue(guest.get("data").isObject());
+        assertTrue(guest.get("data").isEmpty());
+        assertFalse(guestResponse.body().contains("dataDir"));
+        assertFalse(guestResponse.body().contains("superuserReady"));
+        HttpResponse<String> head = rawRequest("HEAD", "/api/health", null, null);
+        assertEquals(200, head.statusCode());
+        assertTrue(head.body().isEmpty());
+        assertTrue(request("GET", "/api/bootstrap/superuser", null, null).get("required").asBoolean());
+
+        bootstrapSuperuser();
+        assertFalse(request("GET", "/api/bootstrap/superuser", null, null).get("required").asBoolean());
+        String rootToken = loginToken();
+        request("POST", "/api/collections", rootToken, Map.of(
+                "name", "health_users",
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/health_users/records", rootToken, Map.of(
+                "email", "health-user@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        String userToken = request(
+                "POST",
+                "/api/collections/health_users/auth-with-password",
+                null,
+                Map.of("identity", "health-user@example.com", "password", "secret456")
+        ).get("token").asText();
+
+        JsonNode regular = mapper.readTree(rawRequest("GET", "/api/health", userToken, null).body());
+        assertTrue(regular.get("data").isObject());
+        assertTrue(regular.get("data").isEmpty());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "trustedProxy", Map.of(
+                        "headers", List.of("X-Health-Real-IP"),
+                        "useLeftmostIP", true
+                )
+        ));
+        JsonNode superuser = mapper.readTree(rawRequest(
+                "GET",
+                "/api/health",
+                rootToken,
+                null,
+                Map.of(
+                        "X-Health-Real-IP", "invalid, 198.51.100.25",
+                        "CF-Connecting-IP", "203.0.113.10"
+                )
+        ).body());
+        assertTrue(superuser.get("data").get("canBackup").asBoolean());
+        assertEquals("198.51.100.25", superuser.get("data").get("realIP").asText());
+        assertEquals("X-Health-Real-IP", superuser.get("data").get("possibleProxyHeader").asText());
+        assertFalse(superuser.get("data").has("dataDir"));
+        assertFalse(superuser.get("data").has("superuserReady"));
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "trustedProxy", Map.of("headers", List.of(), "useLeftmostIP", false)
+        ));
+        JsonNode commonProxy = mapper.readTree(rawRequest(
+                "GET",
+                "/api/health",
+                rootToken,
+                null,
+                Map.of("CF-Connecting-IP", "203.0.113.11")
+        ).body());
+        assertEquals("127.0.0.1", commonProxy.get("data").get("realIP").asText());
+        assertEquals("CF-Connecting-IP", commonProxy.get("data").get("possibleProxyHeader").asText());
+    }
+
+    @Test
+    void rateLimitsAndBodyLimitMatchOfficialMiddlewareRules() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String rootToken = loginToken();
+
+        request("POST", "/api/collections", rootToken, Map.of(
+                "name", "rate_limit_users",
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/rate_limit_users/records", rootToken, Map.of(
+                "email", "limited@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        String userToken = request(
+                "POST",
+                "/api/collections/rate_limit_users/auth-with-password",
+                null,
+                Map.of("identity", "limited@example.com", "password", "secret456")
+        ).get("token").asText();
+
+        HttpResponse<String> invalid = rawRequest("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of("enabled", true, "rules", List.of())
+        ));
+        assertEquals(400, invalid.statusCode());
+        assertFalse(request("GET", "/api/settings", rootToken, null)
+                .get("rateLimits").get("enabled").asBoolean());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of(
+                        "enabled", true,
+                        "rules", List.of(Map.of(
+                                "label", "/api/health",
+                                "audience", "@guest",
+                                "duration", 1,
+                                "maxRequests", 1
+                        )),
+                        "excludedIPs", List.of()
+                ),
+                "trustedProxy", Map.of("headers", List.of(), "useLeftmostIP", false)
+        ));
+        assertEquals(200, rawRequest("GET", "/api/health", null, null).statusCode());
+        HttpResponse<String> guestLimited = rawRequest("GET", "/api/health", null, null);
+        assertEquals(429, guestLimited.statusCode());
+        assertEquals("1", guestLimited.headers().firstValue("Retry-After").orElse(""));
+        Thread.sleep(1100);
+        assertEquals(200, rawRequest("GET", "/api/health", null, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of(
+                        "enabled", true,
+                        "rules", List.of(Map.of(
+                                "label", "/api/health",
+                                "audience", "@auth",
+                                "duration", 60,
+                                "maxRequests", 1
+                        )),
+                        "excludedIPs", List.of()
+                )
+        ));
+        assertEquals(200, rawRequest("GET", "/api/health", null, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", null, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null).statusCode());
+        assertEquals(429, rawRequest("GET", "/api/health", userToken, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", rootToken, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", rootToken, null).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of("excludedIPs", List.of("127.0.0.1"))
+        ));
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of("excludedIPs", List.of("203.0.113.7")),
+                "trustedProxy", Map.of("headers", List.of("X-Test-IP"), "useLeftmostIP", false)
+        ));
+        Map<String, String> proxyHeaders = Map.of("X-Test-IP", "198.51.100.4, 203.0.113.7");
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null, proxyHeaders).statusCode());
+        assertEquals(200, rawRequest("GET", "/api/health", userToken, null, proxyHeaders).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of(
+                        "enabled", true,
+                        "rules", List.of(Map.of(
+                                "label", "*:create",
+                                "audience", "@guest",
+                                "duration", 60,
+                                "maxRequests", 1
+                        )),
+                        "excludedIPs", List.of()
+                ),
+                "trustedProxy", Map.of("headers", List.of(), "useLeftmostIP", false)
+        ));
+        request("POST", "/api/collections", rootToken, Map.of(
+                "name", "limited_posts",
+                "createRule", "",
+                "listRule", "",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+        assertEquals(200, rawRequest(
+                "POST",
+                "/api/collections/limited_posts/records",
+                null,
+                Map.of("title", "first")
+        ).statusCode());
+        assertEquals(429, rawRequest(
+                "POST",
+                "/api/collections/limited_posts/records",
+                null,
+                Map.of("title", "second")
+        ).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of(
+                        "enabled", true,
+                        "rules", List.of(Map.of(
+                                "label", "*:auth",
+                                "audience", "@guest",
+                                "duration", 60,
+                                "maxRequests", 1
+                        )),
+                        "excludedIPs", List.of()
+                )
+        ));
+        assertEquals(200, rawRequest(
+                "POST",
+                "/api/collections/rate_limit_users/auth-with-password",
+                null,
+                Map.of("identity", "limited@example.com", "password", "secret456")
+        ).statusCode());
+        assertEquals(429, rawRequest(
+                "POST",
+                "/api/collections/rate_limit_users/auth-with-password",
+                null,
+                Map.of("identity", "limited@example.com", "password", "secret456")
+        ).statusCode());
+
+        request("PATCH", "/api/settings", rootToken, Map.of(
+                "rateLimits", Map.of("enabled", false)
+        ));
+        RawHttpResponse tooLarge = rawDeclaredContentLengthRequest(
+                "POST",
+                "/api/health",
+                (32L << 20) + 1
+        );
+        assertEquals(413, tooLarge.status());
+        JsonNode tooLargeBody = mapper.readTree(tooLarge.body());
+        assertEquals(413, tooLargeBody.get("status").asInt());
+        assertEquals("Request entity too large", tooLargeBody.get("message").asText());
+    }
+
+    @Test
+    void superuserIpWhitelistMatchesOfficialMiddlewareAndAuthResponseRules() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", "ip_policy_users",
+                "type", "auth",
+                "options", Map.of("authRule", "")
+        ));
+        request("POST", "/api/collections/ip_policy_users/records", superuserToken, Map.of(
+                "email", "ip-user@example.com",
+                "password", "secret123",
+                "passwordConfirm", "secret123",
+                "verified", true
+        ));
+        String userToken = request("POST", "/api/collections/ip_policy_users/auth-with-password", null, Map.of(
+                "identity", "ip-user@example.com",
+                "password", "secret123"
+        )).get("token").asText();
+
+        HttpResponse<String> invalidSetting = rawRequest("PATCH", "/api/settings", superuserToken, Map.of(
+                "superuserIPs", List.of("localhost")
+        ));
+        assertEquals(400, invalidSetting.statusCode());
+        assertTrue(mapper.readTree(invalidSetting.body()).path("data").has("superuserIPs"));
+        HttpResponse<String> invalidSettingType = rawRequest("PATCH", "/api/settings", superuserToken, Map.of(
+                "superuserIPs", "127.0.0.1"
+        ));
+        assertEquals(400, invalidSettingType.statusCode());
+        assertTrue(mapper.readTree(invalidSettingType.body()).path("data").has("superuserIPs"));
+
+        request("PATCH", "/api/settings", superuserToken, Map.of(
+                "trustedProxy", Map.of(
+                        "headers", List.of("X-Test-IP"),
+                        "useLeftmostIP", false
+                ),
+                "superuserIPs", List.of("10.0.0.0/8")
+        ));
+
+        assertEquals(200, rawRequest(
+                "GET",
+                "/api/health",
+                null,
+                null,
+                Map.of("X-Test-IP", "127.0.0.1")
+        ).statusCode());
+        assertEquals(200, rawRequest(
+                "POST",
+                "/api/collections/ip_policy_users/auth-refresh",
+                userToken,
+                null,
+                Map.of("X-Test-IP", "127.0.0.1")
+        ).statusCode());
+
+        HttpResponse<String> blockedRequest = rawRequest(
+                "GET",
+                "/api/settings",
+                superuserToken,
+                null,
+                Map.of("X-Test-IP", "127.0.0.1")
+        );
+        assertEquals(403, blockedRequest.statusCode());
+        assertEquals(0, mapper.readTree(blockedRequest.body()).path("data").size());
+
+        HttpResponse<String> blockedLogin = rawRequest(
+                "POST",
+                "/api/collections/_superusers/auth-with-password",
+                null,
+                Map.of("identity", "root@example.com", "password", "secret123"),
+                Map.of("X-Test-IP", "127.0.0.1")
+        );
+        assertEquals(403, blockedLogin.statusCode());
+
+        JsonNode allowedLogin = requestWithHeaders(
+                "POST",
+                "/api/collections/_superusers/auth-with-password",
+                null,
+                Map.of("identity", "root@example.com", "password", "secret123"),
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        );
+        String allowedToken = allowedLogin.get("token").asText();
+        assertEquals(200, rawRequest(
+                "GET",
+                "/api/settings",
+                allowedToken,
+                null,
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        ).statusCode());
+
+        requestWithHeaders(
+                "POST",
+                "/api/backups",
+                allowedToken,
+                Map.of("name", "ip-policy.zip"),
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        );
+        String fileToken = requestWithHeaders(
+                "POST",
+                "/api/files/token",
+                allowedToken,
+                null,
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        ).get("token").asText();
+        assertEquals(403, rawRequest(
+                "GET",
+                "/api/backups/ip-policy.zip?token=" + fileToken,
+                null,
+                null,
+                Map.of("X-Test-IP", "127.0.0.1")
+        ).statusCode());
+        assertEquals(200, rawRequest(
+                "GET",
+                "/api/backups/ip-policy.zip?token=" + fileToken,
+                null,
+                null,
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        ).statusCode());
+
+        requestWithHeaders(
+                "PATCH",
+                "/api/settings",
+                allowedToken,
+                Map.of("trustedProxy", Map.of("useLeftmostIP", true)),
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        );
+        assertEquals(403, rawRequest(
+                "GET",
+                "/api/settings",
+                allowedToken,
+                null,
+                Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid")
+        ).statusCode());
+        assertEquals(200, rawRequest(
+                "GET",
+                "/api/settings",
+                allowedToken,
+                null,
+                Map.of("X-Test-IP", "10.2.3.4, 127.0.0.1")
+        ).statusCode());
+    }
+
+    @Test
     void dryRunViewPreviewsSelectQueriesAndRejectsWriteStatements() throws Exception {
         start();
         bootstrapSuperuser();
@@ -248,23 +2563,69 @@ class LocalPocketBaseServerTest {
                 "query", "select 1"
         )).statusCode());
 
-        JsonNode preview = request("POST", "/api/collections/meta/dry-run-view", token, Map.of(
-                "query", "select 1 as one; select 'last' as final_value"
+        request("POST", "/api/collections", token, Map.of(
+                "name", "dry_run_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text"))
         ));
-        assertEquals("final_value", preview.get("columns").get(0).get("name").asText());
-        assertEquals("last", preview.get("rows").get(0).get(0).asText());
+        request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "alpha"));
+        request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "beta"));
+
+        JsonNode preview = request("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select id, title from dry_run_posts order by title"
+        ));
+        assertTrue(preview.has("fields"));
+        assertTrue(preview.has("sample"));
+        assertFalse(preview.has("columns"));
+        assertFalse(preview.has("rows"));
+        assertEquals("id", preview.get("fields").get(0).get("name").asText());
+        assertEquals("text", preview.get("fields").get(0).get("type").asText());
+        assertEquals("title", preview.get("fields").get(1).get("name").asText());
+        assertEquals("alpha", preview.get("sample").get(0).get("title").asText());
+        assertEquals("beta", preview.get("sample").get(1).get("title").asText());
+        assertFalse(preview.get("sample").get(0).get("id").asText().isBlank());
 
         HttpResponse<String> writeQuery = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
                 "query", "insert into t values (1)"
         ));
         assertEquals(400, writeQuery.statusCode());
-        assertFieldError(
-                writeQuery,
+        assertErrorEnvelope(writeQuery, 400, "Invalid view query. Raw error: \nwrite statements are not allowed");
+
+        HttpResponse<String> multipleStatements = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select id from dry_run_posts; select id from dry_run_posts"
+        ));
+        assertEquals(400, multipleStatements.statusCode());
+        assertErrorEnvelope(multipleStatements, 400, "Invalid view query. Raw error: \nmultiple statements are not supported");
+
+        HttpResponse<String> wildcard = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select * from dry_run_posts"
+        ));
+        assertEquals(400, wildcard.statusCode());
+        assertErrorEnvelope(
+                wildcard,
                 400,
-                "Invalid view query. Raw error:\nwrite statements are not allowed",
-                "query",
-                "validation_invalid_value",
-                "Invalid view query. Raw error:\nwrite statements are not allowed"
+                "Invalid view query. Raw error: \nwildcard columns (*) are not supported - manually type the collection field names you want the view query to have"
+        );
+
+        HttpResponse<String> missingId = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select title from dry_run_posts"
+        ));
+        assertEquals(400, missingId.statusCode());
+        assertErrorEnvelope(
+                missingId,
+                400,
+                "Invalid view query. Raw error: \nmissing required id column (you can use `(ROW_NUMBER() OVER()) as id` if you don't have one)"
+        );
+
+        request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "duplicate"));
+        request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "duplicate"));
+        HttpResponse<String> duplicateIds = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
+                "query", "select title as id from dry_run_posts where title = 'duplicate'"
+        ));
+        assertEquals(400, duplicateIds.statusCode());
+        assertErrorEnvelope(
+                duplicateIds,
+                400,
+                "Invalid view query. Raw error: \nthe query could return records with non-unique ids"
         );
 
         HttpResponse<String> missingQuery = rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of(
@@ -272,6 +2633,98 @@ class LocalPocketBaseServerTest {
         ));
         assertEquals(400, missingQuery.statusCode());
         assertFieldError(missingQuery, 400, "An error occurred while validating the submitted data.", "query", "validation_required", "Cannot be blank.");
+    }
+
+    @Test
+    void viewCollectionsGenerateFieldsExecuteQueriesAndRollbackInvalidUpdates() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "view_sources",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text"),
+                        Map.of("name", "status", "type", "text")
+                )
+        ));
+        request("POST", "/api/collections/view_sources/records", token, Map.of("title", "Published A", "status", "published"));
+        request("POST", "/api/collections/view_sources/records", token, Map.of("title", "Draft A", "status", "draft"));
+
+        HttpResponse<String> invalidCreate = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_view",
+                "type", "view",
+                "viewQuery", "select title from view_sources"
+        ));
+        assertEquals(400, invalidCreate.statusCode());
+        assertFieldErrorMessageStartsWith(
+                invalidCreate,
+                400,
+                "Failed to create collection.",
+                "viewQuery",
+                "validation_invalid_view_query",
+                "Invalid query - missing required id column"
+        );
+
+        String publishedQuery = "select id, title from view_sources where status = 'published' order by title";
+        JsonNode view = request("POST", "/api/collections", token, Map.of(
+                "name", "published_posts",
+                "type", "view",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of("name", "ignored!@#$", "type", "text")),
+                "viewQuery", publishedQuery
+        ));
+        assertEquals("view", view.get("type").asText());
+        assertEquals(publishedQuery, view.get("viewQuery").asText());
+        assertEquals(List.of("id", "title"), fieldNames(view));
+
+        JsonNode published = request("GET", "/api/collections/published_posts/records?sort=title", null, null);
+        assertEquals(1, published.get("totalItems").asInt());
+        assertEquals("Published A", published.get("items").get(0).get("title").asText());
+
+        request("POST", "/api/collections/view_sources/records", token, Map.of("title", "Published B", "status", "published"));
+        JsonNode refreshed = request("GET", "/api/collections/published_posts/records?sort=title", null, null);
+        assertEquals(2, refreshed.get("totalItems").asInt());
+        assertEquals("Published B", refreshed.get("items").get(1).get("title").asText());
+
+        String draftQuery = "select id, title, status from view_sources where status = 'draft' order by title";
+        JsonNode updated = request("PATCH", "/api/collections/published_posts", token, Map.of(
+                "fields", List.of(Map.of("name", "still_ignored!", "type", "text")),
+                "viewQuery", draftQuery
+        ));
+        assertEquals("published_posts", updated.get("name").asText());
+        assertEquals(draftQuery, updated.get("viewQuery").asText());
+        assertEquals(List.of("id", "title", "status"), fieldNames(updated));
+
+        JsonNode drafts = request("GET", "/api/collections/published_posts/records", null, null);
+        assertEquals(1, drafts.get("totalItems").asInt());
+        assertEquals("Draft A", drafts.get("items").get(0).get("title").asText());
+
+        HttpResponse<String> invalidUpdate = rawRequest("PATCH", "/api/collections/published_posts", token, Map.of(
+                "viewQuery", "select * from view_sources"
+        ));
+        assertEquals(400, invalidUpdate.statusCode());
+        assertFieldErrorMessageStartsWith(
+                invalidUpdate,
+                400,
+                "Failed to update collection.",
+                "viewQuery",
+                "validation_invalid_view_query",
+                "Invalid query - wildcard columns (*) are not supported"
+        );
+
+        JsonNode unchanged = request("GET", "/api/collections/published_posts", token, null);
+        assertEquals(draftQuery, unchanged.get("viewQuery").asText());
+        assertEquals(List.of("id", "title", "status"), fieldNames(unchanged));
+
+        server.close();
+        start();
+        JsonNode afterRestart = request("GET", "/api/collections/published_posts/records", null, null);
+        assertEquals(1, afterRestart.get("totalItems").asInt());
+        assertEquals("Draft A", afterRestart.get("items").get(0).get("title").asText());
     }
 
     @Test
@@ -326,6 +2779,13 @@ class LocalPocketBaseServerTest {
                                 "listRule", "",
                                 "viewRule", "",
                                 "fields", List.of(
+                                        Map.of(
+                                                "id", keep.get("fields").get(0).get("id").asText(),
+                                                "name", "id",
+                                                "type", "text",
+                                                "required", true,
+                                                "system", true
+                                        ),
                                         Map.of("name", "title", "type", "text", "required", true),
                                         Map.of("name", "status", "type", "text"),
                                         Map.of("name", "attachment", "type", "file")
@@ -343,7 +2803,7 @@ class LocalPocketBaseServerTest {
         assertEquals(404, oldName.statusCode());
         JsonNode renamed = request("GET", "/api/collections/import_keep_renamed", token, null);
         assertEquals(keep.get("id").asText(), renamed.get("id").asText());
-        assertEquals(3, renamed.get("fields").size());
+        assertEquals(4, renamed.get("fields").size());
 
         JsonNode records = request("GET", "/api/collections/import_keep_renamed/records", null, null);
         assertEquals(1, records.get("totalItems").asInt());
@@ -464,15 +2924,26 @@ class LocalPocketBaseServerTest {
         assertEquals(400, missingMultipartBoundary.statusCode());
         assertFieldError(missingMultipartBoundary, 400, "Failed to read request body.", "body", "validation_required", "Cannot be blank.");
 
-        HttpResponse<String> invalidUpload = rawMultipartRequest("POST", "/api/backups", token, Map.of(), Map.of(
+        HttpResponse<String> invalidMime = rawMultipartRequest("POST", "/api/backups/upload", token, Map.of(), Map.of(
+                "file", new MultipartFile("broken.zip", "text/plain", "not a zip".getBytes(StandardCharsets.UTF_8))
+        ));
+        assertEquals(400, invalidMime.statusCode());
+        assertFieldError(invalidMime, 400, "An error occurred while validating the submitted data.", "file", "validation_invalid_mime_type", "Invalid file type.");
+
+        HttpResponse<String> opaqueUpload = rawMultipartRequest("POST", "/api/backups/upload", token, Map.of(), Map.of(
                 "file", new MultipartFile("broken.zip", "application/zip", "not a zip".getBytes(StandardCharsets.UTF_8))
         ));
-        assertEquals(400, invalidUpload.statusCode());
-        assertFieldError(invalidUpload, 400, "Invalid backup archive.", "file", "validation_invalid_value", "Invalid backup archive.");
+        assertEquals(204, opaqueUpload.statusCode());
+        assertTrue(opaqueUpload.body().isBlank());
 
-        JsonNode backup = request("POST", "/api/backups", token, Map.of("name", "snap.zip"));
-        assertEquals("snap.zip", backup.get("key").asText());
-        assertTrue(backup.get("size").asLong() > 0);
+        HttpResponse<String> invalidName = rawRequest("POST", "/api/backups", token, Map.of("name", "!snap.zip"));
+        assertEquals(400, invalidName.statusCode());
+        assertFieldError(invalidName, 400, "An error occurred while validating the submitted data.", "name", "validation_match_invalid", "Must be in a valid format.");
+
+        HttpResponse<String> createdBackup = rawRequest("POST", "/api/backups", token, Map.of("name", "snap.zip"));
+        assertEquals(204, createdBackup.statusCode());
+        assertTrue(createdBackup.body().isBlank());
+        assertTrue(Files.size(tempDir.resolve("backups").resolve("snap.zip")) > 0);
 
         HttpResponse<String> duplicateBackup = rawRequest("POST", "/api/backups", token, Map.of("name", "snap.zip"));
         assertEquals(400, duplicateBackup.statusCode());
@@ -485,16 +2956,34 @@ class LocalPocketBaseServerTest {
         assertFieldError(duplicateUpload, 400, "Backup already exists.", "file", "validation_not_unique", "Value must be unique.");
 
         JsonNode backups = request("GET", "/api/backups", token, null);
-        assertEquals(1, backups.get("totalItems").asInt());
-        assertEquals("snap.zip", backups.get("items").get(0).get("key").asText());
+        assertTrue(backups.isArray());
+        assertEquals(2, backups.size());
+        JsonNode snapInfo = findBy(backups, "key", "snap.zip");
+        assertEquals("snap.zip", snapInfo.get("key").asText());
+        assertTrue(snapInfo.get("size").asLong() > 0);
+        assertTrue(snapInfo.get("modified").isTextual());
+        assertFalse(snapInfo.has("name"));
 
-        HttpResponse<String> missingDownload = rawRequest("GET", "/api/backups/missing.zip", token, null);
+        HttpResponse<String> brokenRestore = rawRequest("POST", "/api/backups/broken.zip/restore", token, null);
+        assertEquals(400, brokenRestore.statusCode());
+        assertFieldError(brokenRestore, 400, "Invalid backup archive.", "file", "validation_invalid_value", "Invalid backup archive.");
+        assertEquals(204, rawRequest("DELETE", "/api/backups/broken.zip", token, null).statusCode());
+
+        String fileToken = request("POST", "/api/files/token", token, null).get("token").asText();
+        HttpResponse<String> missingDownload = rawRequest(
+                "GET",
+                "/api/backups/missing.zip?token=" + fileToken,
+                null,
+                null
+        );
         assertEquals(404, missingDownload.statusCode());
         assertErrorEnvelope(missingDownload, 404, "Backup not found.");
 
+        assertEquals(403, rawRequest("GET", "/api/backups/snap.zip", null, null).statusCode());
+        assertEquals(403, rawRequest("GET", "/api/backups/snap.zip", token, null).statusCode());
+
         HttpResponse<byte[]> download = http.send(
-                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/backups/snap.zip"))
-                        .header("Authorization", "Bearer " + token)
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/backups/snap.zip?token=" + fileToken))
                         .GET()
                         .build(),
                 HttpResponse.BodyHandlers.ofByteArray()
@@ -519,7 +3008,9 @@ class LocalPocketBaseServerTest {
         JsonNode stillChanged = request("GET", "/api/collections/tasks/records", null, null);
         assertEquals(2, stillChanged.get("totalItems").asInt());
 
-        request("POST", "/api/backups/snap.zip/restore", token, null);
+        HttpResponse<String> restore = rawRequest("POST", "/api/backups/snap.zip/restore", token, null);
+        assertEquals(204, restore.statusCode());
+        assertTrue(restore.body().isBlank());
         JsonNode restored = request("GET", "/api/collections/tasks/records", null, null);
         assertEquals(1, restored.get("totalItems").asInt());
         assertEquals("before backup", restored.get("items").get(0).get("name").asText());
@@ -528,8 +3019,8 @@ class LocalPocketBaseServerTest {
         assertEquals(204, deleted.statusCode());
 
         HttpResponse<String> deleteMissing = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
-        assertEquals(404, deleteMissing.statusCode());
-        assertErrorEnvelope(deleteMissing, 404, "Backup not found.");
+        assertEquals(400, deleteMissing.statusCode());
+        assertErrorEnvelope(deleteMissing, 400, "Invalid or already deleted backup file.");
     }
 
     @Test
@@ -780,6 +3271,80 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void logSettingsAndMaintenanceCronsMatchOfficialBehavior() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("PATCH", "/api/settings", token, Map.of(
+                "logs", Map.of(
+                        "maxDays", 5,
+                        "minLevel", 8,
+                        "logIP", false,
+                        "logAuthId", false
+                )
+        ));
+        assertEquals(404, rawRequest("GET", "/api/missing-log", token, null).statusCode());
+
+        JsonNode filtered = request(
+                "GET",
+                "/api/logs?filter=" + URLEncoder.encode("data.url = '/api/missing-log'", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertEquals(1, filtered.get("totalItems").asInt());
+        JsonNode filteredLog = filtered.get("items").get(0);
+        assertEquals(8, filteredLog.get("level").asInt());
+        assertEquals("_superusers", filteredLog.get("data").get("auth").asText());
+        assertFalse(filteredLog.get("data").has("authId"));
+        assertFalse(filteredLog.get("data").has("remoteIP"));
+        assertFalse(filteredLog.get("data").has("userIP"));
+
+        request("PATCH", "/api/settings", token, Map.of("logs", Map.of("maxDays", 0)));
+        assertEquals(0, request("GET", "/api/logs", token, null).get("totalItems").asInt());
+
+        request("PATCH", "/api/settings", token, Map.of(
+                "logs", Map.of(
+                        "maxDays", 5,
+                        "minLevel", 0,
+                        "logIP", true,
+                        "logAuthId", true
+                )
+        ));
+        assertEquals(404, rawRequest("GET", "/api/old-maintenance-log", token, null).statusCode());
+        JsonNode oldLogs = request(
+                "GET",
+                "/api/logs?filter=" + URLEncoder.encode("data.url = '/api/old-maintenance-log'", StandardCharsets.UTF_8),
+                token,
+                null
+        );
+        assertEquals(1, oldLogs.get("totalItems").asInt());
+        JsonNode oldLog = oldLogs.get("items").get(0);
+        String oldLogId = oldLog.get("id").asText();
+        assertTrue(oldLog.get("data").hasNonNull("authId"));
+        assertTrue(oldLog.get("data").hasNonNull("remoteIP"));
+        assertTrue(oldLog.get("data").hasNonNull("userIP"));
+
+        if (Files.exists(tempDir.resolve("pocketbase.db"))) {
+            ageSqliteLogFixture(oldLogId);
+            assertEquals(1, request(
+                    "GET",
+                    "/api/logs?filter=" + URLEncoder.encode("id = '" + oldLogId + "'", StandardCharsets.UTF_8),
+                    token,
+                    null
+            ).get("totalItems").asInt());
+            assertEquals(204, rawRequest("POST", "/api/crons/__pbLogsCleanup__", token, null).statusCode());
+            assertTrue(waitForLogMissing(oldLogId, token));
+        } else {
+            request("PATCH", "/api/settings", token, Map.of("logs", Map.of("maxDays", 0)));
+            assertTrue(waitForLogMissing(oldLogId, token));
+            assertEquals(204, rawRequest("POST", "/api/crons/__pbLogsCleanup__", token, null).statusCode());
+        }
+        assertEquals(204, rawRequest("POST", "/api/crons/__pbDBOptimize__", token, null).statusCode());
+        Thread.sleep(200);
+    }
+
+    @Test
     void settingsTestEmailCanSendThroughConfiguredSmtp() throws Exception {
         start();
         bootstrapSuperuser();
@@ -808,6 +3373,628 @@ class LocalPocketBaseServerTest {
             assertTrue(smtp.message().contains("Reset password request"));
             assertTrue(smtp.message().contains("dev@example.com"));
         }
+    }
+
+    @Test
+    void authRequestsUseCollectionTemplatesAndConfiguredSmtp() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        JsonNode collection = request("POST", "/api/collections", token, Map.of(
+                "name", "mail_users",
+                "type", "auth",
+                "otp", Map.of(
+                        "enabled", true,
+                        "emailTemplate", Map.of(
+                                "subject", "OTP for {APP_NAME}",
+                                "body", "<p>OTP {OTP} id {OTP_ID} for {RECORD:email}</p>"
+                        )
+                ),
+                "resetPasswordTemplate", Map.of(
+                        "subject", "Reset {APP_NAME}",
+                        "body", "<p>Reset token {TOKEN} for {RECORD:email} at {APP_URL}</p>"
+                )
+        ));
+        assertEquals(180, collection.get("otp").get("duration").asInt());
+        assertEquals(8, collection.get("otp").get("length").asInt());
+        assertEquals(600, collection.get("mfa").get("duration").asInt());
+        assertEquals(432_000, collection.get("authToken").get("duration").asInt());
+        assertEquals(86_400, collection.get("verificationToken").get("duration").asInt());
+        assertTrue(collection.get("authAlert").get("enabled").asBoolean());
+
+        request("POST", "/api/collections/mail_users/records", token, Map.of(
+                "email", "mail@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "verified", true
+        ));
+
+        try (FakeSmtpServer smtp = FakeSmtpServer.start()) {
+            request("PATCH", "/api/settings", token, Map.of(
+                    "meta", Map.of(
+                            "appName", "Mail App",
+                            "appURL", "https://app.example.com",
+                            "senderName", "Mail App",
+                            "senderAddress", "noreply@example.com"
+                    ),
+                    "smtp", Map.of(
+                            "enabled", true,
+                            "host", "127.0.0.1",
+                            "port", smtp.port(),
+                            "tls", false
+                    )
+            ));
+            assertEquals(204, rawRequest("POST", "/api/collections/mail_users/request-password-reset", null, Map.of(
+                    "email", "mail@example.com"
+            )).statusCode());
+            String message = smtp.message();
+            assertTrue(message.contains("Reset token ey"));
+            assertTrue(message.contains("mail@example.com"));
+            assertTrue(message.contains("https://app.example.com"));
+        }
+
+        try (FakeSmtpServer smtp = FakeSmtpServer.start()) {
+            request("PATCH", "/api/settings", token, Map.of(
+                    "smtp", Map.of(
+                            "enabled", true,
+                            "host", "127.0.0.1",
+                            "port", smtp.port(),
+                            "tls", false
+                    )
+            ));
+            JsonNode otp = request("POST", "/api/collections/mail_users/request-otp", null, Map.of(
+                    "email", "mail@example.com"
+            ));
+            String message = smtp.message();
+            assertTrue(message.contains("id " + otp.get("otpId").asText()));
+            assertTrue(message.matches("(?s).*OTP [0-9]{8} id .*"));
+            assertTrue(message.contains("mail@example.com"));
+        }
+
+        Path outbox = tempDir.resolve("auth_requests.json");
+        if (Files.exists(outbox)) {
+            assertEquals(0, mapper.readTree(outbox.toFile()).size(),
+                    "SMTP delivery must not leak action tokens or OTP codes into the development outbox");
+        }
+    }
+
+    @Test
+    void authAlertsTrackOriginsAndNotifyOnlyForNewLocations() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "alert_users",
+                "type", "auth",
+                "authAlert", Map.of(
+                        "enabled", true,
+                        "emailTemplate", Map.of(
+                                "subject", "New login for {APP_NAME}",
+                                "body", "<p>{ALERT_INFO} for {RECORD:email}</p>"
+                        )
+                )
+        ));
+        JsonNode user = request("POST", "/api/collections/alert_users/records", token, Map.of(
+                "email", "alert@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "verified", true
+        ));
+        String recordId = user.get("id").asText();
+
+        requestWithHeaders("POST", "/api/collections/alert_users/auth-with-password", null, Map.of(
+                "identity", "alert@example.com",
+                "password", "secret456"
+        ), Map.of("User-Agent", "Device-A"));
+        assertEquals(1, authOriginCount("alert_users", recordId));
+        assertEquals(0, authOutboxCount("authAlert", "alert@example.com"));
+
+        server.close();
+        start();
+        token = loginToken();
+        requestWithHeaders("POST", "/api/collections/alert_users/auth-with-password", null, Map.of(
+                "identity", "alert@example.com",
+                "password", "secret456"
+        ), Map.of("User-Agent", "Device-A"));
+        assertEquals(1, authOriginCount("alert_users", recordId));
+
+        try (FakeSmtpServer smtp = FakeSmtpServer.start()) {
+            request("PATCH", "/api/settings", token, Map.of(
+                    "meta", Map.of(
+                            "appName", "Alert App",
+                            "senderAddress", "noreply@example.com"
+                    ),
+                    "smtp", Map.of(
+                            "enabled", true,
+                            "host", "127.0.0.1",
+                            "port", smtp.port(),
+                            "tls", false
+                    )
+            ));
+            requestWithHeaders("POST", "/api/collections/alert_users/auth-with-password", null, Map.of(
+                    "identity", "alert@example.com",
+                    "password", "secret456"
+            ), Map.of("User-Agent", "Device-B"));
+            String message = smtp.message();
+            assertTrue(message.contains("Device-B"));
+            assertTrue(message.contains("alert@example.com"));
+        }
+        assertEquals(2, authOriginCount("alert_users", recordId));
+
+        request("PATCH", "/api/settings", token, Map.of("smtp", Map.of("enabled", false)));
+        for (String device : List.of("Device-C", "Device-D", "Device-E", "Device-F")) {
+            requestWithHeaders("POST", "/api/collections/alert_users/auth-with-password", null, Map.of(
+                    "identity", "alert@example.com",
+                    "password", "secret456"
+            ), Map.of("User-Agent", device));
+        }
+        assertEquals(5, authOriginCount("alert_users", recordId));
+
+        request("PATCH", "/api/collections/alert_users/records/" + recordId, token, Map.of(
+                "password", "updated456",
+                "passwordConfirm", "updated456"
+        ));
+        assertEquals(0, authOriginCount("alert_users", recordId));
+
+        requestWithHeaders("POST", "/api/collections/alert_users/auth-with-password", null, Map.of(
+                "identity", "alert@example.com",
+                "password", "updated456"
+        ), Map.of("User-Agent", "Device-G"));
+        assertEquals(1, authOriginCount("alert_users", recordId));
+    }
+
+    @Test
+    void authAndManageRulesControlLoginAndAuthRecordMutations() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuser = loginToken();
+
+        JsonNode managedCollection = request("POST", "/api/collections", superuser, Map.of(
+                "name", "managed_users",
+                "type", "auth",
+                "viewRule", "id = @request.auth.id || @request.auth.email = 'manager@example.com'",
+                "updateRule", "id = @request.auth.id || @request.auth.email = 'manager@example.com'",
+                "authRule", "verified = true",
+                "manageRule", "@request.auth.email = 'manager@example.com'",
+                "fields", List.of(Map.of("name", "displayName", "type", "text"))
+        ));
+        for (String tokenConfig : List.of(
+                "authToken",
+                "passwordResetToken",
+                "emailChangeToken",
+                "verificationToken",
+                "fileToken"
+        )) {
+            assertEquals("", managedCollection.path(tokenConfig).path("secret").asText());
+        }
+        JsonNode manager = request("POST", "/api/collections/managed_users/records", superuser, Map.of(
+                "email", "manager@example.com",
+                "password", "manager456",
+                "passwordConfirm", "manager456",
+                "verified", true,
+                "displayName", "Manager"
+        ));
+        JsonNode user = request("POST", "/api/collections/managed_users/records", superuser, Map.of(
+                "email", "user@example.com",
+                "password", "userpass456",
+                "passwordConfirm", "userpass456",
+                "verified", false,
+                "displayName", "User"
+        ));
+
+        server.close();
+        start();
+        superuser = loginToken();
+        JsonNode persisted = request("GET", "/api/collections/managed_users", superuser, null);
+        assertEquals("verified = true", persisted.get("authRule").asText());
+        assertEquals("@request.auth.email = 'manager@example.com'", persisted.get("manageRule").asText());
+
+        HttpResponse<String> invalidAuthRule = rawRequest(
+                "PATCH",
+                "/api/collections/managed_users",
+                superuser,
+                Map.of("authRule", "missing != ''")
+        );
+        assertFieldError(invalidAuthRule, 400, "Failed to update collection.", "authRule", "validation_invalid_value", "Unknown field `missing`.");
+        HttpResponse<String> emptyManageRule = rawRequest(
+                "PATCH",
+                "/api/collections/managed_users",
+                superuser,
+                Map.of("manageRule", "")
+        );
+        assertFieldError(emptyManageRule, 400, "Failed to update collection.", "manageRule", "validation_invalid_value", "Rule cannot be empty.");
+
+        HttpResponse<String> blockedLogin = rawRequest("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "user@example.com",
+                "password", "userpass456"
+        ));
+        assertEquals(403, blockedLogin.statusCode());
+        assertErrorEnvelope(blockedLogin, 403, "The request doesn't satisfy the collection requirements to authenticate.");
+
+        JsonNode managerAuth = request("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "manager@example.com",
+                "password", "manager456"
+        ));
+        String managerToken = managerAuth.get("token").asText();
+        server.close();
+        server = null;
+        start();
+        superuser = loginToken();
+        assertTrue(request(
+                "POST",
+                "/api/collections/managed_users/auth-refresh",
+                managerToken,
+                null
+        ).hasNonNull("token"));
+
+        request("PATCH", "/api/collections/managed_users", superuser, Map.of(
+                "updateRule", "id = @request.auth.id"
+        ));
+        HttpResponse<String> managerBlockedByUpdateRule = rawRequest(
+                "PATCH",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                managerToken,
+                Map.of("displayName", "Not allowed")
+        );
+        assertEquals(404, managerBlockedByUpdateRule.statusCode());
+
+        request("PATCH", "/api/collections/managed_users", superuser, Map.of(
+                "updateRule", "id = @request.auth.id || @request.auth.email = 'manager@example.com'"
+        ));
+        request("PATCH", "/api/collections/managed_users/records/" + user.get("id").asText(), managerToken, Map.of(
+                "email", "user-next@example.com",
+                "verified", true,
+                "password", "managed456",
+                "passwordConfirm", "managed456"
+        ));
+
+        JsonNode userAuth = request("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "user-next@example.com",
+                "password", "managed456"
+        ));
+        String userToken = userAuth.get("token").asText();
+
+        request("PATCH", "/api/collections/managed_users", superuser, Map.of("viewRule", ""));
+        assertEquals("user-next@example.com", request(
+                "GET",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                managerToken,
+                null
+        ).get("email").asText());
+        assertEquals("user-next@example.com", request(
+                "GET",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                userToken,
+                null
+        ).get("email").asText());
+        assertFalse(request(
+                "GET",
+                "/api/collections/managed_users/records/" + manager.get("id").asText(),
+                userToken,
+                null
+        ).has("email"));
+
+        HttpResponse<String> directEmailChange = rawRequest(
+                "PATCH",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                userToken,
+                Map.of("email", "forbidden@example.com")
+        );
+        assertEquals(400, directEmailChange.statusCode());
+        assertTrue(mapper.readTree(directEmailChange.body()).get("data").has("email"));
+
+        HttpResponse<String> missingOldPassword = rawRequest(
+                "PATCH",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                userToken,
+                Map.of("password", "selfchange456", "passwordConfirm", "selfchange456")
+        );
+        assertEquals(400, missingOldPassword.statusCode());
+        assertTrue(mapper.readTree(missingOldPassword.body()).get("data").has("oldPassword"));
+
+        request("PATCH", "/api/collections/managed_users/records/" + user.get("id").asText(), userToken, Map.of(
+                "password", "selfchange456",
+                "passwordConfirm", "selfchange456",
+                "oldPassword", "managed456"
+        ));
+        JsonNode changedAuth = request("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "user-next@example.com",
+                "password", "selfchange456"
+        ));
+
+        ObjectNode denyAllAuth = mapper.createObjectNode();
+        denyAllAuth.putNull("authRule");
+        request("PATCH", "/api/collections/managed_users", superuser, denyAllAuth);
+        assertTrue(request("GET", "/api/collections/managed_users", superuser, null).get("authRule").isNull());
+        assertEquals(401, rawRequest(
+                "POST",
+                "/api/collections/managed_users/auth-refresh",
+                changedAuth.get("token").asText(),
+                null
+        ).statusCode());
+        server.close();
+        server = null;
+        start();
+        assertTrue(request("GET", "/api/collections/managed_users", superuser, null).get("authRule").isNull());
+        assertEquals(401, rawRequest(
+                "POST",
+                "/api/collections/managed_users/auth-refresh",
+                changedAuth.get("token").asText(),
+                null
+        ).statusCode());
+        assertEquals(403, rawRequest("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "manager@example.com",
+                "password", "manager456"
+        )).statusCode());
+        request("PATCH", "/api/collections/managed_users", superuser, Map.of(
+                "options", Map.of("authRule", "")
+        ));
+        assertTrue(request("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "manager@example.com",
+                "password", "manager456"
+        )).hasNonNull("token"));
+        String freshUserToken = request("POST", "/api/collections/managed_users/auth-with-password", null, Map.of(
+                "identity", "user-next@example.com",
+                "password", "selfchange456"
+        )).get("token").asText();
+
+        HttpResponse<String> deleteWithoutRule = rawRequest(
+                "DELETE",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                freshUserToken,
+                null
+        );
+        assertEquals(403, deleteWithoutRule.statusCode());
+        request("PATCH", "/api/collections/managed_users", superuser, Map.of(
+                "deleteRule", "id = @request.auth.id"
+        ));
+        assertEquals(204, rawRequest(
+                "DELETE",
+                "/api/collections/managed_users/records/" + user.get("id").asText(),
+                freshUserToken,
+                null
+        ).statusCode());
+        assertFalse(manager.get("id").asText().isBlank());
+    }
+
+    @Test
+    void requestHeadersReachCrudAuthAndBatchRules() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuser = loginToken();
+        String headerRule = "@request.headers.x-rule-token = 'allow'"
+                + " && @request.headers.x-rule-token:isset = true";
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "header_rule_posts",
+                "listRule", headerRule,
+                "viewRule", headerRule,
+                "createRule", headerRule,
+                "updateRule", headerRule + " && @request.query.mode = 'edit'",
+                "deleteRule", headerRule + " && @request.query.mode = 'delete'",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+
+        assertEquals(400, rawRequest(
+                "POST",
+                "/api/collections/header_rule_posts/records",
+                null,
+                Map.of("title", "blocked")
+        ).statusCode());
+        JsonNode direct = requestWithHeaders(
+                "POST",
+                "/api/collections/header_rule_posts/records",
+                null,
+                Map.of("title", "direct"),
+                Map.of("X-RULE-TOKEN", "allow")
+        );
+        assertEquals(0, request(
+                "GET",
+                "/api/collections/header_rule_posts/records",
+                null,
+                null
+        ).get("totalItems").asInt());
+        assertEquals(1, requestWithHeaders(
+                "GET",
+                "/api/collections/header_rule_posts/records",
+                null,
+                null,
+                Map.of("X-Rule-Token", "allow")
+        ).get("totalItems").asInt());
+        assertEquals(404, rawRequest(
+                "PATCH",
+                "/api/collections/header_rule_posts/records/" + direct.get("id").asText(),
+                null,
+                Map.of("title", "wrong query"),
+                Map.of("x-rule-token", "allow")
+        ).statusCode());
+        assertEquals("updated", requestWithHeaders(
+                "PATCH",
+                "/api/collections/header_rule_posts/records/" + direct.get("id").asText() + "?mode=edit",
+                null,
+                Map.of("title", "updated"),
+                Map.of("x-rule-token", "allow")
+        ).get("title").asText());
+        assertEquals(204, rawRequest(
+                "DELETE",
+                "/api/collections/header_rule_posts/records/" + direct.get("id").asText() + "?mode=delete",
+                null,
+                null,
+                Map.of("X-Rule-Token", "allow")
+        ).statusCode());
+
+        JsonNode batch = request("POST", "/api/batch", null, Map.of(
+                "requests", List.of(
+                        Map.of(
+                                "method", "POST",
+                                "url", "/api/collections/header_rule_posts/records",
+                                "headers", Map.of("X-Rule-Token", "allow"),
+                                "body", Map.of("id", "header_batch", "title", "created")
+                        ),
+                        Map.of(
+                                "method", "PATCH",
+                                "url", "/api/collections/header_rule_posts/records/header_batch?mode=edit",
+                                "headers", Map.of("x-rule-token", "allow"),
+                                "body", Map.of("title", "batch updated")
+                        ),
+                        Map.of(
+                                "method", "DELETE",
+                                "url", "/api/collections/header_rule_posts/records/header_batch?mode=delete",
+                                "headers", Map.of("X-RULE-TOKEN", "allow")
+                        )
+                )
+        ));
+        assertEquals(3, batch.size());
+        assertEquals(204, batch.get(2).get("status").asInt());
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "header_auth_users",
+                "type", "auth",
+                "authRule", "@request.headers.x-auth-token = 'allow'"
+        ));
+        request("POST", "/api/collections/header_auth_users/records", superuser, Map.of(
+                "email", "header-auth@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "verified", true
+        ));
+        Map<String, String> credentials = Map.of(
+                "identity", "header-auth@example.com",
+                "password", "secret456"
+        );
+        assertEquals(403, rawRequest(
+                "POST",
+                "/api/collections/header_auth_users/auth-with-password",
+                null,
+                credentials
+        ).statusCode());
+        assertTrue(requestWithHeaders(
+                "POST",
+                "/api/collections/header_auth_users/auth-with-password",
+                null,
+                credentials,
+                Map.of("X-Auth-Token", "allow")
+        ).hasNonNull("token"));
+    }
+
+    @Test
+    void requestContextsMatchOfficialRuleExecutionModes() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuser = loginToken();
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "context_default_records",
+                "listRule", "",
+                "viewRule", "",
+                "createRule", "@request.context = 'default'",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+        assertEquals("default", request(
+                "POST",
+                "/api/collections/context_default_records/records",
+                null,
+                Map.of("title", "default")
+        ).get("title").asText());
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "context_batch_records",
+                "listRule", "",
+                "viewRule", "",
+                "createRule", "@request.context = 'batch'",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+        assertEquals(400, rawRequest(
+                "POST",
+                "/api/collections/context_batch_records/records",
+                null,
+                Map.of("title", "blocked default")
+        ).statusCode());
+        JsonNode batch = request("POST", "/api/batch", null, Map.of(
+                "requests", List.of(Map.of(
+                        "method", "POST",
+                        "url", "/api/collections/context_batch_records/records",
+                        "body", Map.of("title", "batch")
+                ))
+        ));
+        assertEquals("batch", batch.get(0).get("body").get("title").asText());
+
+        JsonNode targets = request("POST", "/api/collections", superuser, Map.of(
+                "name", "context_expand_targets",
+                "listRule", "@request.context = 'expand'",
+                "viewRule", "@request.context = 'expand'",
+                "fields", List.of(Map.of("name", "name", "type", "text", "required", true))
+        ));
+        JsonNode target = request("POST", "/api/collections/context_expand_targets/records", superuser, Map.of(
+                "name", "expanded"
+        ));
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "context_expand_sources",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(Map.of(
+                        "name", "target",
+                        "type", "relation",
+                        "collectionId", targets.get("id").asText()
+                ))
+        ));
+        JsonNode source = request("POST", "/api/collections/context_expand_sources/records", superuser, Map.of(
+                "target", target.get("id").asText()
+        ));
+        assertEquals(404, rawRequest(
+                "GET",
+                "/api/collections/context_expand_targets/records/" + target.get("id").asText(),
+                null,
+                null
+        ).statusCode());
+        JsonNode expanded = request(
+                "GET",
+                "/api/collections/context_expand_sources/records/" + source.get("id").asText() + "?expand=target",
+                null,
+                null
+        );
+        assertEquals("expanded", expanded.get("expand").get("target").get("name").asText());
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "context_auth_users",
+                "type", "auth",
+                "authRule", "@request.context = 'password'",
+                "otp", Map.of("enabled", true, "duration", 300, "length", 6)
+        ));
+        request("POST", "/api/collections/context_auth_users/records", superuser, Map.of(
+                "email", "context-auth@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456",
+                "verified", true
+        ));
+        assertTrue(request(
+                "POST",
+                "/api/collections/context_auth_users/auth-with-password",
+                null,
+                Map.of("identity", "context-auth@example.com", "password", "secret456")
+        ).hasNonNull("token"));
+
+        request("PATCH", "/api/collections/context_auth_users", superuser, Map.of(
+                "authRule", "@request.context = 'otp'"
+        ));
+        JsonNode otp = request(
+                "POST",
+                "/api/collections/context_auth_users/request-otp",
+                null,
+                Map.of("email", "context-auth@example.com")
+        );
+        String otpId = otp.get("otpId").asText();
+        assertTrue(request(
+                "POST",
+                "/api/collections/context_auth_users/auth-with-otp",
+                null,
+                Map.of(
+                        "otpId", otpId,
+                        "password", otpRequestPassword("context-auth@example.com", otpId)
+                )
+        ).hasNonNull("token"));
     }
 
     @Test
@@ -840,6 +4027,38 @@ class LocalPocketBaseServerTest {
         HttpResponse<String> run = rawRequest("POST", "/api/crons/__pbAutoBackup__", token, null);
         assertEquals(204, run.statusCode());
         assertTrue(waitForAutoBackupCount(1));
+    }
+
+    @Test
+    void serverCloseWaitsForAcceptedAutoBackupAndPublishesCompleteZip() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("PATCH", "/api/settings", token, Map.of(
+                "backups", Map.of(
+                        "cron", "* * * * *",
+                        "cronMaxKeep", 1
+                )
+        ));
+        assertEquals(204, rawRequest("POST", "/api/crons/__pbAutoBackup__", token, null).statusCode());
+
+        server.close();
+        server = null;
+
+        Path backup;
+        try (var paths = Files.list(tempDir.resolve("backups"))) {
+            backup = paths
+                    .filter(path -> path.getFileName().toString().startsWith("@auto_pb_backup_"))
+                    .findFirst()
+                    .orElseThrow();
+        }
+        try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(backup))) {
+            assertNotNull(zip.getNextEntry());
+        }
+        try (var paths = Files.list(tempDir.resolve("backups"))) {
+            assertFalse(paths.anyMatch(path -> path.getFileName().toString().endsWith(".tmp")));
+        }
     }
 
     @Test
@@ -984,8 +4203,9 @@ class LocalPocketBaseServerTest {
                         )
                 )
         ));
-        assertEquals(4, batch.get("responses").size());
-        assertEquals(204, batch.get("responses").get(3).get("status").asInt());
+        assertTrue(batch.isArray());
+        assertEquals(4, batch.size());
+        assertEquals(204, batch.get(3).get("status").asInt());
 
         JsonNode page = request("GET", "/api/collections/batch_posts/records", null, null);
         assertEquals(1, page.get("totalItems").asInt());
@@ -1019,6 +4239,42 @@ class LocalPocketBaseServerTest {
         JsonNode afterRollback = request("GET", "/api/collections/batch_posts/records", null, null);
         assertEquals(1, afterRollback.get("totalItems").asInt());
         assertEquals("batch_one", afterRollback.get("items").get(0).get("id").asText());
+
+        JsonNode authCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "batch_auth_users",
+                "type", "auth"
+        ));
+        JsonNode authRecord = request("POST", "/api/collections/batch_auth_users/records", token, Map.of(
+                "email", "batch-auth@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        HttpResponse<String> failedSystemBatch = rawRequest("POST", "/api/batch", token, Map.of(
+                "requests", List.of(
+                        Map.of(
+                                "method", "POST",
+                                "url", "/api/collections/_mfas/records",
+                                "body", Map.of(
+                                        "id", "rollback_mfa",
+                                        "collectionRef", authCollection.get("id").asText(),
+                                        "recordRef", authRecord.get("id").asText(),
+                                        "method", "password"
+                                )
+                        ),
+                        Map.of(
+                                "method", "PATCH",
+                                "url", "/api/collections/batch_posts/records/missing",
+                                "body", Map.of("title", "fail")
+                        )
+                )
+        ));
+        assertEquals(400, failedSystemBatch.statusCode());
+        assertEquals(404, rawRequest(
+                "GET",
+                "/api/collections/_mfas/records/rollback_mfa",
+                token,
+                null
+        ).statusCode());
     }
 
     @Test
@@ -1117,8 +4373,9 @@ class LocalPocketBaseServerTest {
                 )
         ));
 
-        JsonNode body = batch.get("responses").get(0).get("body");
-        assertEquals(200, batch.get("responses").get(0).get("status").asInt());
+        assertTrue(batch.isArray());
+        JsonNode body = batch.get(0).get("body");
+        assertEquals(200, batch.get(0).get("status").asInt());
         assertEquals("batch_asset_one", body.get("id").asText());
         String filename = body.get("attachment").asText();
         assertTrue(filename.startsWith("batch_upload_"));
@@ -1400,6 +4657,7 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/users/records", token, Map.of(
                 "email", "demo@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Demo"
         ));
 
@@ -1425,7 +4683,8 @@ class LocalPocketBaseServerTest {
 
         HttpResponse<String> duplicate = rawRequest("POST", "/api/collections/users/records", token, Map.of(
                 "email", "demo@example.com",
-                "password", "another-secret"
+                "password", "another-secret",
+                "passwordConfirm", "another-secret"
         ));
         assertEquals(400, duplicate.statusCode());
         assertFieldError(duplicate, 400, "Failed to create record.", "email", "validation_not_unique", "Value must be unique.");
@@ -1458,6 +4717,7 @@ class LocalPocketBaseServerTest {
         JsonNode user = request("POST", "/api/collections/otp_users/records", token, Map.of(
                 "email", "otp@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", false
         ));
 
@@ -1533,9 +4793,75 @@ class LocalPocketBaseServerTest {
         bootstrapSuperuser();
         String token = loginToken();
 
+        HttpResponse<String> missingCollection = rawRequest(
+                "GET",
+                "/api/collections/missing_auth_methods/auth-methods",
+                null,
+                null
+        );
+        assertEquals(404, missingCollection.statusCode());
+        assertErrorEnvelope(missingCollection, 404, "Collection not found.");
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "auth_methods_base",
+                "type", "base",
+                "fields", List.of()
+        ));
+        HttpResponse<String> baseCollection = rawRequest(
+                "GET",
+                "/api/collections/auth_methods_base/auth-methods",
+                null,
+                null
+        );
+        assertEquals(404, baseCollection.statusCode());
+        assertErrorEnvelope(baseCollection, 404, "The requested resource wasn't found.");
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "auth_methods_disabled",
+                "type", "auth",
+                "passwordAuth", Map.of(
+                        "enabled", false,
+                        "identityFields", List.of("email")
+                ),
+                "otp", Map.of(
+                        "enabled", false,
+                        "duration", 420,
+                        "length", 8
+                ),
+                "mfa", Map.of(
+                        "enabled", false,
+                        "duration", 900
+                ),
+                "oauth2", Map.of(
+                        "enabled", false,
+                        "providers", List.of(Map.of("name", "github"))
+                )
+        ));
+        JsonNode disabledMethods = request(
+                "GET",
+                "/api/collections/auth_methods_disabled/auth-methods",
+                null,
+                null
+        );
+        assertFalse(disabledMethods.get("password").get("enabled").asBoolean());
+        assertTrue(disabledMethods.get("password").get("identityFields").isArray());
+        assertEquals(0, disabledMethods.get("password").get("identityFields").size());
+        assertFalse(disabledMethods.get("emailPassword").asBoolean());
+        assertFalse(disabledMethods.get("usernamePassword").asBoolean());
+        assertFalse(disabledMethods.get("otp").get("enabled").asBoolean());
+        assertEquals(0, disabledMethods.get("otp").get("duration").asInt());
+        assertFalse(disabledMethods.get("otp").has("length"));
+        assertFalse(disabledMethods.get("mfa").get("enabled").asBoolean());
+        assertEquals(0, disabledMethods.get("mfa").get("duration").asInt());
+        assertFalse(disabledMethods.get("oauth2").get("enabled").asBoolean());
+        assertEquals(0, disabledMethods.get("oauth2").get("providers").size());
+        assertEquals(0, disabledMethods.get("authProviders").size());
+
         request("POST", "/api/collections", token, Map.of(
                 "name", "auth_config_users",
                 "type", "auth",
+                "fields", List.of(Map.of("name", "username", "type", "text")),
+                "indexes", List.of("CREATE UNIQUE INDEX idx_auth_config_username ON auth_config_users (username)"),
                 "passwordAuth", Map.of(
                         "enabled", true,
                         "identityFields", List.of("email", "username")
@@ -1552,8 +4878,16 @@ class LocalPocketBaseServerTest {
                 "oauth2", Map.of(
                         "enabled", true,
                         "providers", List.of(
-                                Map.of("name", "github"),
-                                Map.of("name", "google")
+                                Map.of(
+                                        "name", "github",
+                                        "clientId", "github-client",
+                                        "clientSecret", "github-secret"
+                                ),
+                                Map.of(
+                                        "name", "google",
+                                        "clientId", "google-client",
+                                        "clientSecret", "google-secret"
+                                )
                         )
                 )
         ));
@@ -1565,19 +4899,461 @@ class LocalPocketBaseServerTest {
         assertTrue(methods.get("emailPassword").asBoolean());
         assertTrue(methods.get("otp").get("enabled").asBoolean());
         assertEquals(420, methods.get("otp").get("duration").asInt());
+        assertFalse(methods.get("otp").has("length"));
         assertTrue(methods.get("mfa").get("enabled").asBoolean());
         assertEquals(900, methods.get("mfa").get("duration").asInt());
         assertTrue(methods.get("oauth2").get("enabled").asBoolean());
         assertEquals(2, methods.get("oauth2").get("providers").size());
-        assertEquals("github", methods.get("oauth2").get("providers").get(0).get("name").asText());
-        assertTrue(methods.get("oauth2").get("providers").get(0).has("displayName"));
-        assertTrue(methods.get("oauth2").get("providers").get(0).has("authURL"));
+        JsonNode oauthProvider = methods.get("oauth2").get("providers").get(0);
+        assertEquals("github", oauthProvider.get("name").asText());
+        assertEquals("GitHub", oauthProvider.get("displayName").asText());
+        assertTrue(oauthProvider.get("logo").asText().startsWith("<svg"));
+        assertFalse(oauthProvider.get("state").asText().isBlank());
+        assertTrue(oauthProvider.get("authURL").asText().startsWith("https://github.com/login/oauth/authorize?"));
+        assertTrue(oauthProvider.get("authURL").asText().contains("client_id=github-client"));
+        assertTrue(oauthProvider.get("authURL").asText().contains("scope=read%3Auser%20user%3Aemail"));
+        assertTrue(oauthProvider.get("authURL").asText().endsWith("&redirect_uri="));
+        assertEquals(oauthProvider.get("authURL").asText(), oauthProvider.get("authUrl").asText());
+        assertFalse(oauthProvider.get("codeVerifier").asText().isBlank());
+        assertFalse(oauthProvider.get("codeChallenge").asText().isBlank());
+        assertEquals("S256", oauthProvider.get("codeChallengeMethod").asText());
         assertEquals(2, methods.get("authProviders").size());
+        JsonNode legacyProvider = methods.get("authProviders").get(0);
+        assertEquals(oauthProvider.get("name").asText(), legacyProvider.get("name").asText());
+        assertEquals("", legacyProvider.get("logo").asText());
+        assertEquals(oauthProvider.get("state").asText(), legacyProvider.get("state").asText());
+        assertEquals(oauthProvider.get("authURL").asText(), legacyProvider.get("authURL").asText());
 
         JsonNode collections = request("GET", "/api/collections?filter=" + URLEncoder.encode("name = 'auth_config_users'", StandardCharsets.UTF_8), token, null);
         JsonNode listed = collections.get("items").get(0);
         assertTrue(listed.get("oauth2").get("enabled").asBoolean());
         assertEquals("github", listed.get("oauth2").get("providers").get(0).get("name").asText());
+    }
+
+    @Test
+    void authCollectionOptionsValidateIdentityFieldsAndMfaMethods() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        HttpResponse<String> missingIdentity = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "missing_identity_users",
+                "type", "auth",
+                "passwordAuth", Map.of("enabled", true, "identityFields", List.of("missing"))
+        ));
+        assertEquals(400, missingIdentity.statusCode());
+        assertEquals(
+                "validation_missing_field",
+                mapper.readTree(missingIdentity.body())
+                        .get("data").get("passwordAuth").get("identityFields").get("code").asText()
+        );
+
+        HttpResponse<String> nonUniqueIdentity = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "nonunique_identity_users",
+                "type", "auth",
+                "fields", List.of(Map.of("name", "handle", "type", "text")),
+                "passwordAuth", Map.of("enabled", true, "identityFields", List.of("handle"))
+        ));
+        assertEquals(400, nonUniqueIdentity.statusCode());
+        assertEquals(
+                "validation_missing_unique_constraint",
+                mapper.readTree(nonUniqueIdentity.body())
+                        .get("data").get("passwordAuth").get("identityFields").get("code").asText()
+        );
+
+        HttpResponse<String> emptyIdentity = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "empty_identity_users",
+                "type", "auth",
+                "passwordAuth", Map.of("enabled", true, "identityFields", List.of())
+        ));
+        assertEquals(400, emptyIdentity.statusCode());
+        assertEquals(
+                "validation_required",
+                mapper.readTree(emptyIdentity.body())
+                        .get("data").get("passwordAuth").get("identityFields").get("code").asText()
+        );
+
+        HttpResponse<String> insufficientMfa = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "insufficient_mfa_users",
+                "type", "auth",
+                "mfa", Map.of("enabled", true, "duration", 600)
+        ));
+        assertEquals(400, insufficientMfa.statusCode());
+        assertEquals(
+                "validation_mfa_not_enough_auths",
+                mapper.readTree(insufficientMfa.body()).get("data").get("mfa").get("enabled").get("code").asText()
+        );
+
+        HttpResponse<String> invalidOtp = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_otp_options_users",
+                "type", "auth",
+                "otp", Map.of(
+                        "enabled", true,
+                        "duration", 9,
+                        "length", 3,
+                        "emailTemplate", Map.of("subject", "", "body", "")
+                )
+        ));
+        assertEquals(400, invalidOtp.statusCode());
+        JsonNode invalidOtpErrors = mapper.readTree(invalidOtp.body()).get("data").get("otp");
+        assertEquals("validation_min_greater_equal_than_required", invalidOtpErrors.get("duration").get("code").asText());
+        assertEquals(10, invalidOtpErrors.get("duration").get("params").get("threshold").asInt());
+        assertEquals("validation_min_greater_equal_than_required", invalidOtpErrors.get("length").get("code").asText());
+        assertEquals(4, invalidOtpErrors.get("length").get("params").get("threshold").asInt());
+        assertEquals("validation_required", invalidOtpErrors.get("emailTemplate").get("subject").get("code").asText());
+        assertEquals("validation_required", invalidOtpErrors.get("emailTemplate").get("body").get("code").asText());
+
+        JsonNode disabledOutOfRangeOtp = request("POST", "/api/collections", token, Map.of(
+                "name", "disabled_out_of_range_otp_users",
+                "type", "auth",
+                "otp", Map.of("enabled", false, "duration", 9, "length", 3)
+        ));
+        assertFalse(disabledOutOfRangeOtp.get("otp").get("enabled").asBoolean());
+        assertEquals(9, disabledOutOfRangeOtp.get("otp").get("duration").asInt());
+        assertEquals(3, disabledOutOfRangeOtp.get("otp").get("length").asInt());
+
+        HttpResponse<String> invalidOtpEnableUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/disabled_out_of_range_otp_users",
+                token,
+                Map.of("otp", Map.of("enabled", true))
+        );
+        assertEquals(400, invalidOtpEnableUpdate.statusCode());
+        JsonNode invalidOtpEnableErrors = mapper.readTree(invalidOtpEnableUpdate.body()).get("data").get("otp");
+        assertEquals("validation_min_greater_equal_than_required", invalidOtpEnableErrors.get("duration").get("code").asText());
+        assertEquals("validation_min_greater_equal_than_required", invalidOtpEnableErrors.get("length").get("code").asText());
+        JsonNode otpAfterRejectedUpdate = request("GET", "/api/collections/disabled_out_of_range_otp_users", token, null);
+        assertFalse(otpAfterRejectedUpdate.get("otp").get("enabled").asBoolean());
+        assertEquals(9, otpAfterRejectedUpdate.get("otp").get("duration").asInt());
+        assertEquals(3, otpAfterRejectedUpdate.get("otp").get("length").asInt());
+
+        HttpResponse<String> invalidMfaDuration = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_mfa_duration_users",
+                "type", "auth",
+                "otp", Map.of("enabled", true, "duration", 300, "length", 6),
+                "mfa", Map.of("enabled", true, "duration", 86_401)
+        ));
+        assertEquals(400, invalidMfaDuration.statusCode());
+        JsonNode invalidMfaDurationError = mapper.readTree(invalidMfaDuration.body())
+                .get("data").get("mfa").get("duration");
+        assertEquals("validation_max_less_equal_than_required", invalidMfaDurationError.get("code").asText());
+        assertEquals(86_400, invalidMfaDurationError.get("params").get("threshold").asInt());
+
+        HttpResponse<String> invalidMfaRule = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_mfa_rule_users",
+                "type", "auth",
+                "otp", Map.of("enabled", true, "duration", 300, "length", 6),
+                "mfa", Map.of("enabled", true, "duration", 600, "rule", "(")
+        ));
+        assertEquals(400, invalidMfaRule.statusCode());
+        assertEquals(
+                "validation_invalid_value",
+                mapper.readTree(invalidMfaRule.body()).get("data").get("mfa").get("rule").get("code").asText()
+        );
+
+        Map<String, String> blankTemplate = Map.of("subject", "", "body", "");
+        HttpResponse<String> invalidMailTemplates = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_mail_templates_users",
+                "type", "auth",
+                "otp", Map.of("enabled", false, "emailTemplate", blankTemplate),
+                "authAlert", Map.of("enabled", false, "emailTemplate", blankTemplate),
+                "verificationTemplate", blankTemplate,
+                "resetPasswordTemplate", blankTemplate,
+                "confirmEmailChangeTemplate", blankTemplate
+        ));
+        assertEquals(400, invalidMailTemplates.statusCode());
+        JsonNode invalidMailTemplateErrors = mapper.readTree(invalidMailTemplates.body()).get("data");
+        assertEquals("validation_required", invalidMailTemplateErrors.get("otp").get("emailTemplate").get("subject").get("code").asText());
+        assertEquals("validation_required", invalidMailTemplateErrors.get("authAlert").get("emailTemplate").get("body").get("code").asText());
+        assertEquals("validation_required", invalidMailTemplateErrors.get("verificationTemplate").get("subject").get("code").asText());
+        assertEquals("validation_required", invalidMailTemplateErrors.get("resetPasswordTemplate").get("body").get("code").asText());
+        assertEquals("validation_required", invalidMailTemplateErrors.get("confirmEmailChangeTemplate").get("subject").get("code").asText());
+
+        String validTokenSecret = "s".repeat(30);
+        HttpResponse<String> invalidTokenConfigs = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_token_config_users",
+                "type", "auth",
+                "authToken", Map.of("secret", "a".repeat(29), "duration", 9),
+                "passwordResetToken", Map.of("secret", validTokenSecret, "duration", 94_670_857),
+                "emailChangeToken", Map.of("secret", "e".repeat(256), "duration", 10),
+                "verificationToken", Map.of("secret", validTokenSecret, "duration", 0),
+                "fileToken", Map.of("secret", validTokenSecret, "duration", 9)
+        ));
+        assertEquals(400, invalidTokenConfigs.statusCode());
+        JsonNode invalidTokenErrors = mapper.readTree(invalidTokenConfigs.body()).get("data");
+        assertEquals("validation_length_out_of_range", invalidTokenErrors.get("authToken").get("secret").get("code").asText());
+        assertEquals(30, invalidTokenErrors.get("authToken").get("secret").get("params").get("min").asInt());
+        assertEquals(255, invalidTokenErrors.get("authToken").get("secret").get("params").get("max").asInt());
+        assertEquals("validation_min_greater_equal_than_required", invalidTokenErrors.get("authToken").get("duration").get("code").asText());
+        assertEquals("validation_max_less_equal_than_required", invalidTokenErrors.get("passwordResetToken").get("duration").get("code").asText());
+        assertEquals(94_670_856, invalidTokenErrors.get("passwordResetToken").get("duration").get("params").get("threshold").asInt());
+        assertEquals("validation_length_out_of_range", invalidTokenErrors.get("emailChangeToken").get("secret").get("code").asText());
+        assertEquals("validation_required", invalidTokenErrors.get("verificationToken").get("duration").get("code").asText());
+        assertEquals("validation_min_greater_equal_than_required", invalidTokenErrors.get("fileToken").get("duration").get("code").asText());
+
+        JsonNode tokenValidationCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "token_config_validation_users",
+                "type", "auth"
+        ));
+        HttpResponse<String> invalidTokenUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/token_config_validation_users",
+                token,
+                Map.of("authToken", Map.of("duration", 9))
+        );
+        assertEquals(400, invalidTokenUpdate.statusCode());
+        assertEquals(
+                "validation_min_greater_equal_than_required",
+                mapper.readTree(invalidTokenUpdate.body()).get("data").get("authToken")
+                        .get("duration").get("code").asText()
+        );
+        JsonNode tokenAfterRejectedUpdate = request("GET", "/api/collections/token_config_validation_users", token, null);
+        assertEquals(432_000, tokenAfterRejectedUpdate.get("authToken").get("duration").asInt());
+
+        HttpResponse<String> invalidTokenImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", tokenValidationCollection.get("id").asText(),
+                        "name", "token_config_validation_users",
+                        "type", "auth",
+                        "fields", tokenValidationCollection.get("fields"),
+                        "indexes", tokenValidationCollection.get("indexes"),
+                        "passwordAuth", tokenValidationCollection.get("passwordAuth"),
+                        "fileToken", Map.of("secret", "f".repeat(29), "duration", 180)
+                ))
+        ));
+        assertEquals(400, invalidTokenImport.statusCode());
+        assertEquals(
+                "validation_length_out_of_range",
+                mapper.readTree(invalidTokenImport.body()).get("data").get("fileToken")
+                        .get("secret").get("code").asText()
+        );
+        JsonNode tokenAfterRejectedImport = request("GET", "/api/collections/token_config_validation_users", token, null);
+        assertEquals(180, tokenAfterRejectedImport.get("fileToken").get("duration").asInt());
+
+        HttpResponse<String> invalidOtpImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", disabledOutOfRangeOtp.get("id").asText(),
+                        "name", "disabled_out_of_range_otp_users",
+                        "type", "auth",
+                        "fields", disabledOutOfRangeOtp.get("fields"),
+                        "indexes", disabledOutOfRangeOtp.get("indexes"),
+                        "passwordAuth", disabledOutOfRangeOtp.get("passwordAuth"),
+                        "otp", Map.of(
+                                "enabled", true,
+                                "duration", 300,
+                                "length", 6,
+                                "emailTemplate", blankTemplate
+                        )
+                ))
+        ));
+        assertEquals(400, invalidOtpImport.statusCode());
+        assertEquals(
+                "validation_required",
+                mapper.readTree(invalidOtpImport.body()).get("data").get("otp")
+                        .get("emailTemplate").get("body").get("code").asText()
+        );
+        JsonNode otpAfterRejectedImport = request("GET", "/api/collections/disabled_out_of_range_otp_users", token, null);
+        assertFalse(otpAfterRejectedImport.get("otp").get("enabled").asBoolean());
+        assertEquals(9, otpAfterRejectedImport.get("otp").get("duration").asInt());
+        assertEquals(3, otpAfterRejectedImport.get("otp").get("length").asInt());
+
+        JsonNode disabledInvalidOauth = request("POST", "/api/collections", token, Map.of(
+                "name", "disabled_invalid_oauth_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", false,
+                        "providers", List.of(Map.of(
+                                "name", "missing",
+                                "authURL", "!invalid!"
+                        ))
+                )
+        ));
+        assertEquals("missing", disabledInvalidOauth.get("oauth2").get("providers").get(0).get("name").asText());
+
+        HttpResponse<String> missingOauthCredentials = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "missing_oauth_credentials_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of("name", "github"))
+                )
+        ));
+        assertEquals(400, missingOauthCredentials.statusCode());
+        JsonNode missingOauthCredentialErrors = mapper.readTree(missingOauthCredentials.body())
+                .get("data").get("oauth2").get("providers").get("0");
+        assertEquals("validation_required", missingOauthCredentialErrors.get("clientId").get("code").asText());
+        assertEquals("validation_required", missingOauthCredentialErrors.get("clientSecret").get("code").asText());
+
+        HttpResponse<String> missingOauthProvider = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "missing_oauth_provider_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of(
+                                "name", "missing",
+                                "clientId", "client-id",
+                                "clientSecret", "client-secret"
+                        ))
+                )
+        ));
+        assertEquals(400, missingOauthProvider.statusCode());
+        assertEquals(
+                "validation_missing_provider",
+                mapper.readTree(missingOauthProvider.body()).get("data").get("oauth2")
+                        .get("providers").get("0").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> duplicateOauthProvider = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "duplicate_oauth_provider_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(
+                                Map.of("name", "github", "clientId", "first", "clientSecret", "first-secret"),
+                                Map.of("name", "github", "clientId", "second", "clientSecret", "second-secret")
+                        )
+                )
+        ));
+        assertEquals(400, duplicateOauthProvider.statusCode());
+        assertEquals(
+                "validation_duplicated_provider",
+                mapper.readTree(duplicateOauthProvider.body()).get("data").get("oauth2")
+                        .get("providers").get("1").get("name").get("code").asText()
+        );
+
+        HttpResponse<String> invalidOauthUrls = rawRequest("POST", "/api/collections", token, Map.of(
+                "name", "invalid_oauth_urls_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of(
+                                "name", "github",
+                                "clientId", "client-id",
+                                "clientSecret", "client-secret",
+                                "authURL", "!invalid!",
+                                "tokenURL", "relative/path",
+                                "userInfoURL", "https:///missing-host"
+                        ))
+                )
+        ));
+        assertEquals(400, invalidOauthUrls.statusCode());
+        JsonNode invalidOauthUrlErrors = mapper.readTree(invalidOauthUrls.body())
+                .get("data").get("oauth2").get("providers").get("0");
+        assertEquals("validation_is_url", invalidOauthUrlErrors.get("authURL").get("code").asText());
+        assertEquals("validation_is_url", invalidOauthUrlErrors.get("tokenURL").get("code").asText());
+        assertEquals("validation_is_url", invalidOauthUrlErrors.get("userInfoURL").get("code").asText());
+
+        JsonNode oauthValidationCollection = request("POST", "/api/collections", token, Map.of(
+                "name", "oauth_validation_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of(
+                                "name", "github",
+                                "clientId", "client-id",
+                                "clientSecret", "client-secret"
+                        ))
+                )
+        ));
+        HttpResponse<String> invalidOauthUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/oauth_validation_users",
+                token,
+                Map.of("oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(
+                                Map.of("name", "github", "clientId", "first", "clientSecret", "first-secret"),
+                                Map.of("name", "github", "clientId", "second", "clientSecret", "second-secret")
+                        )
+                ))
+        );
+        assertEquals(400, invalidOauthUpdate.statusCode());
+        assertEquals(
+                "validation_duplicated_provider",
+                mapper.readTree(invalidOauthUpdate.body()).get("data").get("oauth2")
+                        .get("providers").get("1").get("name").get("code").asText()
+        );
+        JsonNode oauthAfterRejectedUpdate = request("GET", "/api/collections/oauth_validation_users", token, null);
+        assertEquals(1, oauthAfterRejectedUpdate.get("oauth2").get("providers").size());
+        assertEquals("github", oauthAfterRejectedUpdate.get("oauth2").get("providers").get(0).get("name").asText());
+
+        JsonNode customIdentity = request("POST", "/api/collections", token, Map.of(
+                "name", "custom_identity_users",
+                "type", "auth",
+                "fields", List.of(Map.of("name", "handle", "type", "text", "required", true)),
+                "indexes", List.of("CREATE UNIQUE INDEX idx_custom_identity_handle ON custom_identity_users (handle)"),
+                "passwordAuth", Map.of("enabled", true, "identityFields", List.of("handle"))
+        ));
+        assertEquals("handle", customIdentity.get("passwordAuth").get("identityFields").get(0).asText());
+
+        JsonNode record = request("POST", "/api/collections/custom_identity_users/records", token, Map.of(
+                "email", "custom-identity@example.com",
+                "handle", "custom-login",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+        JsonNode auth = request("POST", "/api/collections/custom_identity_users/auth-with-password", null, Map.of(
+                "identity", "custom-login",
+                "password", "secret456"
+        ));
+        assertEquals(record.get("id").asText(), auth.get("record").get("id").asText());
+
+        HttpResponse<String> invalidUpdate = rawRequest(
+                "PATCH",
+                "/api/collections/custom_identity_users",
+                token,
+                Map.of("passwordAuth", Map.of("enabled", true, "identityFields", List.of("missing")))
+        );
+        assertEquals(400, invalidUpdate.statusCode());
+        assertEquals(
+                "validation_missing_field",
+                mapper.readTree(invalidUpdate.body())
+                        .get("data").get("passwordAuth").get("identityFields").get("code").asText()
+        );
+
+        HttpResponse<String> invalidImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", customIdentity.get("id").asText(),
+                        "name", "custom_identity_users",
+                        "type", "auth",
+                        "fields", customIdentity.get("fields"),
+                        "indexes", customIdentity.get("indexes"),
+                        "passwordAuth", Map.of("enabled", true, "identityFields", List.of("missing"))
+                ))
+        ));
+        assertEquals(400, invalidImport.statusCode());
+        assertEquals(
+                "validation_missing_field",
+                mapper.readTree(invalidImport.body())
+                        .get("data").get("passwordAuth").get("identityFields").get("code").asText()
+        );
+
+        HttpResponse<String> invalidOauthImport = rawRequest("PUT", "/api/collections/import", token, Map.of(
+                "collections", List.of(Map.of(
+                        "id", oauthValidationCollection.get("id").asText(),
+                        "name", "oauth_validation_users",
+                        "type", "auth",
+                        "fields", oauthValidationCollection.get("fields"),
+                        "indexes", oauthValidationCollection.get("indexes"),
+                        "passwordAuth", oauthValidationCollection.get("passwordAuth"),
+                        "oauth2", Map.of(
+                                "enabled", true,
+                                "providers", List.of(Map.of(
+                                        "name", "missing",
+                                        "clientId", "client-id",
+                                        "clientSecret", "client-secret"
+                                ))
+                        )
+                ))
+        ));
+        assertEquals(400, invalidOauthImport.statusCode());
+        assertEquals(
+                "validation_missing_provider",
+                mapper.readTree(invalidOauthImport.body()).get("data").get("oauth2")
+                        .get("providers").get("0").get("name").get("code").asText()
+        );
+        JsonNode oauthAfterRejectedImport = request("GET", "/api/collections/oauth_validation_users", token, null);
+        assertEquals("github", oauthAfterRejectedImport.get("oauth2").get("providers").get(0).get("name").asText());
     }
 
     @Test
@@ -1598,6 +5374,7 @@ class LocalPocketBaseServerTest {
         JsonNode user = request("POST", "/api/collections/token_users/records", superuserToken, Map.of(
                 "email", "token-user@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", false
         ));
 
@@ -1643,17 +5420,24 @@ class LocalPocketBaseServerTest {
         start();
         bootstrapSuperuser();
         String superuserToken = loginToken();
+        String authSecretA = "a".repeat(30);
+        String authSecretB = "b".repeat(30);
+        String resetSecretA = "r".repeat(30);
+        String resetSecretB = "s".repeat(30);
+        String fileSecretA = "f".repeat(30);
+        String fileSecretB = "g".repeat(30);
 
         request("POST", "/api/collections", superuserToken, Map.of(
                 "name", "secret_users",
                 "type", "auth",
-                "authToken", Map.of("duration", 61, "secret", "auth-a"),
-                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
-                "fileToken", Map.of("duration", 181, "secret", "file-a")
+                "authToken", Map.of("duration", 61, "secret", authSecretA),
+                "passwordResetToken", Map.of("duration", 91, "secret", resetSecretA),
+                "fileToken", Map.of("duration", 181, "secret", fileSecretA)
         ));
         JsonNode user = request("POST", "/api/collections/secret_users/records", superuserToken, Map.of(
                 "email", "secret-user@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", true
         ));
 
@@ -1664,13 +5448,20 @@ class LocalPocketBaseServerTest {
         String authToken = auth.get("token").asText();
 
         request("PATCH", "/api/collections/secret_users", superuserToken, Map.of(
+                "authToken", Map.of("duration", 61, "secret", "")
+        ));
+        assertEquals(
+                200,
+                rawRequest("POST", "/api/collections/secret_users/auth-refresh", authToken, null).statusCode()
+        );
+
+        request("PATCH", "/api/collections/secret_users", superuserToken, Map.of(
                 "id", auth.get("record").get("collectionId").asText(),
                 "name", "secret_users",
                 "type", "auth",
-                "fields", List.of(),
-                "authToken", Map.of("duration", 61, "secret", "auth-b"),
-                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
-                "fileToken", Map.of("duration", 181, "secret", "file-a")
+                "authToken", Map.of("duration", 61, "secret", authSecretB),
+                "passwordResetToken", Map.of("duration", 91, "secret", resetSecretA),
+                "fileToken", Map.of("duration", 181, "secret", fileSecretA)
         ));
         assertEquals(401, rawRequest("POST", "/api/collections/secret_users/auth-refresh", authToken, null).statusCode());
 
@@ -1704,12 +5495,11 @@ class LocalPocketBaseServerTest {
                 "id", freshAuth.get("record").get("collectionId").asText(),
                 "name", "secret_users",
                 "type", "auth",
-                "fields", List.of(),
-                "authToken", Map.of("duration", 61, "secret", "auth-b"),
-                "passwordResetToken", Map.of("duration", 91, "secret", "reset-a"),
-                "fileToken", Map.of("duration", 181, "secret", "file-b")
+                "authToken", Map.of("duration", 61, "secret", authSecretB),
+                "passwordResetToken", Map.of("duration", 91, "secret", resetSecretA),
+                "fileToken", Map.of("duration", 181, "secret", fileSecretB)
         ));
-        assertEquals(403, rawRequest("GET", filePath + "?token=" + fileToken.get("token").asText(), null, null).statusCode());
+        assertEquals(404, rawRequest("GET", filePath + "?token=" + fileToken.get("token").asText(), null, null).statusCode());
 
         request("POST", "/api/collections/secret_users/request-password-reset", null, Map.of(
                 "email", "secret-user@example.com"
@@ -1720,10 +5510,9 @@ class LocalPocketBaseServerTest {
                 "id", freshAuth.get("record").get("collectionId").asText(),
                 "name", "secret_users",
                 "type", "auth",
-                "fields", List.of(),
-                "authToken", Map.of("duration", 61, "secret", "auth-b"),
-                "passwordResetToken", Map.of("duration", 91, "secret", "reset-b"),
-                "fileToken", Map.of("duration", 181, "secret", "file-b")
+                "authToken", Map.of("duration", 61, "secret", authSecretB),
+                "passwordResetToken", Map.of("duration", 91, "secret", resetSecretB),
+                "fileToken", Map.of("duration", 181, "secret", fileSecretB)
         ));
         HttpResponse<String> staleResetToken = rawRequest("POST", "/api/collections/secret_users/confirm-password-reset", null, Map.of(
                 "token", resetToken,
@@ -1743,8 +5532,8 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections", superuserToken, Map.of(
                 "name", "timed_users",
                 "type", "auth",
-                "authToken", Map.of("duration", 1),
-                "passwordResetToken", Map.of("duration", 1)
+                "authToken", Map.of("duration", 10),
+                "passwordResetToken", Map.of("duration", 10)
         ));
         request("POST", "/api/collections", superuserToken, Map.of(
                 "name", "other_users",
@@ -1753,11 +5542,13 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/timed_users/records", superuserToken, Map.of(
                 "email", "timed@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", true
         ));
         request("POST", "/api/collections/other_users/records", superuserToken, Map.of(
                 "email", "other@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", true
         ));
 
@@ -1765,8 +5556,8 @@ class LocalPocketBaseServerTest {
                 "identity", "timed@example.com",
                 "password", "secret456"
         ));
-        Thread.sleep(2100L);
-        assertEquals(401, rawRequest("POST", "/api/collections/timed_users/auth-refresh", auth.get("token").asText(), null).statusCode());
+        String expiredAuthToken = expiredToken(auth.get("token").asText(), "timed_users", "authToken");
+        assertEquals(401, rawRequest("POST", "/api/collections/timed_users/auth-refresh", expiredAuthToken, null).statusCode());
 
         request("POST", "/api/collections/timed_users/request-password-reset", null, Map.of(
                 "email", "timed@example.com"
@@ -1779,9 +5570,9 @@ class LocalPocketBaseServerTest {
         ));
         assertEquals(400, wrongCollectionReset.statusCode());
         assertFieldError(wrongCollectionReset, 400, "Invalid or expired token.", "token", "validation_invalid_value", "Invalid or expired token.");
-        Thread.sleep(2100L);
+        String expiredResetToken = expiredToken(resetToken, "timed_users", "passwordResetToken");
         HttpResponse<String> expiredReset = rawRequest("POST", "/api/collections/timed_users/confirm-password-reset", null, Map.of(
-                "token", resetToken,
+                "token", expiredResetToken,
                 "password", "newsecret456",
                 "passwordConfirm", "newsecret456"
         ));
@@ -1812,6 +5603,7 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/mfa_users/records", token, Map.of(
                 "email", "mfa@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "verified", true
         ));
 
@@ -1819,7 +5611,7 @@ class LocalPocketBaseServerTest {
                 "identity", "mfa@example.com",
                 "password", "secret456"
         ));
-        assertEquals(401, passwordFirst.statusCode());
+        assertEquals(401, passwordFirst.statusCode(), passwordFirst.body());
         String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
 
         HttpResponse<String> samePasswordMethod = rawRequest("POST", "/api/collections/mfa_users/auth-with-password", null, Map.of(
@@ -1881,7 +5673,7 @@ class LocalPocketBaseServerTest {
         assertTrue(otpCompleted.hasNonNull("token"));
 
         try (FakeOAuth2Server oauth = FakeOAuth2Server.start()) {
-            request("POST", "/api/collections", token, Map.of(
+            JsonNode oauthCollection = request("POST", "/api/collections", token, Map.of(
                     "name", "mfa_oauth_users",
                     "type", "auth",
                     "mfa", Map.of(
@@ -1905,9 +5697,11 @@ class LocalPocketBaseServerTest {
                             )
                     )
             ));
+            assertEquals("", oauthCollection.path("oauth2").path("providers").get(0).path("clientSecret").asText());
             request("POST", "/api/collections/mfa_oauth_users/records", token, Map.of(
                     "email", "oidc@example.com",
                     "password", "secret456",
+                    "passwordConfirm", "secret456",
                     "verified", true
             ));
 
@@ -1948,14 +5742,48 @@ class LocalPocketBaseServerTest {
         bootstrapSuperuser();
         String token = loginToken();
 
-        request("PATCH", "/api/collections/_superusers", token, Map.of(
+        HttpResponse<String> changedSystemCollection = rawRequest("PATCH", "/api/collections/_superusers", token, Map.of(
+                "name", "admins",
+                "type", "base",
+                "system", false,
+                "listRule", "",
+                "viewRule", "",
+                "createRule", "",
+                "updateRule", "",
+                "deleteRule", "",
+                "authRule", "id != ''",
+                "manageRule", "id != ''"
+        ));
+        assertEquals(400, changedSystemCollection.statusCode());
+        JsonNode systemCollectionErrors = mapper.readTree(changedSystemCollection.body()).get("data");
+        assertEquals("validation_collection_system_name_change", systemCollectionErrors.get("name").get("code").asText());
+        assertEquals("validation_collection_type_change", systemCollectionErrors.get("type").get("code").asText());
+        assertEquals("validation_collection_system_flag_change", systemCollectionErrors.get("system").get("code").asText());
+        for (String field : List.of(
+                "listRule", "viewRule", "createRule", "updateRule", "deleteRule", "authRule", "manageRule"
+        )) {
+            assertEquals("validation_collection_system_rule_change", systemCollectionErrors.get(field).get("code").asText());
+        }
+
+        HttpResponse<String> changedSystemMfaRule = rawRequest("PATCH", "/api/collections/_superusers", token, Map.of(
+                "options", Map.of(
+                        "otp", Map.of("enabled", true, "duration", 300, "length", 6),
+                        "mfa", Map.of("enabled", true, "duration", 900, "rule", "true")
+                )
+        ));
+        assertEquals(400, changedSystemMfaRule.statusCode());
+        assertEquals(
+                "validation_collection_system_rule_change",
+                mapper.readTree(changedSystemMfaRule.body()).get("data").get("mfa").get("rule").get("code").asText()
+        );
+
+        JsonNode superuserConfig = request("PATCH", "/api/collections/_superusers", token, Map.of(
                 "id", "pbc_superusers",
                 "name", "_superusers",
                 "type", "auth",
-                "fields", List.of(),
                 "options", Map.of(
                         "passwordAuth", Map.of(
-                                "enabled", true,
+                                "enabled", false,
                                 "identityFields", List.of("email")
                         ),
                         "otp", Map.of(
@@ -1964,18 +5792,29 @@ class LocalPocketBaseServerTest {
                                 "length", 6
                         ),
                         "mfa", Map.of(
+                                "enabled", false,
+                                "duration", 900
+                        ),
+                        "oauth2", Map.of(
                                 "enabled", true,
-                                "duration", 900,
-                                "rule", "true"
+                                "providers", List.of(Map.of(
+                                        "name", "github",
+                                        "clientId", "client-id",
+                                        "clientSecret", "client-secret"
+                                ))
                         )
                 )
         ));
+        assertTrue(superuserConfig.get("passwordAuth").get("enabled").asBoolean());
+        assertTrue(superuserConfig.get("mfa").get("enabled").asBoolean());
+        assertFalse(superuserConfig.get("oauth2").get("enabled").asBoolean());
+        assertEquals(0, superuserConfig.get("oauth2").get("providers").size());
 
         HttpResponse<String> passwordFirst = rawRequest("POST", "/api/collections/_superusers/auth-with-password", null, Map.of(
                 "identity", "root@example.com",
                 "password", "secret123"
         ));
-        assertEquals(401, passwordFirst.statusCode());
+        assertEquals(401, passwordFirst.statusCode(), passwordFirst.body());
         String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
 
         JsonNode otpRequest = request("POST", "/api/collections/_superusers/request-otp", null, Map.of(
@@ -2007,12 +5846,25 @@ class LocalPocketBaseServerTest {
         String token = loginToken();
 
         try (FakeOAuth2Server oauth = FakeOAuth2Server.start()) {
-            request("POST", "/api/collections", token, Map.of(
+            JsonNode oauthCollection = request("POST", "/api/collections", token, Map.of(
                     "name", "oauth_users",
                     "type", "auth",
-                    "createRule", "",
+                    "createRule", "@request.context = 'oauth2'",
+                    "fields", List.of(
+                            Map.of("name", "providerUid", "type", "text"),
+                            Map.of("name", "displayName", "type", "text"),
+                            Map.of("name", "loginName", "type", "text"),
+                            Map.of("name", "avatarLink", "type", "url")
+                    ),
+                    "indexes", List.of("CREATE UNIQUE INDEX idx_oauth_login_name ON oauth_users (loginName)"),
                     "oauth2", Map.of(
                             "enabled", true,
+                            "mappedFields", Map.of(
+                                    "id", "providerUid",
+                                    "name", "displayName",
+                                    "username", "loginName",
+                                    "avatarURL", "avatarLink"
+                            ),
                             "providers", List.of(
                                     Map.of(
                                             "name", "oidc",
@@ -2027,6 +5879,29 @@ class LocalPocketBaseServerTest {
                             )
                     )
             ));
+            assertEquals("", oauthCollection.path("oauth2").path("providers").get(0).path("clientSecret").asText());
+            assertEquals("providerUid", oauthCollection.path("oauth2").path("mappedFields").path("id").asText());
+            request("PATCH", "/api/collections/oauth_users", token, Map.of(
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "mappedFields", Map.of(
+                                    "id", "providerUid",
+                                    "name", "displayName",
+                                    "username", "loginName",
+                                    "avatarURL", "avatarLink"
+                            ),
+                            "providers", List.of(Map.of(
+                                    "name", "oidc",
+                                    "clientId", "client-123",
+                                    "clientSecret", "",
+                                    "authURL", oauth.baseUrl() + "/authorize",
+                                    "tokenURL", oauth.baseUrl() + "/token",
+                                    "userInfoURL", oauth.baseUrl() + "/userinfo",
+                                    "scopes", List.of("openid", "email", "profile"),
+                                    "pkce", true
+                            ))
+                    )
+            ));
 
             JsonNode methods = request("GET", "/api/collections/oauth_users/auth-methods", null, null);
             JsonNode provider = methods.get("oauth2").get("providers").get(0);
@@ -2039,16 +5914,22 @@ class LocalPocketBaseServerTest {
                     "provider", "oidc",
                     "code", "first-code",
                     "codeVerifier", provider.get("codeVerifier").asText(),
-                    "redirectURL", "http://127.0.0.1/callback",
-                    "createData", Map.of("name", "OIDC User")
+                    "redirectURL", "http://127.0.0.1/callback"
             ));
             String recordId = firstAuth.get("record").get("id").asText();
             assertEquals("oidc@example.com", firstAuth.get("record").get("email").asText());
+            assertEquals("oauth-sub-123", firstAuth.get("record").get("providerUid").asText());
+            assertEquals("OIDC User", firstAuth.get("record").get("displayName").asText());
+            assertEquals("oidc-user", firstAuth.get("record").get("loginName").asText());
+            assertEquals("https://cdn.example.com/avatar.png", firstAuth.get("record").get("avatarLink").asText());
             assertTrue(firstAuth.get("record").get("verified").asBoolean());
             assertTrue(firstAuth.get("meta").get("isNew").asBoolean());
             assertEquals("oidc-user", firstAuth.get("meta").get("preferred_username").asText());
             assertTrue(oauth.lastTokenBody().contains("code=first-code"));
             assertTrue(oauth.lastTokenBody().contains("code_verifier="));
+            assertTrue(oauth.lastTokenBody().contains("client_secret=secret-456"));
+
+            request("PATCH", "/api/collections/oauth_users/records/" + recordId, token, Map.of("displayName", "Manual Name"));
 
             JsonNode secondAuth = request("POST", "/api/collections/oauth_users/auth-with-oauth2", null, Map.of(
                     "provider", "oidc",
@@ -2057,13 +5938,199 @@ class LocalPocketBaseServerTest {
                     "redirectURL", "http://127.0.0.1/callback"
             ));
             assertEquals(recordId, secondAuth.get("record").get("id").asText());
+            assertEquals("Manual Name", secondAuth.get("record").path("displayName").asText(""));
             assertFalse(secondAuth.get("meta").get("isNew").asBoolean());
+
+            request("POST", "/api/collections", token, Map.of(
+                    "name", "oauth_blocked_users",
+                    "type", "auth",
+                    "createRule", "@request.context != 'oauth2'",
+                    "oauth2", Map.of(
+                            "enabled", true,
+                            "providers", List.of(Map.of(
+                                    "name", "oidc",
+                                    "clientId", "client-123",
+                                    "clientSecret", "secret-456",
+                                    "authURL", oauth.baseUrl() + "/authorize",
+                                    "tokenURL", oauth.baseUrl() + "/token",
+                                    "userInfoURL", oauth.baseUrl() + "/userinfo",
+                                    "scopes", List.of("openid", "email", "profile"),
+                                    "pkce", true
+                            ))
+                    )
+            ));
+            HttpResponse<String> blockedCreate = rawRequest(
+                    "POST",
+                    "/api/collections/oauth_blocked_users/auth-with-oauth2",
+                    null,
+                    Map.of(
+                            "provider", "oidc",
+                            "code", "blocked-code",
+                            "redirectURL", "http://127.0.0.1/callback"
+                    )
+            );
+            assertEquals(400, blockedCreate.statusCode());
+            assertEquals(0, request(
+                    "GET",
+                    "/api/collections/oauth_blocked_users/records",
+                    token,
+                    null
+            ).get("totalItems").asInt());
         }
 
         HttpResponse<String> redirect = rawRequest("GET", "/api/oauth2-redirect?state=test-state&code=abc123", null, null);
-        assertEquals(200, redirect.statusCode());
-        assertTrue(redirect.body().contains("postMessage"));
-        assertTrue(redirect.body().contains("pocketbase-java-oauth2"));
+        assertEquals(307, redirect.statusCode());
+        assertTrue(redirect.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
+    }
+
+    @Test
+    void oauth2RedirectUsesOfficialRealtimeContractAndIpChecks() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+        request("PATCH", "/api/settings", token, Map.of(
+                "trustedProxy", Map.of("headers", List.of("X-Test-IP"), "useLeftmostIP", false)
+        ));
+
+        String firstIp = "203.0.113.10";
+        HttpResponse<InputStream> firstResponse = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .header("X-Test-IP", firstIp)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        assertEquals(200, firstResponse.statusCode());
+        try (SseReader events = new SseReader(firstResponse.body())) {
+            String clientId = mapper.readTree(events.next("PB_CONNECT").data()).get("clientId").asText();
+            assertEquals(204, rawRequest("POST", "/api/realtime", null, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("custom-topic", "@oauth2")
+            ), Map.of("X-Test-IP", firstIp)).statusCode());
+
+            HttpResponse<String> success = rawRequest(
+                    "GET",
+                    "/api/oauth2-redirect?state=" + clientId + "&code=abc123",
+                    null,
+                    null,
+                    Map.of("X-Test-IP", firstIp)
+            );
+            assertEquals(307, success.statusCode());
+            assertTrue(success.headers().firstValue("Location").orElse("").contains("oauth2-redirect-success"));
+            JsonNode payload = mapper.readTree(events.next("@oauth2").data());
+            assertEquals(clientId, payload.get("state").asText());
+            assertEquals("abc123", payload.get("code").asText());
+            assertFalse(payload.has("error"));
+
+            HttpResponse<String> reused = rawRequest(
+                    "GET",
+                    "/api/oauth2-redirect?state=" + clientId + "&code=reused",
+                    null,
+                    null,
+                    Map.of("X-Test-IP", firstIp)
+            );
+            assertEquals(307, reused.statusCode());
+            assertTrue(reused.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
+        }
+
+        String secondIp = "203.0.113.20";
+        HttpResponse<InputStream> secondResponse = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .header("X-Test-IP", secondIp)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        try (SseReader events = new SseReader(secondResponse.body())) {
+            String clientId = mapper.readTree(events.next("PB_CONNECT").data()).get("clientId").asText();
+            assertEquals(400, rawRequest("POST", "/api/realtime", null, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("@oauth2")
+            ), Map.of("X-Test-IP", "203.0.113.21")).statusCode());
+            assertEquals(204, rawRequest("POST", "/api/realtime", null, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("@oauth2")
+            ), Map.of("X-Test-IP", secondIp)).statusCode());
+
+            String form = "code=post-code&state=" + URLEncoder.encode(clientId, StandardCharsets.UTF_8)
+                    + "&user=" + URLEncoder.encode("{\"name\":{\"firstName\":\"Ada\",\"lastName\":\"Lovelace\"}}", StandardCharsets.UTF_8);
+            HttpResponse<String> post = rawBodyRequest(
+                    "POST",
+                    "/api/oauth2-redirect",
+                    null,
+                    "application/x-www-form-urlencoded",
+                    form.getBytes(StandardCharsets.UTF_8),
+                    Map.of("X-Test-IP", secondIp)
+            );
+            assertEquals(303, post.statusCode());
+            assertTrue(post.headers().firstValue("Location").orElse("").contains("oauth2-redirect-success"));
+            assertEquals("post-code", mapper.readTree(events.next("@oauth2").data()).get("code").asText());
+        }
+
+        String thirdIp = "203.0.113.30";
+        HttpResponse<InputStream> thirdResponse = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .header("X-Test-IP", thirdIp)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        try (SseReader events = new SseReader(thirdResponse.body())) {
+            String clientId = mapper.readTree(events.next("PB_CONNECT").data()).get("clientId").asText();
+            assertEquals(204, rawRequest("POST", "/api/realtime", null, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("@oauth2")
+            ), Map.of("X-Test-IP", thirdIp)).statusCode());
+
+            HttpResponse<String> missingCode = rawRequest(
+                    "GET",
+                    "/api/oauth2-redirect?state=" + clientId,
+                    null,
+                    null,
+                    Map.of("X-Test-IP", thirdIp)
+            );
+            assertEquals(307, missingCode.statusCode());
+            assertTrue(missingCode.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
+            assertEquals("", mapper.readTree(events.next("@oauth2").data()).get("code").asText());
+        }
+
+        String fourthIp = "203.0.113.40";
+        HttpResponse<InputStream> fourthResponse = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .header("X-Test-IP", fourthIp)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        try (SseReader events = new SseReader(fourthResponse.body())) {
+            String clientId = mapper.readTree(events.next("PB_CONNECT").data()).get("clientId").asText();
+            assertEquals(204, rawRequest("POST", "/api/realtime", null, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("@oauth2")
+            ), Map.of("X-Test-IP", fourthIp)).statusCode());
+            HttpResponse<String> mismatch = rawRequest(
+                    "GET",
+                    "/api/oauth2-redirect?state=" + clientId + "&code=blocked",
+                    null,
+                    null,
+                    Map.of("X-Test-IP", "203.0.113.41")
+            );
+            assertEquals(307, mismatch.statusCode());
+            assertTrue(mismatch.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
+            HttpResponse<String> removed = rawRequest(
+                    "GET",
+                    "/api/oauth2-redirect?state=" + clientId + "&code=after-mismatch",
+                    null,
+                    null,
+                    Map.of("X-Test-IP", fourthIp)
+            );
+            assertEquals(307, removed.statusCode());
+            assertTrue(removed.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
+        }
     }
 
     @Test
@@ -2078,14 +6145,15 @@ class LocalPocketBaseServerTest {
                 "oauth2", Map.of(
                         "enabled", true,
                         "providers", List.of(Map.of(
-                                "name", "github",
+                                "name", "mailcow",
                                 "clientId", "client-123",
+                                "clientSecret", "secret-456",
                                 "authURL", "http://127.0.0.1/authorize"
                         ))
                 )
         ));
         HttpResponse<String> missingTokenUrl = rawRequest("POST", "/api/collections/oauth_missing_token_url_users/auth-with-oauth2", null, Map.of(
-                "provider", "github",
+                "provider", "mailcow",
                 "code", "bad-code",
                 "redirectURL", "http://127.0.0.1/callback"
         ));
@@ -2174,6 +6242,7 @@ class LocalPocketBaseServerTest {
         JsonNode user = request("POST", "/api/collections/users/records", token, Map.of(
                 "email", "refresh@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Refresh"
         ));
 
@@ -2210,6 +6279,7 @@ class LocalPocketBaseServerTest {
         JsonNode user = request("POST", "/api/collections/auth_lifecycle_users/records", superuserToken, Map.of(
                 "email", "lifecycle@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Lifecycle",
                 "verified", false
         ));
@@ -2363,6 +6433,7 @@ class LocalPocketBaseServerTest {
         JsonNode user = request("POST", "/api/collections/auth_query_users/records", token, Map.of(
                 "email", "query@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Query",
                 "team", team.get("id").asText()
         ));
@@ -2425,11 +6496,13 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/users/records", superuserToken, Map.of(
                 "email", "alice@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Alice"
         ));
         request("POST", "/api/collections/users/records", superuserToken, Map.of(
                 "email", "bob@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Bob"
         ));
 
@@ -2574,7 +6647,7 @@ class LocalPocketBaseServerTest {
                 null
         );
         assertEquals(404, missingFile.statusCode());
-        assertErrorEnvelope(missingFile, 404, "File not found.");
+        assertErrorEnvelope(missingFile, 404, "The requested resource wasn't found.");
     }
 
     @Test
@@ -2703,11 +6776,13 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/users/records", superuserToken, Map.of(
                 "email", "alice-file@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Alice"
         ));
         request("POST", "/api/collections/users/records", superuserToken, Map.of(
                 "email", "bob-file@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Bob"
         ));
         JsonNode aliceAuth = request("POST", "/api/collections/users/auth-with-password", null, Map.of(
@@ -2725,7 +6800,7 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections", superuserToken, Map.of(
                 "name", "secure_assets",
                 "listRule", "owner = @request.auth.id",
-                "viewRule", "owner = @request.auth.id",
+                "viewRule", "owner = @request.auth.id && @request.context = 'protectedFile'",
                 "fields", List.of(
                         Map.of("name", "owner", "type", "text", "required", true),
                         Map.of("name", "attachment", "type", "file", "required", true, "protected", true)
@@ -2740,13 +6815,17 @@ class LocalPocketBaseServerTest {
         String filePath = "/api/files/secure_assets/" + created.get("id").asText() + "/" + filename;
 
         HttpResponse<String> publicFile = rawRequest("GET", filePath, null, null);
-        assertEquals(403, publicFile.statusCode());
-        assertFieldError(publicFile, 403, "Protected file token required.", "token", "validation_required", "Cannot be blank.");
+        assertEquals(404, publicFile.statusCode());
+        assertErrorEnvelope(publicFile, 404, "The requested resource wasn't found.");
+
+        HttpResponse<String> invalidFileToken = rawRequest("GET", filePath + "?token=invalid", null, null);
+        assertEquals(404, invalidFileToken.statusCode());
+        assertErrorEnvelope(invalidFileToken, 404, "The requested resource wasn't found.");
 
         JsonNode aliceFileToken = request("POST", "/api/files/token", aliceToken, null);
         HttpResponse<String> fileTokenAsBearer = rawRequest("GET", filePath, aliceFileToken.get("token").asText(), null);
-        assertEquals(403, fileTokenAsBearer.statusCode());
-        assertFieldError(fileTokenAsBearer, 403, "Protected file token required.", "token", "validation_required", "Cannot be blank.");
+        assertEquals(404, fileTokenAsBearer.statusCode());
+        assertErrorEnvelope(fileTokenAsBearer, 404, "The requested resource wasn't found.");
 
         HttpResponse<String> aliceFile = rawRequest("GET", filePath + "?token=" + aliceFileToken.get("token").asText(), null, null);
         assertEquals(200, aliceFile.statusCode());
@@ -2754,8 +6833,14 @@ class LocalPocketBaseServerTest {
 
         JsonNode bobFileToken = request("POST", "/api/files/token", bobToken, null);
         HttpResponse<String> bobFile = rawRequest("GET", filePath + "?token=" + bobFileToken.get("token").asText(), null, null);
-        assertEquals(403, bobFile.statusCode());
-        assertFieldError(bobFile, 403, "Protected file is not accessible.", "token", "validation_invalid_value", "Protected file is not accessible.");
+        assertEquals(404, bobFile.statusCode());
+        assertErrorEnvelope(bobFile, 404, "The requested resource wasn't found.");
+
+        request("PATCH", "/api/collections/secure_assets", superuserToken, Map.of(
+                "viewRule", "@request.context = 'protectedFile'"
+        ));
+        assertEquals(200, rawRequest("GET", filePath, null, null).statusCode());
+        assertEquals(200, rawRequest("GET", filePath + "?token=invalid", null, null).statusCode());
     }
 
     @Test
@@ -2810,7 +6895,7 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
-    void realtimeRejectsAuthorizationChangesForExistingClient() throws Exception {
+    void realtimeAllowsGuestAuthUpgradeButRejectsLaterAuthorizationChanges() throws Exception {
         start();
         bootstrapSuperuser();
         String token = loginToken();
@@ -2828,11 +6913,17 @@ class LocalPocketBaseServerTest {
             SseEvent connect = events.next("PB_CONNECT");
             String clientId = mapper.readTree(connect.data()).get("clientId").asText();
 
-            HttpResponse<String> initial = rawRequest("POST", "/api/realtime", token, Map.of(
+            HttpResponse<String> initial = rawRequest("POST", "/api/realtime", null, Map.of(
                     "clientId", clientId,
                     "subscriptions", List.of("updates/*")
             ));
             assertEquals(204, initial.statusCode());
+
+            HttpResponse<String> upgraded = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("updates/*")
+            ));
+            assertEquals(204, upgraded.statusCode());
 
             HttpResponse<String> changedAuth = rawRequest("POST", "/api/realtime", null, Map.of(
                     "clientId", clientId,
@@ -2858,6 +6949,20 @@ class LocalPocketBaseServerTest {
         assertEquals(400, arrayPayload.statusCode());
         assertFieldError(arrayPayload, 400, "Realtime subscription payload must be an object.", "body", "validation_invalid_value", "Request body must be a JSON object.");
 
+        HttpResponse<String> longClientId = rawRequest("POST", "/api/realtime", token, Map.of(
+                "clientId", "a".repeat(256),
+                "subscriptions", List.of()
+        ));
+        assertEquals(400, longClientId.statusCode());
+        assertFieldError(
+                longClientId,
+                400,
+                "Failed to subscribe.",
+                "clientId",
+                "validation_length_too_long",
+                "The value must be no more than 255 characters."
+        );
+
         HttpResponse<InputStream> response = http.send(
                 HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
                         .header("Accept", "text/event-stream")
@@ -2869,6 +6974,52 @@ class LocalPocketBaseServerTest {
         try (SseReader events = new SseReader(response.body())) {
             SseEvent connect = events.next("PB_CONNECT");
             String clientId = mapper.readTree(connect.data()).get("clientId").asText();
+
+            List<String> maximumSubscriptions = new java.util.ArrayList<>();
+            for (int index = 0; index < 1000; index++) {
+                maximumSubscriptions.add(String.valueOf(index));
+            }
+            HttpResponse<String> maximum = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", maximumSubscriptions
+            ));
+            assertEquals(204, maximum.statusCode());
+
+            List<String> tooManySubscriptions = new java.util.ArrayList<>();
+            for (int index = 0; index < 1001; index++) {
+                tooManySubscriptions.add(String.valueOf(index));
+            }
+            HttpResponse<String> tooMany = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", tooManySubscriptions
+            ));
+            assertEquals(400, tooMany.statusCode());
+            assertFieldError(
+                    tooMany,
+                    400,
+                    "Failed to subscribe.",
+                    "subscriptions",
+                    "validation_length_too_long",
+                    "The list must contain no more than 1000 items."
+            );
+
+            HttpResponse<String> longTopic = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("valid-topic", "a".repeat(2501))
+            ));
+            assertEquals(400, longTopic.statusCode());
+            JsonNode longTopicBody = mapper.readTree(longTopic.body());
+            assertEquals("Failed to subscribe.", longTopicBody.get("message").asText());
+            assertEquals(
+                    "validation_length_too_long",
+                    longTopicBody.get("data").get("subscriptions").get("1").get("code").asText()
+            );
+
+            HttpResponse<String> boundaryTopic = rawRequest("POST", "/api/realtime", token, Map.of(
+                    "clientId", clientId,
+                    "subscriptions", List.of("a".repeat(2500))
+            ));
+            assertEquals(204, boundaryTopic.statusCode());
 
             HttpResponse<String> invalidOptions = rawRequest("POST", "/api/realtime", token, Map.of(
                     "clientId", clientId,
@@ -2894,11 +7045,13 @@ class LocalPocketBaseServerTest {
         request("POST", "/api/collections/realtime_users/records", superuserToken, Map.of(
                 "email", "alice-realtime@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Alice"
         ));
         request("POST", "/api/collections/realtime_users/records", superuserToken, Map.of(
                 "email", "bob-realtime@example.com",
                 "password", "secret456",
+                "passwordConfirm", "secret456",
                 "displayName", "Bob"
         ));
         JsonNode aliceAuth = request("POST", "/api/collections/realtime_users/auth-with-password", null, Map.of(
@@ -3009,6 +7162,48 @@ class LocalPocketBaseServerTest {
             assertEquals("create", data.get("action").asText());
             assertEquals(active.get("id").asText(), data.get("record").get("id").asText());
             assertEquals("active", data.get("record").get("title").asText());
+        }
+    }
+
+    @Test
+    void realtimeOptionsHeadersReachCollectionRules() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "header_updates",
+                "listRule", "@request.headers.x-rule-token = 'allow' && @request.context = 'realtime'",
+                "viewRule", "@request.headers.x-rule-token = 'allow' && @request.context = 'realtime'",
+                "fields", List.of(Map.of("name", "title", "type", "text", "required", true))
+        ));
+
+        HttpResponse<InputStream> response = http.send(
+                HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                        .header("Accept", "text/event-stream")
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        assertEquals(200, response.statusCode());
+
+        try (SseReader events = new SseReader(response.body())) {
+            SseEvent connect = events.next("PB_CONNECT");
+            String clientId = mapper.readTree(connect.data()).get("clientId").asText();
+            String options = URLEncoder.encode(
+                    "{\"headers\":{\"X-Rule-Token\":\"allow\"}}",
+                    StandardCharsets.UTF_8
+            );
+            request("POST", "/api/realtime?clientId=" + clientId
+                    + "&subscriptions%5B0%5D=header_updates/*&options=" + options, null, null);
+
+            JsonNode created = request("POST", "/api/collections/header_updates/records", token, Map.of(
+                    "title", "header event"
+            ));
+            SseEvent event = events.next("header_updates/*");
+            JsonNode data = mapper.readTree(event.data());
+            assertEquals("create", data.get("action").asText());
+            assertEquals(created.get("id").asText(), data.get("record").get("id").asText());
         }
     }
 
@@ -3143,6 +7338,37 @@ class LocalPocketBaseServerTest {
         throw new AssertionError("No auth request token for " + type + " / " + email);
     }
 
+    private String expiredToken(String token, String collectionName, String tokenConfig) throws Exception {
+        String baseSecret = Files.readString(tempDir.resolve("pb_secret"), StandardCharsets.UTF_8).trim();
+        TokenService tokenService = new TokenService(mapper, baseSecret);
+        Map<String, Object> claims = new LinkedHashMap<>(tokenService.peek(token)
+                .orElseThrow(() -> new AssertionError("Invalid source token")));
+        String tokenKey = String.valueOf(claims.getOrDefault("tokenKey", "")).trim();
+        String signingSecret = tokenKey + collectionTokenSecret(collectionName, tokenConfig);
+        return tokenService.create(claims, Duration.ofSeconds(-1), signingSecret);
+    }
+
+    private String collectionTokenSecret(String collectionName, String tokenConfig) throws Exception {
+        Path database = tempDir.resolve("pocketbase.db");
+        if (Files.exists(database)) {
+            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
+                 var query = connection.prepareStatement("SELECT options FROM _collections WHERE name = ?")) {
+                query.setString(1, collectionName);
+                try (var result = query.executeQuery()) {
+                    assertTrue(result.next());
+                    return mapper.readTree(result.getString(1)).path(tokenConfig).path("secret").asText();
+                }
+            }
+        }
+        JsonNode schema = mapper.readTree(tempDir.resolve("pb_schema.json").toFile());
+        for (JsonNode collection : schema.withArray("collections")) {
+            if (collectionName.equals(collection.path("name").asText())) {
+                return collection.path(tokenConfig).path("secret").asText();
+            }
+        }
+        throw new AssertionError("Missing collection token secret for " + collectionName + " / " + tokenConfig);
+    }
+
     private String otpRequestPassword(String email, String otpId) throws IOException {
         JsonNode requests = mapper.readTree(tempDir.resolve("auth_requests.json").toFile());
         for (int i = requests.size() - 1; i >= 0; i--) {
@@ -3155,6 +7381,55 @@ class LocalPocketBaseServerTest {
             }
         }
         throw new AssertionError("No OTP request for " + email + " / " + otpId);
+    }
+
+    private int authOutboxCount(String type, String email) throws IOException {
+        Path outbox = tempDir.resolve("auth_requests.json");
+        if (!Files.exists(outbox)) {
+            return 0;
+        }
+        int count = 0;
+        for (JsonNode request : mapper.readTree(outbox.toFile())) {
+            if (type.equals(request.path("type").asText())
+                    && email.equalsIgnoreCase(request.path("email").asText())) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int authOriginCount(String collectionName, String recordId) throws Exception {
+        Path database = tempDir.resolve("pocketbase.db");
+        if (Files.exists(database)) {
+            String collectionId = request("GET", "/api/collections/" + collectionName, loginToken(), null).get("id").asText();
+            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
+                 var statement = connection.prepareStatement(
+                         "SELECT COUNT(*) FROM _authOrigins WHERE collectionRef = ? AND recordRef = ?")) {
+                statement.setString(1, collectionId);
+                statement.setString(2, recordId);
+                try (var result = statement.executeQuery()) {
+                    return result.next() ? result.getInt(1) : 0;
+                }
+            }
+        }
+        Path origins = tempDir.resolve("auth_origins.json");
+        if (!Files.exists(origins)) {
+            return 0;
+        }
+        String collectionId = request("GET", "/api/collections/" + collectionName, loginToken(), null).get("id").asText();
+        int count = 0;
+        for (JsonNode origin : mapper.readTree(origins.toFile())) {
+            String originCollection = origin.has("collectionRef")
+                    ? origin.path("collectionRef").asText()
+                    : origin.path("collectionId").asText();
+            String originRecord = origin.has("recordRef")
+                    ? origin.path("recordRef").asText()
+                    : origin.path("recordId").asText();
+            if (collectionId.equals(originCollection) && recordId.equals(originRecord)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private boolean cronExists(JsonNode crons, String id, String expression) {
@@ -3185,6 +7460,57 @@ class LocalPocketBaseServerTest {
         return false;
     }
 
+    private boolean waitForLogMissing(String id, String token) throws Exception {
+        String filter = URLEncoder.encode("id = '" + id + "'", StandardCharsets.UTF_8);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            JsonNode logs = request("GET", "/api/logs?filter=" + filter, token, null);
+            if (logs.get("totalItems").asInt() == 0) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    private void ageSqliteLogFixture(String id) throws Exception {
+        Path database = tempDir.resolve("pocketbase.db");
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
+             var statement = connection.prepareStatement(
+                     "UPDATE _logs SET created = ?, updated = ? WHERE id = ?")) {
+            statement.setString(1, "2000-01-01T00:00:00Z");
+            statement.setString(2, "2000-01-01T00:00:00Z");
+            statement.setString(3, id);
+            assertEquals(1, statement.executeUpdate());
+        }
+    }
+
+    private List<String> sqliteCustomIndexNames(String table) throws Exception {
+        List<String> names = new java.util.ArrayList<>();
+        Path database = tempDir.resolve("pocketbase.db");
+        try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
+             var statement = connection.createStatement();
+             var results = statement.executeQuery("PRAGMA index_list(\"" + table.replace("\"", "\"\"") + "\")")) {
+            while (results.next()) {
+                String name = results.getString("name");
+                if (name != null && name.startsWith("idx_")) {
+                    names.add(name);
+                }
+            }
+        }
+        names.sort(String::compareTo);
+        return names;
+    }
+
+    private JsonNode findBy(JsonNode items, String field, String value) {
+        for (JsonNode item : items) {
+            if (value.equals(item.path(field).asText())) {
+                return item;
+            }
+        }
+        throw new AssertionError("Missing item with " + field + "=" + value);
+    }
+
     private JsonNode request(String method, String path, String token, Object body) throws Exception {
         HttpResponse<String> response = rawRequest(method, path, token, body);
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -3193,9 +7519,34 @@ class LocalPocketBaseServerTest {
         return response.body().isBlank() ? mapper.createObjectNode() : mapper.readTree(response.body());
     }
 
+    private JsonNode requestWithHeaders(
+            String method,
+            String path,
+            String token,
+            Object body,
+            Map<String, String> headers
+    ) throws Exception {
+        HttpResponse<String> response = rawRequest(method, path, token, body, headers);
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new AssertionError(response.statusCode() + " " + response.body());
+        }
+        return response.body().isBlank() ? mapper.createObjectNode() : mapper.readTree(response.body());
+    }
+
     private HttpResponse<String> rawRequest(String method, String path, String token, Object body) throws Exception {
+        return rawRequest(method, path, token, body, Map.of());
+    }
+
+    private HttpResponse<String> rawRequest(
+            String method,
+            String path,
+            String token,
+            Object body,
+            Map<String, String> headers
+    ) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
                 .header("Accept", "application/json");
+        headers.forEach(builder::header);
         if (token != null) {
             builder.header("Authorization", "Bearer " + token);
         }
@@ -3206,6 +7557,28 @@ class LocalPocketBaseServerTest {
             builder.method(method, HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8));
         }
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    private RawHttpResponse rawDeclaredContentLengthRequest(String method, String path, long contentLength) throws Exception {
+        URI base = URI.create(server.baseUrl());
+        try (Socket socket = new Socket(base.getHost(), base.getPort())) {
+            String request = method + " " + path + " HTTP/1.1\r\n"
+                    + "Host: " + base.getHost() + ":" + base.getPort() + "\r\n"
+                    + "Content-Type: application/octet-stream\r\n"
+                    + "Content-Length: " + contentLength + "\r\n"
+                    + "Connection: close\r\n\r\n";
+            socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            socket.shutdownOutput();
+            String raw = new String(socket.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int headerEnd = raw.indexOf("\r\n\r\n");
+            String headers = headerEnd < 0 ? raw : raw.substring(0, headerEnd);
+            String body = headerEnd < 0 ? "" : raw.substring(headerEnd + 4);
+            String statusLine = headers.lines().findFirst().orElse("");
+            String[] statusParts = statusLine.split(" ", 3);
+            int status = statusParts.length >= 2 ? Integer.parseInt(statusParts[1]) : 0;
+            return new RawHttpResponse(status, body);
+        }
     }
 
     private HttpResponse<String> rawJsonRequest(String method, String path, String token, String body) throws Exception {
@@ -3220,10 +7593,22 @@ class LocalPocketBaseServerTest {
     }
 
     private HttpResponse<String> rawBodyRequest(String method, String path, String token, String contentType, byte[] body) throws Exception {
+        return rawBodyRequest(method, path, token, contentType, body, Map.of());
+    }
+
+    private HttpResponse<String> rawBodyRequest(
+            String method,
+            String path,
+            String token,
+            String contentType,
+            byte[] body,
+            Map<String, String> headers
+    ) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
                 .header("Accept", "application/json")
                 .header("Content-Type", contentType)
                 .method(method, HttpRequest.BodyPublishers.ofByteArray(body));
+        headers.forEach(builder::header);
         if (token != null) {
             builder.header("Authorization", "Bearer " + token);
         }
@@ -3411,6 +7796,215 @@ class LocalPocketBaseServerTest {
         return names;
     }
 
+    private void assertAuthSystemFields(JsonNode collection) {
+        List<String> expected = List.of("id", "password", "tokenKey", "email", "emailVisibility", "verified");
+        assertEquals(expected, fieldNames(collection).subList(0, expected.size()));
+        for (int i = 0; i < expected.size(); i++) {
+            assertTrue(collection.get("fields").get(i).get("system").asBoolean());
+        }
+        assertTrue(collection.get("fields").get(1).get("hidden").asBoolean());
+        assertTrue(collection.get("fields").get(2).get("hidden").asBoolean());
+    }
+
+    private void downgradeAuthSystemFieldsFixture(String collectionName, String collectionId) throws Exception {
+        Path database = tempDir.resolve("pocketbase.db");
+        if (Files.exists(database)) {
+            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath())) {
+                String rawSchema;
+                try (var query = connection.prepareStatement("SELECT schema FROM _collections WHERE name = ?")) {
+                    query.setString(1, collectionName);
+                    try (var result = query.executeQuery()) {
+                        assertTrue(result.next());
+                        rawSchema = result.getString(1);
+                    }
+                }
+                ArrayNode fields = (ArrayNode) mapper.readTree(rawSchema);
+                downgradeAuthSystemFields(fields);
+                try (var update = connection.prepareStatement("UPDATE _collections SET schema = ? WHERE name = ?")) {
+                    update.setString(1, mapper.writeValueAsString(fields));
+                    update.setString(2, collectionName);
+                    update.executeUpdate();
+                }
+                try (var statement = connection.createStatement()) {
+                    statement.execute("ALTER TABLE \"legacy_auth_fields\" DROP COLUMN \"emailVisibility\"");
+                }
+            }
+            return;
+        }
+
+        Path schemaFile = tempDir.resolve("pb_schema.json");
+        ObjectNode root = (ObjectNode) mapper.readTree(schemaFile.toFile());
+        for (JsonNode collection : root.withArray("collections")) {
+            if (collectionName.equals(collection.path("name").asText())) {
+                downgradeAuthSystemFields((ArrayNode) collection.get("fields"));
+            }
+        }
+        mapper.writerWithDefaultPrettyPrinter().writeValue(schemaFile.toFile(), root);
+
+        Path recordsFile = tempDir.resolve("records").resolve(collectionId + ".jsonl");
+        List<String> downgradedRecords = new java.util.ArrayList<>();
+        for (String line : Files.readAllLines(recordsFile, StandardCharsets.UTF_8)) {
+            ObjectNode record = (ObjectNode) mapper.readTree(line);
+            record.remove("emailVisibility");
+            downgradedRecords.add(mapper.writeValueAsString(record));
+        }
+        Files.write(recordsFile, downgradedRecords, StandardCharsets.UTF_8);
+    }
+
+    private void downgradeSystemCollectionIdsFixture() throws Exception {
+        Map<String, String> replacements = Map.of(
+                SystemCollections.SUPERUSERS_ID, SystemCollections.LEGACY_SUPERUSERS_ID,
+                SystemCollections.MFAS_ID, SystemCollections.LEGACY_MFAS_ID,
+                SystemCollections.OTPS_ID, SystemCollections.LEGACY_OTPS_ID,
+                SystemCollections.EXTERNAL_AUTHS_ID, SystemCollections.LEGACY_EXTERNAL_AUTHS_ID,
+                SystemCollections.AUTH_ORIGINS_ID, SystemCollections.LEGACY_AUTH_ORIGINS_ID
+        );
+        Path database = tempDir.resolve("pocketbase.db");
+        if (Files.exists(database)) {
+            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath())) {
+                connection.setAutoCommit(false);
+                for (Map.Entry<String, String> replacement : replacements.entrySet()) {
+                    for (String table : List.of("_authOrigins", "_externalAuths", "_mfas", "_otps")) {
+                        try (var update = connection.prepareStatement(
+                                "UPDATE \"" + table + "\" SET collectionRef = ? WHERE collectionRef = ?")) {
+                            update.setString(1, replacement.getValue());
+                            update.setString(2, replacement.getKey());
+                            update.executeUpdate();
+                        }
+                    }
+                    try (var update = connection.prepareStatement(
+                            "UPDATE _authRequests SET collectionId = ? WHERE collectionId = ?")) {
+                        update.setString(1, replacement.getValue());
+                        update.setString(2, replacement.getKey());
+                        update.executeUpdate();
+                    }
+                }
+
+                List<Map<String, String>> collections = new java.util.ArrayList<>();
+                try (var query = connection.prepareStatement("SELECT id, schema FROM _collections");
+                     var results = query.executeQuery()) {
+                    while (results.next()) {
+                        collections.add(Map.of(
+                                "id", results.getString(1),
+                                "schema", results.getString(2) == null ? "" : results.getString(2)
+                        ));
+                    }
+                }
+                for (Map<String, String> collection : collections) {
+                    String schema = collection.get("schema");
+                    if (!schema.isBlank()) {
+                        JsonNode migrated = replaceJsonStrings(mapper.readTree(schema), replacements);
+                        try (var update = connection.prepareStatement("UPDATE _collections SET schema = ? WHERE id = ?")) {
+                            update.setString(1, mapper.writeValueAsString(migrated));
+                            update.setString(2, collection.get("id"));
+                            update.executeUpdate();
+                        }
+                    }
+                }
+                for (Map.Entry<String, String> replacement : replacements.entrySet()) {
+                    try (var update = connection.prepareStatement("UPDATE _collections SET id = ? WHERE id = ?")) {
+                        update.setString(1, replacement.getValue());
+                        update.setString(2, replacement.getKey());
+                        update.executeUpdate();
+                    }
+                }
+                connection.commit();
+            }
+        } else {
+            Path schemaFile = tempDir.resolve("pb_schema.json");
+            JsonNode schema = replaceJsonStrings(mapper.readTree(schemaFile.toFile()), replacements);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(schemaFile.toFile(), schema);
+
+            for (String filename : List.of(
+                    "auth_origins.json",
+                    "external_auths.json",
+                    "mfas.json",
+                    "otps.json",
+                    "auth_requests.json"
+            )) {
+                Path path = tempDir.resolve(filename);
+                if (Files.exists(path)) {
+                    JsonNode records = replaceJsonStrings(mapper.readTree(path.toFile()), replacements);
+                    mapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), records);
+                }
+            }
+            for (Map.Entry<String, String> replacement : replacements.entrySet()) {
+                for (String extension : List.of(".jsonl", ".json")) {
+                    Path source = tempDir.resolve("records").resolve(replacement.getKey() + extension);
+                    if (!Files.exists(source)) {
+                        continue;
+                    }
+                    JsonNode records;
+                    if (".jsonl".equals(extension)) {
+                        ArrayNode lines = mapper.createArrayNode();
+                        for (String line : Files.readAllLines(source, StandardCharsets.UTF_8)) {
+                            if (!line.isBlank()) {
+                                lines.add(replaceJsonStrings(mapper.readTree(line), replacements));
+                            }
+                        }
+                        Path target = source.resolveSibling(replacement.getValue() + extension);
+                        List<String> migrated = new java.util.ArrayList<>();
+                        lines.forEach(record -> migrated.add(record.toString()));
+                        Files.write(target, migrated, StandardCharsets.UTF_8);
+                        Files.delete(source);
+                    } else {
+                        records = replaceJsonStrings(mapper.readTree(source.toFile()), replacements);
+                        Path target = source.resolveSibling(replacement.getValue() + extension);
+                        mapper.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), records);
+                        Files.delete(source);
+                    }
+                }
+            }
+        }
+
+        for (Map.Entry<String, String> replacement : replacements.entrySet()) {
+            Path source = tempDir.resolve("storage").resolve(replacement.getKey());
+            if (Files.exists(source)) {
+                Files.move(source, source.resolveSibling(replacement.getValue()));
+            }
+        }
+    }
+
+    private JsonNode replaceJsonStrings(JsonNode value, Map<String, String> replacements) {
+        if (value == null || value.isNull()) {
+            return value;
+        }
+        if (value.isTextual()) {
+            String replacement = replacements.get(value.asText());
+            return replacement == null ? value : mapper.getNodeFactory().textNode(replacement);
+        }
+        if (value.isArray()) {
+            ArrayNode copy = value.deepCopy();
+            for (int i = 0; i < copy.size(); i++) {
+                copy.set(i, replaceJsonStrings(copy.get(i), replacements));
+            }
+            return copy;
+        }
+        if (value.isObject()) {
+            ObjectNode copy = value.deepCopy();
+            List<String> names = new java.util.ArrayList<>();
+            copy.fieldNames().forEachRemaining(names::add);
+            for (String name : names) {
+                copy.set(name, replaceJsonStrings(copy.get(name), replacements));
+            }
+            return copy;
+        }
+        return value;
+    }
+
+    private void downgradeAuthSystemFields(ArrayNode fields) {
+        List<String> removed = List.of("id", "tokenKey", "emailVisibility");
+        for (int i = fields.size() - 1; i >= 0; i--) {
+            JsonNode field = fields.get(i);
+            String name = field.path("name").asText();
+            if (removed.contains(name)) {
+                fields.remove(i);
+            } else if (List.of("password", "email", "verified").contains(name)) {
+                ((ObjectNode) field).put("system", false);
+            }
+        }
+    }
+
     private List<String> providerNames(JsonNode providers) {
         List<String> names = new java.util.ArrayList<>();
         providers.forEach(provider -> names.add(provider.get("name").asText()));
@@ -3453,6 +8047,9 @@ class LocalPocketBaseServerTest {
     private record MultipartFile(String name, String contentType, byte[] bytes) {
     }
 
+    private record RawHttpResponse(int status, String body) {
+    }
+
     private record SseEvent(String event, String data) {
     }
 
@@ -3482,7 +8079,7 @@ class LocalPocketBaseServerTest {
         }
 
         String message() throws InterruptedException {
-            assertTrue(messageReceived.await(5, TimeUnit.SECONDS));
+            assertTrue(messageReceived.await(15, TimeUnit.SECONDS));
             return message.get();
         }
 
@@ -3553,7 +8150,8 @@ class LocalPocketBaseServerTest {
                       "sub":"oauth-sub-123",
                       "email":"oidc@example.com",
                       "name":"OIDC User",
-                      "preferred_username":"oidc-user"
+                      "preferred_username":"oidc-user",
+                      "picture":"https://cdn.example.com/avatar.png"
                     }
                     """);
         }

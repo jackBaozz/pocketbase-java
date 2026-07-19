@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
+import io.github.jackbaozz.pocketbase.server.internal.BackupOperationGuard;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.spi.FileStorageProvider;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -44,16 +46,17 @@ public class BackupRepository extends BaseRepository {
     private static final String SNAPSHOT_ENTRY = "relational-backup.json";
 
     private final Path dataDir;
+    private final BackupOperationGuard backupOperations = new BackupOperationGuard();
 
     public BackupRepository(JooqDatabase database, ObjectMapper mapper, Path dataDir) {
         super(database, mapper);
         this.dataDir = dataDir;
     }
 
-    public Map<String, Object> listBackups(int page, int perPage) {
+    public List<Map<String, Object>> listBackups() {
         Optional<FileStorageProvider> s3 = backupS3Provider();
         if (s3.isPresent()) {
-            return listS3Backups(s3.get(), page, perPage);
+            return listS3Backups(s3.get());
         }
         try {
             Path backupsDir = dataDir.resolve("backups");
@@ -65,34 +68,43 @@ public class BackupRepository extends BaseRepository {
                             try {
                                 Map<String, Object> item = new LinkedHashMap<>();
                                 item.put("key", p.getFileName().toString());
-                                item.put("name", p.getFileName().toString());
                                 item.put("size", Files.size(p));
-                                item.put("modified", Files.getLastModifiedTime(p).toMillis());
+                                item.put("modified", Files.getLastModifiedTime(p).toInstant().toString());
                                 items.add(item);
                             } catch (IOException ignored) {
                             }
                         });
             }
-            items.sort((a, b) -> Long.compare((long) b.get("modified"), (long) a.get("modified")));
-            return Map.of("items", items, "page", 1, "perPage", 100, "totalItems", items.size(), "totalPages", 1);
+            items.sort((a, b) -> String.valueOf(b.get("modified")).compareTo(String.valueOf(a.get("modified"))));
+            return items;
         } catch (IOException e) {
-            return Map.of("items", List.of(), "page", 1, "perPage", 100, "totalItems", 0, "totalPages", 0);
+            return List.of();
         }
     }
 
+    public boolean canBackup() {
+        return backupOperations.available();
+    }
+
     public void deleteBackup(String key) {
+        if (backupOperations.active(key)) {
+            throw new ApiException(400, "The backup is currently being used and cannot be deleted.");
+        }
         Optional<FileStorageProvider> s3 = backupS3Provider();
         if (s3.isPresent()) {
             validateBackupKey(key);
             if (s3.get().stat(key).isEmpty()) {
-                throw new ApiException(404, "Backup not found.");
+                throw new ApiException(400, "Invalid or already deleted backup file.");
             }
             s3.get().delete(key);
             deleteCachedS3Backup(key);
             return;
         }
         try {
-            Path backup = backupFileRequired(key);
+            Path backup = backupFile(key);
+            if (backup == null) {
+                throw new ApiException(400, "Invalid or already deleted backup file.");
+            }
             Files.delete(backup);
         } catch (ApiException e) {
             throw e;
@@ -102,30 +114,29 @@ public class BackupRepository extends BaseRepository {
     }
 
     public Map<String, Object> restoreBackup(String key) {
-        Path backup = backupFileRequired(key);
-        Map<String, Object> snapshot = readSnapshot(backup);
-        validateStorageEntries(backup);
-        database.transactional(() -> {
-            restoreDatabase(snapshot);
-            return null;
+        if (backupFile(key) == null) {
+            throw new ApiException(400, "Missing or invalid backup file.");
+        }
+        return backupOperations.run(key, () -> {
+            Path backup = backupFileRequired(key);
+            Map<String, Object> snapshot = readSnapshot(backup);
+            validateStorageEntries(backup);
+            database.transactional(() -> {
+                restoreDatabase(snapshot);
+                return null;
+            });
+            restoreStorageFiles(backup);
+            return Map.of("restored", key);
         });
-        restoreStorageFiles(backup);
-        return Map.of("restored", key);
     }
 
     public Map<String, Object> createBackup(JsonNode body) {
-        try {
-            String name;
-            if (body != null && body.has("name") && !body.get("name").isNull() && !body.get("name").asText().isBlank()) {
-                name = body.get("name").asText().trim();
-                if (!name.matches("^(@auto_pb_backup_)?[a-z0-9_-]+\\.zip$")) {
-                    throw new ApiException(400, "Invalid backup name. Must match: [a-z0-9_-].zip",
-                            ApiErrors.fieldError("name", "validation_invalid_format", "Must be in the format [a-z0-9_-].zip"));
-                }
-            } else {
-                name = "pb_backup_" + Instant.now().toString().replace(":", "-").replace(".", "-") + ".zip";
-            }
+        String name = createBackupName(body);
+        return backupOperations.run(name, () -> createBackup(name));
+    }
 
+    private Map<String, Object> createBackup(String name) {
+        try {
             Optional<FileStorageProvider> s3 = backupS3Provider();
             if (s3.isPresent()) {
                 if (s3.get().stat(name).isPresent()) {
@@ -155,13 +166,16 @@ public class BackupRepository extends BaseRepository {
                         ApiErrors.notUniqueField("name"));
             }
 
-            writeBackupZip(backupFile);
+            Path temporary = Files.createTempFile(backupsDir, ".create-backup-", ".tmp");
+            try {
+                writeBackupZip(temporary);
+                publishBackup(temporary, backupFile);
+                temporary = null;
+            } finally {
+                deleteTemporaryBackup(temporary);
+            }
 
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("key", name);
-            result.put("size", Files.size(backupFile));
-            result.put("modified", Files.getLastModifiedTime(backupFile).toMillis());
-            return result;
+            return backupItem(name, Files.size(backupFile), Files.getLastModifiedTime(backupFile).toMillis());
         } catch (ApiException e) {
             throw e;
         } catch (IOException e) {
@@ -173,7 +187,7 @@ public class BackupRepository extends BaseRepository {
         if (bytes == null || bytes.length == 0) {
             throw new ApiException(400, "Backup file is required.", ApiErrors.requiredField("file"));
         }
-        Path backupFile = null;
+        Path temporary = null;
         try {
             Optional<FileStorageProvider> s3 = backupS3Provider();
             if (s3.isPresent()) {
@@ -181,15 +195,8 @@ public class BackupRepository extends BaseRepository {
                 if (s3.get().stat(name).isPresent()) {
                     throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
                 }
-                Path temp = Files.createTempFile(dataDir, ".upload-backup-", ".zip");
-                try {
-                    Files.write(temp, bytes, StandardOpenOption.TRUNCATE_EXISTING);
-                    validateBackupZip(temp);
-                    s3.get().put(name, new ByteArrayInputStream(bytes), bytes.length, "application/zip");
-                    return s3BackupItem(s3.get(), name).orElseGet(() -> backupItem(name, bytes.length, Instant.now().toEpochMilli()));
-                } finally {
-                    Files.deleteIfExists(temp);
-                }
+                s3.get().put(name, new ByteArrayInputStream(bytes), bytes.length, "application/zip");
+                return s3BackupItem(s3.get(), name).orElseGet(() -> backupItem(name, bytes.length, Instant.now().toEpochMilli()));
             }
 
             Path backupsDir = dataDir.resolve("backups");
@@ -201,32 +208,36 @@ public class BackupRepository extends BaseRepository {
             if (Files.exists(targetBackupFile)) {
                 throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
             }
-            backupFile = targetBackupFile;
-            Files.write(backupFile, bytes, StandardOpenOption.CREATE_NEW);
-            validateBackupZip(backupFile);
-
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("key", name);
-            result.put("size", bytes.length);
-            result.put("modified", Files.getLastModifiedTime(backupFile).toMillis());
-            return result;
+            temporary = Files.createTempFile(backupsDir, ".upload-backup-", ".tmp");
+            Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING);
+            publishBackup(temporary, targetBackupFile);
+            temporary = null;
+            return backupItem(name, bytes.length, Files.getLastModifiedTime(targetBackupFile).toMillis());
         } catch (ApiException e) {
-            deleteUploadedBackupIfPresent(backupFile);
             throw e;
         } catch (IOException e) {
-            deleteUploadedBackupIfPresent(backupFile);
             throw new ApiException(400, "Failed to upload backup: " + e.getMessage());
+        } finally {
+            deleteTemporaryBackup(temporary);
         }
     }
 
-    private void deleteUploadedBackupIfPresent(Path backupFile) {
-        if (backupFile == null) {
+    private void deleteTemporaryBackup(Path temporary) {
+        if (temporary == null) {
             return;
         }
         try {
-            Files.deleteIfExists(backupFile);
+            Files.deleteIfExists(temporary);
         } catch (IOException ignored) {
             // best effort cleanup for rejected uploads
+        }
+    }
+
+    private void publishBackup(Path temporary, Path target) throws IOException {
+        try {
+            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, target);
         }
     }
 
@@ -261,7 +272,7 @@ public class BackupRepository extends BaseRepository {
     }
 
     private void writeBackupZip(Path backupFile) throws IOException {
-        try (OutputStream output = Files.newOutputStream(backupFile, StandardOpenOption.CREATE_NEW)) {
+        try (OutputStream output = Files.newOutputStream(backupFile, StandardOpenOption.TRUNCATE_EXISTING)) {
             writeBackupZip(output);
         }
     }
@@ -276,14 +287,14 @@ public class BackupRepository extends BaseRepository {
         }
     }
 
-    private Map<String, Object> listS3Backups(FileStorageProvider provider, int page, int perPage) {
+    private List<Map<String, Object>> listS3Backups(FileStorageProvider provider) {
         List<Map<String, Object>> items = provider.list("").stream()
                 .filter(name -> name.endsWith(".zip"))
                 .filter(name -> !name.contains("/") && !name.contains("\\"))
                 .map(name -> s3BackupItem(provider, name).orElseGet(() -> backupItem(name, 0L, 0L)))
-                .sorted((left, right) -> Long.compare((long) right.get("modified"), (long) left.get("modified")))
+                .sorted((left, right) -> String.valueOf(right.get("modified")).compareTo(String.valueOf(left.get("modified"))))
                 .collect(Collectors.toCollection(ArrayList::new));
-        return pagedBackupItems(items, page, perPage);
+        return items;
     }
 
     private Optional<Map<String, Object>> s3BackupItem(FileStorageProvider provider, String name) {
@@ -293,26 +304,24 @@ public class BackupRepository extends BaseRepository {
     private Map<String, Object> backupItem(String name, long size, long modified) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("key", name);
-        result.put("name", name);
         result.put("size", size);
-        result.put("modified", modified);
+        result.put("modified", Instant.ofEpochMilli(Math.max(0L, modified)).toString());
         return result;
     }
 
-    private Map<String, Object> pagedBackupItems(List<Map<String, Object>> items, int page, int perPage) {
-        int safePage = Math.max(1, page);
-        int safePerPage = Math.max(1, perPage);
-        int total = items.size();
-        int from = Math.min(total, (safePage - 1) * safePerPage);
-        int to = Math.min(total, from + safePerPage);
-        int totalPages = (int) Math.ceil((double) total / safePerPage);
-        return Map.of(
-                "items", items.subList(from, to),
-                "page", safePage,
-                "perPage", safePerPage,
-                "totalItems", total,
-                "totalPages", totalPages
-        );
+    private String createBackupName(JsonNode body) {
+        if (body == null || !body.hasNonNull("name") || body.get("name").asText().isBlank()) {
+            return "pb_backup_" + Instant.now().toString().replaceAll("[^0-9]", "") + ".zip";
+        }
+        String name = body.get("name").asText().trim();
+        if (name.length() > 150 || !name.matches("^(@auto_pb_backup_)?[a-z0-9_-]+\\.zip$")) {
+            throw new ApiException(
+                    400,
+                    "An error occurred while validating the submitted data.",
+                    ApiErrors.fieldError("name", "validation_match_invalid", "Must be in a valid format.")
+            );
+        }
+        return name;
     }
 
     private String sanitizedBackupName(String filename) {
@@ -598,7 +607,10 @@ public class BackupRepository extends BaseRepository {
         String name = String.valueOf(object.get("name"));
         validateSqlIdentifier(name);
         String sql = String.valueOf(object.get("sql")).trim();
-        if (!sql.toUpperCase(java.util.Locale.ROOT).startsWith(expectedPrefix)) {
+        String normalizedSql = sql.toUpperCase(java.util.Locale.ROOT);
+        boolean allowed = normalizedSql.startsWith(expectedPrefix)
+                || ("CREATE INDEX".equals(expectedPrefix) && normalizedSql.startsWith("CREATE UNIQUE INDEX"));
+        if (!allowed) {
             throw invalidBackupArchive();
         }
         stmt.execute(sql);

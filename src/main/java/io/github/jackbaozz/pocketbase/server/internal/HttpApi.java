@@ -4,10 +4,12 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.file.Files;
@@ -25,6 +27,13 @@ import java.util.Optional;
  * HTTP surface that mirrors the most common PocketBase API and serves the admin UI.
  */
 public final class HttpApi implements HttpHandler {
+    private static final long DEFAULT_MAX_BODY_SIZE = 32L << 20;
+    private static final String BODY_LIMIT_ATTRIBUTE = "pocketbase.bodyLimit";
+    private static final String SETTINGS_ATTRIBUTE = "pocketbase.settings";
+    private static final int REALTIME_CLIENT_ID_MAX_LENGTH = 255;
+    private static final int REALTIME_SUBSCRIPTIONS_MAX_COUNT = 1000;
+    private static final int REALTIME_SUBSCRIPTION_MAX_LENGTH = 2500;
+
     public record Route(String method, String path) {}
 
     public static final List<Route> REGISTERED_ROUTES = List.of(
@@ -93,6 +102,7 @@ public final class HttpApi implements HttpHandler {
 
     private final StorageEngine store;
     private final RealtimeHub realtimeHub;
+    private final HttpRateLimiter rateLimiter = new HttpRateLimiter();
 
     public HttpApi(StorageEngine store, RealtimeHub realtimeHub) {
         this.store = store;
@@ -107,6 +117,26 @@ public final class HttpApi implements HttpHandler {
         long started = System.nanoTime();
         try {
             addCommonHeaders(exchange);
+            boolean adminRoute = path.equals("/") || path.equals("/_/") || path.startsWith("/_/");
+            RequestPrincipal requestPrincipal = principal(exchange).orElse(null);
+            Map<String, Object> settings = !adminRoute || requestPrincipal != null
+                    ? store.getSettings(Map.of())
+                    : Map.of();
+            exchange.setAttribute(SETTINGS_ATTRIBUTE, settings);
+            if (!HttpIpPolicy.superuserAllowed(exchange, settings, requestPrincipal)) {
+                throw new ApiException(403, "You are not allowed to perform this request.");
+            }
+            if (!adminRoute) {
+                RateLimitContext rateContext = rateLimitContext(path, method);
+                rateLimiter.check(
+                        exchange,
+                        settings,
+                        requestPrincipal,
+                        rateContext.labels(),
+                        rateContext.limiterId()
+                );
+                enforceBodyLimit(exchange, requestBodyLimit(path, method));
+            }
             if ("OPTIONS".equals(method)) {
                 status = 204;
                 sendNoContent(exchange);
@@ -129,7 +159,10 @@ public final class HttpApi implements HttpHandler {
                 return;
             }
             if (path.equals("/api/realtime") && "GET".equals(method)) {
-                realtimeHub.connect(exchange);
+                realtimeHub.connect(
+                        exchange,
+                        HttpIpPolicy.realIp(exchange, HttpIpPolicy.section(requestSettings(exchange), "trustedProxy"))
+                );
                 return;
             }
             if (path.equals("/ping") && "GET".equals(method)) {
@@ -139,12 +172,13 @@ public final class HttpApi implements HttpHandler {
             }
             if (path.startsWith("/api/")) {
                 Object response = routeApi(exchange, path);
+                enforceSuperuserAuthResponseIp(exchange, response);
                 if (response == NoContent.INSTANCE) {
                     status = 204;
                     sendNoContent(exchange);
-                } else if (response instanceof HtmlResponse html) {
-                    status = html.status();
-                    sendBytes(exchange, html.status(), html.body(), html.contentType());
+                } else if (response instanceof RedirectResponse redirect) {
+                    status = redirect.status();
+                    sendRedirect(exchange, redirect.status(), redirect.location());
                 } else {
                     status = 200;
                     sendJson(exchange, 200, response);
@@ -181,19 +215,206 @@ public final class HttpApi implements HttpHandler {
         }
     }
 
+    private RateLimitContext rateLimitContext(String path, String method) {
+        List<String> defaults = List.of(method + " " + path, path);
+        List<String> parts = segments(path);
+        String collection = null;
+        List<String> actions = List.of();
+
+        if (parts.size() >= 4 && "api".equals(parts.get(0)) && "collections".equals(parts.get(1))) {
+            collection = parts.get(2);
+            String action = parts.get(3);
+            if ("records".equals(action)) {
+                if (parts.size() == 4) {
+                    actions = switch (method) {
+                        case "GET" -> List.of("list");
+                        case "POST" -> List.of("create");
+                        default -> List.of();
+                    };
+                } else if (parts.size() == 5) {
+                    actions = switch (method) {
+                        case "GET" -> List.of("view");
+                        case "PATCH" -> List.of("update");
+                        case "DELETE" -> List.of("delete");
+                        default -> List.of();
+                    };
+                }
+            } else {
+                actions = authRateLimitActions(action, method);
+            }
+        } else if (parts.size() >= 5 && "api".equals(parts.get(0)) && "files".equals(parts.get(1))) {
+            collection = parts.get(2);
+            actions = List.of("file");
+        }
+
+        if (collection == null || actions.isEmpty()) {
+            return new RateLimitContext(defaults, "default");
+        }
+        try {
+            Map<String, Object> info = store.getCollection(collection, Map.of("fields", "id,name"));
+            String collectionName = String.valueOf(info.getOrDefault("name", collection));
+            String collectionId = String.valueOf(info.getOrDefault("id", collection));
+            List<String> labels = new ArrayList<>();
+            actions.forEach(action -> labels.add(collectionName + ":" + action));
+            actions.forEach(action -> labels.add("*:" + action));
+            labels.addAll(defaults);
+            return new RateLimitContext(labels, collectionId + '|' + String.join(",", actions));
+        } catch (ApiException ignored) {
+            return new RateLimitContext(defaults, "default");
+        }
+    }
+
+    private List<String> authRateLimitActions(String action, String method) {
+        if (!"GET".equals(method) && !"POST".equals(method)) {
+            return List.of();
+        }
+        return switch (action) {
+            case "auth-methods" -> List.of("listAuthMethods");
+            case "auth-refresh" -> List.of("authRefresh");
+            case "auth-with-password" -> List.of("authWithPassword", "auth");
+            case "auth-with-oauth2" -> List.of("authWithOAuth2", "auth");
+            case "request-otp" -> List.of("requestOTP");
+            case "auth-with-otp" -> List.of("authWithOTP", "auth");
+            case "request-password-reset" -> List.of("requestPasswordReset");
+            case "confirm-password-reset" -> List.of("confirmPasswordReset");
+            case "request-verification" -> List.of("requestVerification");
+            case "confirm-verification" -> List.of("confirmVerification");
+            case "request-email-change" -> List.of("requestEmailChange");
+            case "confirm-email-change" -> List.of("confirmEmailChange");
+            default -> List.of();
+        };
+    }
+
+    private long requestBodyLimit(String path, String method) {
+        if (unlimitedBodyRoute(path, method)) {
+            return Long.MAX_VALUE;
+        }
+        if (!"POST".equals(method) && !"PATCH".equals(method)) {
+            return DEFAULT_MAX_BODY_SIZE;
+        }
+        List<String> parts = segments(path);
+        if (parts.size() < 4
+                || !"api".equals(parts.get(0))
+                || !"collections".equals(parts.get(1))
+                || !"records".equals(parts.get(3))) {
+            return DEFAULT_MAX_BODY_SIZE;
+        }
+        try {
+            Map<String, Object> collection = store.getCollection(parts.get(2), Map.of());
+        return collectionBodyLimit(collection);
+        } catch (ApiException ignored) {
+            return DEFAULT_MAX_BODY_SIZE;
+        }
+    }
+
+    static boolean unlimitedBodyRoute(String path, String method) {
+        return "POST".equals(method) && "/api/backups/upload".equals(path);
+    }
+
+    static long collectionBodyLimit(Map<String, Object> collection) {
+        if (collection == null || "view".equals(collection.get("type"))) {
+            return DEFAULT_MAX_BODY_SIZE;
+        }
+        long limit = DEFAULT_MAX_BODY_SIZE;
+        Object fields = collection.get("fields");
+        if (fields instanceof List<?> list) {
+            for (Object raw : list) {
+                if (raw instanceof Map<?, ?> field) {
+                    limit = safeBodyLimitAdd(limit, fieldBodyAllowance(field));
+                }
+            }
+        }
+        return limit;
+    }
+
+    private static long fieldBodyAllowance(Map<?, ?> field) {
+        Object rawType = field.get("type");
+        String type = String.valueOf(rawType == null ? "" : rawType).toLowerCase(Locale.ROOT);
+        if (!"file".equals(type) && !"json".equals(type) && !"editor".equals(type)) {
+            return 0L;
+        }
+        long fallback = "json".equals(type) ? 1L << 20 : 5L << 20;
+        long maxSize = positiveLong(field.get("maxSize"), 0L);
+        Object options = field.get("options");
+        if (maxSize <= 0 && options instanceof Map<?, ?> map) {
+            maxSize = positiveLong(map.get("maxSize"), 0L);
+        }
+        if (maxSize <= 0) {
+            maxSize = fallback;
+        }
+        if (!"file".equals(type)) {
+            return maxSize;
+        }
+        long maxSelect = positiveLong(field.get("maxSelect"), 0L);
+        if (maxSelect <= 0) {
+            maxSelect = positiveLong(field.get("maxFiles"), 0L);
+        }
+        if (maxSelect <= 0 && options instanceof Map<?, ?> map) {
+            maxSelect = positiveLong(map.get("maxSelect"), 0L);
+            if (maxSelect <= 0) {
+                maxSelect = positiveLong(map.get("maxFiles"), 0L);
+            }
+        }
+        return safeBodyLimitMultiply(maxSize, Math.max(1L, maxSelect));
+    }
+
+    private void enforceBodyLimit(HttpExchange exchange, long limit) {
+        exchange.setAttribute(BODY_LIMIT_ATTRIBUTE, limit);
+        String contentLength = exchange.getRequestHeaders().getFirst("Content-Length");
+        if (contentLength == null || contentLength.isBlank()) {
+            return;
+        }
+        try {
+            if (Long.parseLong(contentLength) > limit) {
+                throw new ApiException(413, "Request entity too large");
+            }
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    private static long positiveLong(Object value, long fallback) {
+        if (value instanceof Number number) {
+            return Math.max(0L, number.longValue());
+        }
+        try {
+            return Math.max(0L, Long.parseLong(String.valueOf(value)));
+        } catch (RuntimeException e) {
+            return fallback;
+        }
+    }
+
+    private static long safeBodyLimitAdd(long left, long right) {
+        if (right > Long.MAX_VALUE - left) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
+    private static long safeBodyLimitMultiply(long left, long right) {
+        if (left > 0 && right > Long.MAX_VALUE / left) {
+            return Long.MAX_VALUE;
+        }
+        return left * right;
+    }
+
+    private record RateLimitContext(List<String> labels, String limiterId) {
+    }
+
     private Object routeApi(HttpExchange exchange, String path) throws IOException {
         String method = exchange.getRequestMethod();
         List<String> segments = segments(path);
         Map<String, String> query = query(exchange);
+        RuleRequestContext ruleRequest = RuleRequestContext.of(query, requestHeaders(exchange));
 
-        if (segments.size() == 2 && "health".equals(segments.get(1)) && "GET".equals(method)) {
-            return store.health();
+        if (segments.size() == 2 && "health".equals(segments.get(1))
+                && ("GET".equals(method) || "HEAD".equals(method))) {
+            return healthResponse(exchange, principal(exchange).orElse(null));
         }
         if (segments.size() == 2 && "realtime".equals(segments.get(1)) && "POST".equals(method)) {
             return subscribeRealtime(exchange, query);
         }
         if (segments.size() == 2 && "batch".equals(segments.get(1)) && "POST".equals(method)) {
-            return handleBatch(exchange, principal(exchange).orElse(null));
+            return handleBatch(exchange, principal(exchange).orElse(null), requestHeaders(exchange));
         }
         if (segments.size() == 2 && "sql".equals(segments.get(1)) && "POST".equals(method)) {
             RequestPrincipal principal = principal(exchange).orElse(null);
@@ -202,7 +423,7 @@ public final class HttpApi implements HttpHandler {
         }
         if (segments.size() == 2 && "oauth2-redirect".equals(segments.get(1))
                 && ("GET".equals(method) || "POST".equals(method))) {
-            return oauth2RedirectPage(exchange);
+            return oauth2SubscriptionRedirect(exchange);
         }
         if (segments.size() >= 2 && "settings".equals(segments.get(1))) {
             RequestPrincipal principal = principal(exchange).orElse(null);
@@ -264,23 +485,33 @@ public final class HttpApi implements HttpHandler {
             RequestPrincipal principal = principal(exchange).orElse(null);
             requireSuperuser(principal);
             if (segments.size() == 2) {
-                return switch (method) {
-                    case "GET" -> store.listBackups(parsePositive(query.get("page"), 1), parsePositive(query.get("perPage"), 100));
-                    case "POST" -> createOrUploadBackup(exchange);
-                    default -> throw new ApiException(405, "Method not allowed.");
-                };
+                if ("GET".equals(method)) {
+                    return store.listBackups();
+                }
+                if ("POST".equals(method)) {
+                    createOrUploadBackup(exchange);
+                    return NoContent.INSTANCE;
+                }
+                throw new ApiException(405, "Method not allowed.");
             }
             if (segments.size() == 3 && "upload".equals(segments.get(2)) && "POST".equals(method)) {
-                return uploadBackup(exchange);
+                uploadBackup(exchange);
+                return NoContent.INSTANCE;
             }
             if (segments.size() == 3 && "DELETE".equals(method)) {
                 store.deleteBackup(segments.get(2));
                 return NoContent.INSTANCE;
             }
             if (segments.size() == 4 && "restore".equals(segments.get(3)) && "POST".equals(method)) {
-                return store.restoreBackup(segments.get(2));
+                requireBackupAvailable();
+                store.restoreBackup(segments.get(2));
+                return NoContent.INSTANCE;
             }
             throw new ApiException(404, "Not found.");
+        }
+        if (segments.size() == 3 && "bootstrap".equals(segments.get(1)) && "superuser".equals(segments.get(2))
+                && "GET".equals(method)) {
+            return Map.of("required", !store.hasSuperusers());
         }
         if (segments.size() == 3 && "bootstrap".equals(segments.get(1)) && "superuser".equals(segments.get(2))
                 && "POST".equals(method)) {
@@ -288,7 +519,8 @@ public final class HttpApi implements HttpHandler {
         }
         if (segments.size() == 3 && "admins".equals(segments.get(1)) && "auth-with-password".equals(segments.get(2))
                 && "POST".equals(method)) {
-            return store.authWithPassword(JsonFileStore.SUPERUSERS, readJson(exchange), query);
+            requireSuperuserAuthIp(exchange, JsonFileStore.SUPERUSERS);
+            return store.authWithPassword(JsonFileStore.SUPERUSERS, readJson(exchange), ruleRequest, authOriginContext(exchange));
         }
         if (segments.size() < 2 || !"collections".equals(segments.get(1))) {
             throw new ApiException(404, "Not found.");
@@ -303,7 +535,8 @@ public final class HttpApi implements HttpHandler {
                 }
                 case "POST" -> {
                     requireSuperuser(principal);
-                    yield store.createCollection(readJson(exchange));
+                    CollectionSchema created = store.createCollection(readJson(exchange));
+                    yield store.getCollection(created.id, query);
                 }
                 default -> throw new ApiException(405, "Method not allowed.");
             };
@@ -341,7 +574,8 @@ public final class HttpApi implements HttpHandler {
                 }
                 case "PATCH" -> {
                     requireSuperuser(principal);
-                    yield store.updateCollection(collection, readJson(exchange));
+                    CollectionSchema updated = store.updateCollection(collection, readJson(exchange));
+                    yield store.getCollection(updated.id, query);
                 }
                 case "DELETE" -> {
                     requireSuperuser(principal);
@@ -359,16 +593,19 @@ public final class HttpApi implements HttpHandler {
             return NoContent.INSTANCE;
         }
         if (segments.size() == 4 && "auth-with-password".equals(action) && "POST".equals(method)) {
-            return store.authWithPassword(collection, readJson(exchange), query);
+            requireSuperuserAuthIp(exchange, collection);
+            return store.authWithPassword(collection, readJson(exchange), ruleRequest, authOriginContext(exchange));
         }
         if (segments.size() == 4 && "request-otp".equals(action) && "POST".equals(method)) {
             return store.requestOtp(collection, readJson(exchange));
         }
         if (segments.size() == 4 && "auth-with-otp".equals(action) && "POST".equals(method)) {
-            return store.authWithOtp(collection, readJson(exchange), query);
+            requireSuperuserAuthIp(exchange, collection);
+            return store.authWithOtp(collection, readJson(exchange), ruleRequest, authOriginContext(exchange));
         }
         if (segments.size() == 4 && "auth-with-oauth2".equals(action) && "POST".equals(method)) {
-            return store.authWithOAuth2(collection, readJson(exchange), query, principal);
+            requireSuperuserAuthIp(exchange, collection);
+            return store.authWithOAuth2(collection, readJson(exchange), ruleRequest, principal, authOriginContext(exchange));
         }
         if (segments.size() == 4 && "auth-refresh".equals(action) && "POST".equals(method)) {
             return store.authRefresh(collection, principal, query);
@@ -408,19 +645,12 @@ public final class HttpApi implements HttpHandler {
             throw new ApiException(404, "Not found.");
         }
 
-        if (JsonFileStore.SUPERUSERS.equals(collection) && !"POST".equals(method)) {
-            requireSuperuser(principal);
-        }
-        if (JsonFileStore.SUPERUSERS.equals(collection) && "POST".equals(method)) {
-            requireSuperuser(principal);
-        }
-
         if (segments.size() == 4) {
             return switch (method) {
-                case "GET" -> store.listRecords(collection, query, principal);
+                case "GET" -> store.listRecords(collection, ruleRequest, principal);
                 case "POST" -> {
                     RecordInput input = readRecordInput(exchange);
-                    yield store.createRecord(collection, input.body(), input.files(), query, principal);
+                    yield store.createRecord(collection, input.body(), input.files(), ruleRequest, principal);
                 }
                 default -> throw new ApiException(405, "Method not allowed.");
             };
@@ -429,13 +659,13 @@ public final class HttpApi implements HttpHandler {
         if (segments.size() == 5) {
             String id = segments.get(4);
             return switch (method) {
-                case "GET" -> store.getRecord(collection, id, query, principal);
+                case "GET" -> store.getRecord(collection, id, ruleRequest, principal);
                 case "PATCH" -> {
                     RecordInput input = readRecordInput(exchange);
-                    yield store.updateRecord(collection, id, input.body(), input.files(), query, principal);
+                    yield store.updateRecord(collection, id, input.body(), input.files(), ruleRequest, principal);
                 }
                 case "DELETE" -> {
-                    store.deleteRecord(collection, id, principal);
+                    store.deleteRecord(collection, id, ruleRequest, principal);
                     yield NoContent.INSTANCE;
                 }
                 default -> throw new ApiException(405, "Method not allowed.");
@@ -448,7 +678,13 @@ public final class HttpApi implements HttpHandler {
     private Object subscribeRealtime(HttpExchange exchange, Map<String, String> query) throws IOException {
         RequestPrincipal principal = principal(exchange).orElse(null);
         RealtimeSubscriptionInput input = readRealtimeSubscriptionInput(exchange, query);
-        realtimeHub.subscribe(input.clientId(), input.subscriptions(), input.options(), principal);
+        realtimeHub.subscribe(
+                input.clientId(),
+                input.subscriptions(),
+                input.options(),
+                principal,
+                HttpIpPolicy.realIp(exchange, HttpIpPolicy.section(requestSettings(exchange), "trustedProxy"))
+        );
         return NoContent.INSTANCE;
     }
 
@@ -461,22 +697,21 @@ public final class HttpApi implements HttpHandler {
         collectRealtimeValues(query, values, subscriptions);
 
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        try (InputStream input = exchange.getRequestBody()) {
-            byte[] bytes = input.readAllBytes();
-            if (isMultipart(contentType)) {
-                MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
-                collectRealtimeJson(multipart.fields(), values, subscriptions);
-            } else if (isFormUrlEncoded(contentType)) {
-                collectRealtimeValues(query(new String(bytes, StandardCharsets.UTF_8)), values, subscriptions);
-            } else if (bytes.length > 0) {
-                collectRealtimeJson(store.mapper().readTree(bytes), values, subscriptions);
-            }
+        byte[] bytes = readRequestBytes(exchange);
+        if (isMultipart(contentType)) {
+            MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
+            collectRealtimeJson(multipart.fields(), values, subscriptions);
+        } else if (isFormUrlEncoded(contentType)) {
+            collectRealtimeValues(query(new String(bytes, StandardCharsets.UTF_8)), values, subscriptions);
+        } else if (bytes.length > 0) {
+            collectRealtimeJson(store.mapper().readTree(bytes), values, subscriptions);
         }
 
         String clientId = values.get("clientId");
         if (clientId == null || clientId.isBlank()) {
             throw new ApiException(400, "Failed to subscribe.", ApiErrors.requiredField("clientId"));
         }
+        validateRealtimeSubscriptionInput(clientId, subscriptions);
 
         Map<String, String> requestQuery = new LinkedHashMap<>();
         values.forEach((key, value) -> {
@@ -491,6 +726,35 @@ public final class HttpApi implements HttpHandler {
                 parsedOptions.headers()
         );
         return new RealtimeSubscriptionInput(clientId, List.copyOf(subscriptions), options);
+    }
+
+    private void validateRealtimeSubscriptionInput(String clientId, List<String> subscriptions) {
+        if (clientId.length() > REALTIME_CLIENT_ID_MAX_LENGTH) {
+            throw new ApiException(400, "Failed to subscribe.", ApiErrors.fieldError(
+                    "clientId",
+                    "validation_length_too_long",
+                    "The value must be no more than 255 characters."
+            ));
+        }
+        if (subscriptions.size() > REALTIME_SUBSCRIPTIONS_MAX_COUNT) {
+            throw new ApiException(400, "Failed to subscribe.", ApiErrors.fieldError(
+                    "subscriptions",
+                    "validation_length_too_long",
+                    "The list must contain no more than 1000 items."
+            ));
+        }
+        Map<String, Object> itemErrors = new LinkedHashMap<>();
+        for (int index = 0; index < subscriptions.size(); index++) {
+            if (subscriptions.get(index).length() > REALTIME_SUBSCRIPTION_MAX_LENGTH) {
+                itemErrors.put(String.valueOf(index), ApiErrors.validationError(
+                        "validation_length_too_long",
+                        "The value must be no more than 2500 characters."
+                ));
+            }
+        }
+        if (!itemErrors.isEmpty()) {
+            throw new ApiException(400, "Failed to subscribe.", Map.of("subscriptions", itemErrors));
+        }
     }
 
     private void collectRealtimeValues(
@@ -544,7 +808,7 @@ public final class HttpApi implements HttpHandler {
     }
 
     private void addSubscription(String value, List<String> subscriptions) {
-        if (value != null && !value.isBlank()) {
+        if (value != null) {
             subscriptions.add(value);
         }
     }
@@ -561,7 +825,11 @@ public final class HttpApi implements HttpHandler {
         return store.mapper().writeValueAsString(value);
     }
 
-    private Object handleBatch(HttpExchange exchange, RequestPrincipal principal) throws IOException {
+    private Object handleBatch(
+            HttpExchange exchange,
+            RequestPrincipal principal,
+            Map<String, String> baseHeaders
+    ) throws IOException {
         BatchInput input = readBatchInput(exchange);
         JsonNode body = input.body();
         JsonNode requestsNode = body.isArray() ? body : body.get("requests");
@@ -573,7 +841,7 @@ public final class HttpApi implements HttpHandler {
             int index = 0;
             for (JsonNode request : requestsNode) {
                 try {
-                    responses.add(handleBatchRequest(request, input.filesFor(index), principal));
+                    responses.add(handleBatchRequest(request, input.filesFor(index), principal, baseHeaders));
                 } catch (ApiException e) {
                     throw new ApiException(400, "Batch request failed.", Map.of(
                             "index", index,
@@ -582,34 +850,32 @@ public final class HttpApi implements HttpHandler {
                 }
                 index++;
             }
-            return Map.of("responses", responses);
+            return responses;
         });
     }
 
     private BatchInput readBatchInput(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        try (InputStream input = exchange.getRequestBody()) {
-            byte[] bytes = input.readAllBytes();
-            if (isMultipart(contentType)) {
-                MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
-                JsonNode payload = multipart.fields().get("@jsonPayload");
-                if (payload == null || payload.isNull()) {
-                    throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("@jsonPayload"));
-                }
-                JsonNode body;
-                try {
-                    body = payload.isTextual() ? store.mapper().readTree(payload.asText()) : payload;
-                } catch (JsonProcessingException e) {
-                    throw new ApiException(400, "Failed to process batch.",
-                            ApiErrors.invalidField("@jsonPayload", "Invalid JSON payload."));
-                }
-                return new BatchInput(body, batchFiles(multipart.files()));
+        byte[] bytes = readRequestBytes(exchange);
+        if (isMultipart(contentType)) {
+            MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
+            JsonNode payload = multipart.fields().get("@jsonPayload");
+            if (payload == null || payload.isNull()) {
+                throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("@jsonPayload"));
             }
-            if (bytes.length == 0) {
-                throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("requests"));
+            JsonNode body;
+            try {
+                body = payload.isTextual() ? store.mapper().readTree(payload.asText()) : payload;
+            } catch (JsonProcessingException e) {
+                throw new ApiException(400, "Failed to process batch.",
+                        ApiErrors.invalidField("@jsonPayload", "Invalid JSON payload."));
             }
-            return new BatchInput(store.mapper().readTree(bytes), Map.of());
+            return new BatchInput(body, batchFiles(multipart.files()));
         }
+        if (bytes.length == 0) {
+            throw new ApiException(400, "Failed to process batch.", ApiErrors.requiredField("requests"));
+        }
+        return new BatchInput(store.mapper().readTree(bytes), Map.of());
     }
 
     private Map<Integer, Map<String, List<UploadedFile>>> batchFiles(Map<String, List<UploadedFile>> files) {
@@ -667,7 +933,8 @@ public final class HttpApi implements HttpHandler {
     private Map<String, Object> handleBatchRequest(
             JsonNode request,
             Map<String, List<UploadedFile>> files,
-            RequestPrincipal principal
+            RequestPrincipal principal,
+            Map<String, String> baseHeaders
     ) {
         if (request == null || !request.isObject()) {
             throw new ApiException(400, "Batch request failed.", ApiErrors.invalidField("request", "Batch request must be an object."));
@@ -705,14 +972,28 @@ public final class HttpApi implements HttpHandler {
 
         int status;
         Object responseBody;
+        Map<String, String> headers = new LinkedHashMap<>(baseHeaders == null ? Map.of() : baseHeaders);
+        JsonNode requestHeaders = request.get("headers");
+        if (requestHeaders != null && requestHeaders.isObject()) {
+            requestHeaders.fields().forEachRemaining(entry -> {
+                if (!"authorization".equalsIgnoreCase(entry.getKey())) {
+                    headers.put(entry.getKey(), entry.getValue().isNull() ? "" : entry.getValue().asText(""));
+                }
+            });
+        }
+        RuleRequestContext ruleRequest = RuleRequestContext.of(
+                target.query(),
+                headers,
+                RuleRequestContext.BATCH
+        );
         if (segments.size() == 4) {
             switch (method) {
                 case "POST" -> {
-                    responseBody = store.createRecord(collection, body, files, target.query(), principal);
+                    responseBody = store.createRecord(collection, body, files, ruleRequest, principal);
                     status = 200;
                 }
                 case "PUT" -> {
-                    responseBody = store.upsertRecord(collection, null, body, files, target.query(), principal);
+                    responseBody = store.upsertRecord(collection, null, body, files, ruleRequest, principal);
                     status = 200;
                 }
                 default -> throw new ApiException(405, "Method not allowed.");
@@ -721,15 +1002,15 @@ public final class HttpApi implements HttpHandler {
             String id = segments.get(4);
             switch (method) {
                 case "PATCH" -> {
-                    responseBody = store.updateRecord(collection, id, body, files, target.query(), principal);
+                    responseBody = store.updateRecord(collection, id, body, files, ruleRequest, principal);
                     status = 200;
                 }
                 case "PUT" -> {
-                    responseBody = store.upsertRecord(collection, id, body, files, target.query(), principal);
+                    responseBody = store.upsertRecord(collection, id, body, files, ruleRequest, principal);
                     status = 200;
                 }
                 case "DELETE" -> {
-                    store.deleteRecord(collection, id, principal);
+                    store.deleteRecord(collection, id, ruleRequest, principal);
                     responseBody = null;
                     status = 204;
                 }
@@ -752,21 +1033,36 @@ public final class HttpApi implements HttpHandler {
         return new BatchTarget(segments(normalizePath(uri.getPath())), query(uri.getRawQuery()));
     }
 
-    private Object createOrUploadBackup(HttpExchange exchange) throws IOException {
+    private void createOrUploadBackup(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
         if (isMultipart(contentType)) {
-            return uploadBackup(exchange);
+            uploadBackup(exchange);
+            return;
         }
-        return store.createBackup(readJson(exchange));
+        requireBackupAvailable();
+        store.createBackup(readJson(exchange));
     }
 
-    private Object uploadBackup(HttpExchange exchange) throws IOException {
+    private void uploadBackup(HttpExchange exchange) throws IOException {
         RecordInput input = readRecordInput(exchange);
         UploadedFile file = input.files().values().stream()
                 .flatMap(List::stream)
                 .findFirst()
                 .orElseThrow(() -> new ApiException(400, "Backup file is required.", ApiErrors.requiredField("file")));
-        return store.uploadBackup(file.originalFilename(), file.bytes());
+        if (!"application/zip".equalsIgnoreCase(file.contentType())) {
+            throw new ApiException(
+                    400,
+                    "An error occurred while validating the submitted data.",
+                    ApiErrors.fieldError("file", "validation_invalid_mime_type", "Invalid file type.")
+            );
+        }
+        store.uploadBackup(file.originalFilename(), file.bytes());
+    }
+
+    private void requireBackupAvailable() {
+        if (!store.canBackup()) {
+            throw new ApiException(400, "Try again later - another backup/restore process has already been started.");
+        }
     }
 
     private void requireSuperuser(RequestPrincipal principal) {
@@ -776,6 +1072,44 @@ public final class HttpApi implements HttpHandler {
         if (!principal.superuser()) {
             throw new ApiException(403, "Superuser token required.");
         }
+    }
+
+    private Map<String, Object> healthResponse(HttpExchange exchange, RequestPrincipal principal) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        if (principal != null && principal.superuser()) {
+            Map<String, Object> settings = requestSettings(exchange);
+            Map<String, Object> trustedProxy = HttpIpPolicy.section(settings, "trustedProxy");
+            data.put("canBackup", store.canBackup());
+            data.put("realIP", HttpIpPolicy.realIp(exchange, trustedProxy));
+            data.put("possibleProxyHeader", possibleProxyHeader(exchange, trustedProxy));
+        }
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("message", "API is healthy.");
+        response.put("code", 200);
+        response.put("data", data);
+        return response;
+    }
+
+    private String possibleProxyHeader(HttpExchange exchange, Map<String, Object> trustedProxy) {
+        List<String> headers = new ArrayList<>();
+        for (Object value : HttpIpPolicy.list(trustedProxy.get("headers"))) {
+            String header = String.valueOf(value == null ? "" : value).trim();
+            if (!header.isBlank()) {
+                headers.add(header);
+            }
+        }
+        headers.add("CF-Connecting-IP");
+        headers.add("Fly-Client-IP");
+        headers.add("X\u2011Forwarded-For");
+
+        for (String header : headers) {
+            String value = exchange.getRequestHeaders().getFirst(header);
+            if (value != null && !value.isBlank()) {
+                return header;
+            }
+        }
+        return "";
     }
 
     private Optional<RequestPrincipal> principal(HttpExchange exchange) {
@@ -799,76 +1133,86 @@ public final class HttpApi implements HttpHandler {
         return value == null || value.isNull() ? "" : value.asText("");
     }
 
-    private HtmlResponse oauth2RedirectPage(HttpExchange exchange) throws IOException {
-        Map<String, String> values = "GET".equals(exchange.getRequestMethod())
-                ? query(exchange)
-                : formOrJsonValues(exchange);
+    private RedirectResponse oauth2SubscriptionRedirect(HttpExchange exchange) throws IOException {
+        Map<String, String> values;
+        try {
+            values = "GET".equals(exchange.getRequestMethod())
+                    ? query(exchange)
+                    : formOrJsonValues(exchange);
+        } catch (RuntimeException | IOException e) {
+            return oauth2Redirect(exchange, false);
+        }
         String state = values.getOrDefault("state", "");
         String code = values.getOrDefault("code", "");
         String error = values.getOrDefault("error", "");
-        String payload = store.mapper().writeValueAsString(Map.of(
-                "source", "pocketbase-java-oauth2",
-                "state", state,
-                "code", code,
-                "error", error
-        ));
-        String message = error.isBlank() && !code.isBlank()
-                ? "OAuth2 authentication completed. You can close this window."
-                : "OAuth2 authentication failed. You can close this window.";
-        String html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>OAuth2 Redirect</title></head><body>"
-                + "<script>"
-                + "const payload=" + payload + ";"
-                + "try{window.opener&&window.opener.postMessage(payload, window.location.origin);}catch(e){}"
-                + "try{sessionStorage.setItem('pbj-oauth2-result', JSON.stringify(payload));}catch(e){}"
-                + "document.body.textContent=" + store.mapper().writeValueAsString(message) + ";"
-                + "setTimeout(()=>window.close(),300);"
-                + "</script></body></html>";
-        return new HtmlResponse(200, html.getBytes(StandardCharsets.UTF_8), "text/html; charset=utf-8");
+        if (state.isBlank()) {
+            return oauth2Redirect(exchange, false);
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("state", state);
+        payload.put("code", code);
+        if (!error.isBlank()) {
+            payload.put("error", error);
+        }
+        String remoteIp = HttpIpPolicy.realIp(
+                exchange,
+                HttpIpPolicy.section(requestSettings(exchange), "trustedProxy")
+        );
+        if (!realtimeHub.sendOAuth2Redirect(state, remoteIp, payload)) {
+            return oauth2Redirect(exchange, false);
+        }
+        if (error.isBlank() && !code.isBlank()) {
+            OAuth2Support.storeAppleRedirectName(store.mapper(), code, values.getOrDefault("user", ""));
+        }
+        return oauth2Redirect(exchange, error.isBlank() && !code.isBlank());
+    }
+
+    private RedirectResponse oauth2Redirect(HttpExchange exchange, boolean success) {
+        int status = "GET".equals(exchange.getRequestMethod()) ? 307 : 303;
+        String location = success
+                ? "../_/#/auth/oauth2-redirect-success"
+                : "../_/#/auth/oauth2-redirect-failure";
+        return new RedirectResponse(status, location);
     }
 
     private Map<String, String> formOrJsonValues(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        try (InputStream input = exchange.getRequestBody()) {
-            byte[] bytes = input.readAllBytes();
-            if (bytes.length == 0) {
-                return Map.of();
-            }
-            if (isFormUrlEncoded(contentType)) {
-                return query(new String(bytes, StandardCharsets.UTF_8));
-            }
-            JsonNode body = store.mapper().readTree(bytes);
-            if (body == null || !body.isObject()) {
-                return Map.of();
-            }
-            Map<String, String> values = new LinkedHashMap<>();
-            body.fields().forEachRemaining(entry -> values.put(entry.getKey(), entry.getValue().asText("")));
-            return values;
+        byte[] bytes = readRequestBytes(exchange);
+        if (bytes.length == 0) {
+            return Map.of();
         }
+        if (isFormUrlEncoded(contentType)) {
+            return query(new String(bytes, StandardCharsets.UTF_8));
+        }
+        JsonNode body = store.mapper().readTree(bytes);
+        if (body == null || !body.isObject()) {
+            return Map.of();
+        }
+        Map<String, String> values = new LinkedHashMap<>();
+        body.fields().forEachRemaining(entry -> values.put(entry.getKey(), entry.getValue().asText("")));
+        return values;
     }
 
     private RecordInput readRecordInput(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        try (InputStream input = exchange.getRequestBody()) {
-            byte[] bytes = input.readAllBytes();
-            if (isMultipart(contentType)) {
-                MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
-                return new RecordInput(multipart.fields(), multipart.files());
-            }
-            if (bytes.length == 0) {
-                return new RecordInput(store.mapper().createObjectNode(), Map.of());
-            }
-            return new RecordInput(readJsonBytes(bytes), Map.of());
+        byte[] bytes = readRequestBytes(exchange);
+        if (isMultipart(contentType)) {
+            MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
+            return new RecordInput(multipart.fields(), multipart.files());
         }
+        if (bytes.length == 0) {
+            return new RecordInput(store.mapper().createObjectNode(), Map.of());
+        }
+        return new RecordInput(readJsonBytes(bytes), Map.of());
     }
 
     private JsonNode readJson(HttpExchange exchange) throws IOException {
-        try (InputStream input = exchange.getRequestBody()) {
-            byte[] bytes = input.readAllBytes();
-            if (bytes.length == 0) {
-                return store.mapper().createObjectNode();
-            }
-            return readJsonBytes(bytes);
+        byte[] bytes = readRequestBytes(exchange);
+        if (bytes.length == 0) {
+            return store.mapper().createObjectNode();
         }
+        return readJsonBytes(bytes);
     }
 
     private JsonNode readJsonBytes(byte[] bytes) throws IOException {
@@ -886,15 +1230,26 @@ public final class HttpApi implements HttpHandler {
         }
         List<String> segments = segments(path);
         if (segments.size() != 5 || !"api".equals(segments.get(0)) || !"files".equals(segments.get(1))) {
-            throw new ApiException(404, "File not found.");
+            throw new ApiException(404, "The requested resource wasn't found.");
         }
         Map<String, String> query = query(exchange);
         String collection = segments.get(2);
         String recordId = segments.get(3);
         String filename = segments.get(4);
-        Path file = store.filePath(collection, recordId, filename, filePrincipal(exchange).orElse(null));
+        RuleRequestContext request = RuleRequestContext.of(
+                query,
+                requestHeaders(exchange),
+                RuleRequestContext.PROTECTED_FILE
+        );
+        Path file = store.filePath(
+                collection,
+                recordId,
+                filename,
+                request,
+                filePrincipal(exchange).orElse(null)
+        );
         if (file == null || !Files.exists(file) || !Files.isRegularFile(file)) {
-            throw new ApiException(404, "File not found.");
+            throw new ApiException(404, "The requested resource wasn't found.");
         }
         ServedFile served = servedFile(file, collection, recordId, filename, query.get("thumb"));
         HttpFileSupport.serve(exchange, served.path(), served.contentType(), truthy(query.get("download")), headerFilename(filename));
@@ -910,7 +1265,10 @@ public final class HttpApi implements HttpHandler {
     }
 
     private void serveBackup(HttpExchange exchange, String path) throws IOException {
-        requireSuperuser(principal(exchange).orElse(null));
+        store.verifyFileToken(query(exchange).get("token"))
+                .filter(RequestPrincipal::superuser)
+                .filter(candidate -> HttpIpPolicy.superuserAllowed(exchange, requestSettings(exchange), candidate))
+                .orElseThrow(() -> new ApiException(403, "Insufficient permissions to access the resource."));
         List<String> segments = segments(path);
         if (segments.size() != 3 || !"api".equals(segments.get(0)) || !"backups".equals(segments.get(1))) {
             throw new ApiException(404, "Backup not found.");
@@ -929,7 +1287,8 @@ public final class HttpApi implements HttpHandler {
             return bearer;
         }
         String token = query(exchange).get("token");
-        return store.verifyFileToken(token);
+        return store.verifyFileToken(token)
+                .filter(candidate -> HttpIpPolicy.superuserAllowed(exchange, requestSettings(exchange), candidate));
     }
 
     private void serveAdmin(HttpExchange exchange, String path) throws IOException {
@@ -953,9 +1312,35 @@ public final class HttpApi implements HttpHandler {
         }
     }
 
+    private byte[] readRequestBytes(HttpExchange exchange) throws IOException {
+        Object configured = exchange.getAttribute(BODY_LIMIT_ATTRIBUTE);
+        long limit = configured instanceof Number number ? number.longValue() : DEFAULT_MAX_BODY_SIZE;
+        try (InputStream input = exchange.getRequestBody();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            long total = 0L;
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read == 0) {
+                    continue;
+                }
+                total += read;
+                if (limit > 0 && total > limit) {
+                    throw new ApiException(413, "Request entity too large");
+                }
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        }
+    }
+
     private void sendJson(HttpExchange exchange, int status, Object body) throws IOException {
         byte[] bytes = store.mapper().writeValueAsBytes(body);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        if ("HEAD".equals(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(status, -1);
+            return;
+        }
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream output = exchange.getResponseBody()) {
             output.write(bytes);
@@ -964,6 +1349,11 @@ public final class HttpApi implements HttpHandler {
 
     private void sendNoContent(HttpExchange exchange) throws IOException {
         exchange.sendResponseHeaders(204, -1);
+    }
+
+    private void sendRedirect(HttpExchange exchange, int status, String location) throws IOException {
+        exchange.getResponseHeaders().set("Location", location);
+        exchange.sendResponseHeaders(status, -1);
     }
 
     private void sendBytes(HttpExchange exchange, int status, byte[] body, String contentType) throws IOException {
@@ -1017,6 +1407,51 @@ public final class HttpApi implements HttpHandler {
             return "";
         }
         return exchange.getRemoteAddress().getAddress().getHostAddress();
+    }
+
+    private AuthOriginContext authOriginContext(HttpExchange exchange) {
+        String userAgent = exchange.getRequestHeaders().getFirst("User-Agent");
+        Map<String, Object> settings = requestSettings(exchange);
+        return new AuthOriginContext(
+                HttpIpPolicy.realIp(exchange, HttpIpPolicy.section(settings, "trustedProxy")),
+                userAgent
+        );
+    }
+
+    private void enforceSuperuserAuthResponseIp(HttpExchange exchange, Object response) {
+        if (!(response instanceof Map<?, ?> map)) {
+            return;
+        }
+        boolean superuserResponse = map.get("record") instanceof Map<?, ?> record
+                && JsonFileStore.SUPERUSERS.equals(String.valueOf(record.get("collectionName")));
+        Object token = map.get("token");
+        if (token != null) {
+            superuserResponse = superuserResponse || store.verifyToken(String.valueOf(token))
+                    .map(RequestPrincipal::fromClaims)
+                    .map(RequestPrincipal::superuser)
+                    .orElse(false);
+        }
+        if (superuserResponse && !HttpIpPolicy.superuserIpAllowed(exchange, requestSettings(exchange))) {
+            throw new ApiException(403, "You are not allowed to perform this request.");
+        }
+    }
+
+    private void requireSuperuserAuthIp(HttpExchange exchange, String collection) {
+        if (SystemCollections.isSuperuserIdentifier(collection)
+                && !HttpIpPolicy.superuserIpAllowed(exchange, requestSettings(exchange))) {
+            throw new ApiException(403, "You are not allowed to perform this request.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> requestSettings(HttpExchange exchange) {
+        Object value = exchange.getAttribute(SETTINGS_ATTRIBUTE);
+        if (value instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        Map<String, Object> settings = store.getSettings(Map.of());
+        exchange.setAttribute(SETTINGS_ATTRIBUTE, settings);
+        return settings;
     }
 
     private Map<String, Object> errorBody(int status, String message, Object data) {
@@ -1147,7 +1582,7 @@ public final class HttpApi implements HttpHandler {
     private record ServedFile(Path path, String contentType) {
     }
 
-    private record HtmlResponse(int status, byte[] body, String contentType) {
+    private record RedirectResponse(int status, String location) {
     }
 
     private record BatchTarget(List<String> segments, Map<String, String> query) {

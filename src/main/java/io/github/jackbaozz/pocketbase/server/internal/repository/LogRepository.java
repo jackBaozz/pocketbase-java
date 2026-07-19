@@ -7,6 +7,8 @@ import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator;
+import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
+import io.github.jackbaozz.pocketbase.server.internal.SearchFieldValidationSupport;
 import org.jooq.Field;
 import org.jooq.Record;
 import org.jooq.Result;
@@ -18,7 +20,6 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -30,19 +31,17 @@ public class LogRepository extends BaseRepository {
     private static final String INTERNAL_ROWID = "@rowid";
     private static final DateTimeFormatter LOG_STATS_HOUR_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00.000'Z'").withZone(ZoneOffset.UTC);
+    private final SettingsRepository settingsRepository;
 
-    public LogRepository(JooqDatabase database, ObjectMapper mapper) {
+    public LogRepository(JooqDatabase database, ObjectMapper mapper, SettingsRepository settingsRepository) {
         super(database, mapper);
+        this.settingsRepository = settingsRepository;
     }
 
     public Map<String, Object> listLogs(Map<String, String> query) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
-        int page = 1;
-        int perPage = 30;
-        try {
-            if (safeQuery.containsKey("page")) page = Integer.parseInt(safeQuery.get("page"));
-            if (safeQuery.containsKey("perPage")) perPage = Integer.parseInt(safeQuery.get("perPage"));
-        } catch (NumberFormatException ignored) {}
+        SearchQuerySupport.Parameters search = SearchQuerySupport.parse(safeQuery);
+        SearchFieldValidationSupport.validateLogs(search);
 
         try {
             Result<? extends Record> records = database.dsl()
@@ -55,27 +54,27 @@ public class LogRepository extends BaseRepository {
             for (Record r : records) {
                 Map<String, Object> log = recordToLogMap(r);
                 log.put(INTERNAL_ROWID, rowid++);
-                if (matchesLogFilter(log, safeQuery.get("filter"))) {
+                if (matchesLogFilter(log, search.filter())) {
                     items.add(log);
                 }
             }
 
-            sortLogs(items, safeQuery.getOrDefault("sort", "-created"));
+            SearchQuerySupport.sortMaps(items, search.sort(), "-created");
             int total = items.size();
-            int offset = Math.min(total, (page - 1) * perPage);
-            int to = Math.min(total, offset + perPage);
-            List<Map<String, Object>> pageItems = items.subList(offset, to).stream()
+            int from = search.fromIndex(total);
+            int to = Math.min(total, from + search.perPage());
+            List<Map<String, Object>> pageItems = items.subList(from, to).stream()
                     .map(this::withoutInternalFields)
                     .map(log -> RecordProcessor.selectFields(log, safeQuery.get("fields")))
                     .toList();
-            int totalPages = (int) Math.ceil((double) total / perPage);
-            return Map.of("items", pageItems, "page", page, "perPage", perPage, "totalItems", total, "totalPages", totalPages);
+            return SearchQuerySupport.result(search, total, pageItems);
         } catch (DataAccessException e) {
-            return Map.of("items", List.of(), "page", 1, "perPage", 30, "totalItems", 0, "totalPages", 0);
+            return SearchQuerySupport.result(search, 0, List.of());
         }
     }
 
     public List<Map<String, Object>> logStats(Map<String, String> query) {
+        SearchFieldValidationSupport.validateLogFilter(query == null ? null : query.get("filter"));
         List<Map<String, Object>> result = new ArrayList<>();
         try {
             Result<? extends Record> records = database.dsl()
@@ -163,29 +162,6 @@ public class LogRepository extends BaseRepository {
         return RuleEvaluator.matches(filter, RuleEvaluator.context(log, null, Map.of(), "GET", null));
     }
 
-    private void sortLogs(List<Map<String, Object>> items, String sort) {
-        String key = sort == null || sort.isBlank() ? "-created" : sort.trim();
-        boolean desc = key.startsWith("-");
-        if (desc || key.startsWith("+")) {
-            key = key.substring(1);
-        }
-        String sortKey = key;
-        Comparator<Map<String, Object>> comparator = (left, right) ->
-                comparableLogValue(left, sortKey).compareTo(comparableLogValue(right, sortKey));
-        if (desc) {
-            comparator = comparator.reversed();
-        }
-        items.sort(comparator);
-    }
-
-    private String comparableLogValue(Map<String, Object> log, String key) {
-        Object value = INTERNAL_ROWID.equals(key) ? log.get(INTERNAL_ROWID) : log.get(key);
-        if (value instanceof Number number) {
-            return String.format("%020d", number.longValue());
-        }
-        return value == null ? "" : String.valueOf(value).toLowerCase(Locale.ROOT);
-    }
-
     private String logHour(Object created) {
         if (created == null) {
             return "";
@@ -198,9 +174,15 @@ public class LogRepository extends BaseRepository {
     }
 
     public void recordActivityLog(String method, String url, int status, long duration, RequestPrincipal principal, Map<String, String> headers, String remoteIp) {
+        Map<String, Object> settings = logSettings();
+        int level = status >= 400 ? 8 : 0;
+        if (intSetting(settings.get("maxDays"), 5) <= 0
+                || level < intSetting(settings.get("minLevel"), 0)) {
+            return;
+        }
+
         String id = IdGenerator.id();
         String now = Instant.now().toString();
-        int level = status >= 400 ? 8 : 0;
         String message = (method == null ? "" : method) + " " + (url == null ? "" : url);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("type", "request");
@@ -208,18 +190,23 @@ public class LogRepository extends BaseRepository {
         data.put("url", url == null ? "" : url);
         data.put("status", status);
         data.put("execTime", (double) duration);
-        data.put("remoteIP", remoteIp == null ? "" : remoteIp);
-        data.put("userIP", remoteIp == null ? "" : remoteIp);
-        data.put("userAgent", headers != null ? headers.getOrDefault("user-agent", "") : "");
-        data.put("referer", headers != null ? headers.getOrDefault("referer", "") : "");
-
-        // Redact Authorization header if present
-        if (headers != null && headers.containsKey("authorization")) {
-            data.put("auth_header", "******");
+        if (truthySetting(settings.get("logIP"), true) && remoteIp != null && !remoteIp.isBlank()) {
+            data.put("remoteIP", remoteIp);
+            data.put("userIP", remoteIp);
+        }
+        if (headers != null) {
+            String userAgent = headers.getOrDefault("user-agent", "");
+            String referer = headers.getOrDefault("referer", "");
+            if (!userAgent.isBlank()) {
+                data.put("userAgent", userAgent);
+            }
+            if (!referer.isBlank()) {
+                data.put("referer", referer);
+            }
         }
 
         data.put("auth", principal != null ? (principal.superuser() ? SUPERUSERS : principal.collectionName()) : "");
-        if (principal != null) {
+        if (principal != null && truthySetting(settings.get("logAuthId"), true)) {
             data.put("authId", principal.id());
         }
 
@@ -236,5 +223,63 @@ public class LogRepository extends BaseRepository {
         } catch (DataAccessException | IOException ignored) {
             // Activity logging must never fail the request
         }
+    }
+
+    public void cleanupForCurrentSettings() {
+        Map<String, Object> settings = logSettings();
+        int maxDays = intSetting(settings.get("maxDays"), 5);
+        int minLevel = intSetting(settings.get("minLevel"), 0);
+        Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(maxDays, ChronoUnit.DAYS);
+        try {
+            database.dsl()
+                    .deleteFrom(qt("_logs"))
+                    .where(qfs("created").le(cutoff.toString()).or(qfi("level").lt(minLevel)))
+                    .execute();
+        } catch (DataAccessException ignored) {
+        }
+    }
+
+    public void deleteOldLogs() {
+        Map<String, Object> settings = logSettings();
+        int maxDays = intSetting(settings.get("maxDays"), 5);
+        Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(maxDays, ChronoUnit.DAYS);
+        try {
+            database.dsl()
+                    .deleteFrom(qt("_logs"))
+                    .where(qfs("created").le(cutoff.toString()))
+                    .execute();
+        } catch (DataAccessException ignored) {
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> logSettings() {
+        Object value = settingsRepository.loadRawSettings().get("logs");
+        return value instanceof Map<?, ?> map ? (Map<String, Object>) map : Map.of();
+    }
+
+    private int intSetting(Object value, int fallback) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean truthySetting(Object value, boolean fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        String normalized = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? fallback : List.of("1", "true", "yes", "on").contains(normalized);
     }
 }

@@ -27,6 +27,26 @@ public final class RuleEvaluator {
         return truthy(parser.parse());
     }
 
+    public static void validate(String expression) {
+        matches(expression, context(Map.of(), Map.of(), Map.of(), "GET", null));
+    }
+
+    public static List<String> identifiers(String expression) {
+        if (expression == null || expression.isBlank()) {
+            return List.of();
+        }
+        List<Token> tokens = tokenize(stripComments(expression));
+        List<String> identifiers = new ArrayList<>();
+        for (int i = 0; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.type == TokenType.IDENTIFIER
+                    && (i + 1 >= tokens.size() || tokens.get(i + 1).type != TokenType.LPAREN)) {
+                identifiers.add(token.value);
+            }
+        }
+        return List.copyOf(identifiers);
+    }
+
     public static Context context(
             Map<String, Object> record,
             Map<String, Object> body,
@@ -45,7 +65,56 @@ public final class RuleEvaluator {
             RequestPrincipal principal,
             Function<String, List<Map<String, Object>>> collectionResolver
     ) {
-        return new Context(record, body, query, method, principal, collectionResolver);
+        return context(record, body, query, method, principal, collectionResolver, null);
+    }
+
+    public static Context context(
+            Map<String, Object> record,
+            Map<String, Object> body,
+            Map<String, String> query,
+            String method,
+            RequestPrincipal principal,
+            Function<String, List<Map<String, Object>>> collectionResolver,
+            PathResolver pathResolver
+    ) {
+        return context(record, body, query, Map.of(), method, principal, collectionResolver, pathResolver);
+    }
+
+    public static Context context(
+            Map<String, Object> record,
+            Map<String, Object> body,
+            Map<String, String> query,
+            Map<String, String> headers,
+            String method,
+            RequestPrincipal principal,
+            Function<String, List<Map<String, Object>>> collectionResolver,
+            PathResolver pathResolver
+    ) {
+        return context(
+                record,
+                body,
+                query,
+                headers,
+                RuleRequestContext.DEFAULT,
+                method,
+                principal,
+                collectionResolver,
+                pathResolver
+        );
+    }
+
+    public static Context context(
+            Map<String, Object> record,
+            Map<String, Object> body,
+            Map<String, String> query,
+            Map<String, String> headers,
+            String requestContext,
+            String method,
+            RequestPrincipal principal,
+            Function<String, List<Map<String, Object>>> collectionResolver,
+            PathResolver pathResolver
+    ) {
+        return new Context(record, body, query, headers, requestContext, method, principal, collectionResolver, pathResolver);
     }
 
     private static List<Token> tokenize(String expression) {
@@ -64,6 +133,11 @@ public final class RuleEvaluator {
             }
             if (ch == ')') {
                 tokens.add(new Token(TokenType.RPAREN, ")"));
+                index++;
+                continue;
+            }
+            if (ch == ',') {
+                tokens.add(new Token(TokenType.COMMA, ","));
                 index++;
                 continue;
             }
@@ -126,7 +200,7 @@ public final class RuleEvaluator {
             int start = index++;
             while (index < expression.length()) {
                 char current = expression.charAt(index);
-                if (Character.isWhitespace(current) || current == '(' || current == ')' || startsOperator(expression, index)) {
+                if (Character.isWhitespace(current) || current == '(' || current == ')' || current == ',' || startsOperator(expression, index)) {
                     break;
                 }
                 index++;
@@ -170,6 +244,28 @@ public final class RuleEvaluator {
     private static boolean compare(Object left, String operator, Object right) {
         boolean any = operator.startsWith("?");
         String actualOperator = any ? operator.substring(1) : operator;
+        if (left instanceof AnyMatchValues anyMatch) {
+            return anyMatch.values().stream().anyMatch(value -> compareOne(value, actualOperator, right));
+        }
+        if (right instanceof AnyMatchValues anyMatch) {
+            return anyMatch.values().stream().anyMatch(value -> compareOne(left, actualOperator, value));
+        }
+        if (left instanceof MultiMatchValues multiMatch) {
+            if (multiMatch.values().isEmpty()) {
+                return false;
+            }
+            return any
+                    ? multiMatch.values().stream().anyMatch(value -> compareOne(value, actualOperator, right))
+                    : multiMatch.values().stream().allMatch(value -> compareOne(value, actualOperator, right));
+        }
+        if (right instanceof MultiMatchValues multiMatch) {
+            if (multiMatch.values().isEmpty()) {
+                return false;
+            }
+            return any
+                    ? multiMatch.values().stream().anyMatch(value -> compareOne(left, actualOperator, value))
+                    : multiMatch.values().stream().allMatch(value -> compareOne(left, actualOperator, value));
+        }
         if (any) {
             Collection<?> values = toCollection(left);
             if (values.isEmpty()) {
@@ -186,6 +282,12 @@ public final class RuleEvaluator {
     }
 
     private static boolean compareOne(Object left, String operator, Object right) {
+        if (left instanceof EachValues each) {
+            return each.values().stream().anyMatch(item -> compareOne(item, operator, right));
+        }
+        if (right instanceof EachValues each) {
+            return each.values().stream().anyMatch(item -> compareOne(left, operator, item));
+        }
         return switch (operator) {
             case "=", "==" -> valuesEqual(left, right);
             case "!=" -> !valuesEqual(left, right);
@@ -267,6 +369,15 @@ public final class RuleEvaluator {
     }
 
     private static Collection<?> toCollection(Object value) {
+        if (value instanceof EachValues each) {
+            return each.values();
+        }
+        if (value instanceof MultiMatchValues multiMatch) {
+            return multiMatch.values();
+        }
+        if (value instanceof AnyMatchValues anyMatch) {
+            return anyMatch.values();
+        }
         if (value instanceof Collection<?> collection) {
             return collection;
         }
@@ -276,9 +387,58 @@ public final class RuleEvaluator {
         return List.of(value);
     }
 
+    private record EachValues(Collection<?> values) {
+    }
+
+    public record MultiMatchValues(List<Object> values) {
+        public MultiMatchValues {
+            values = values == null ? List.of() : List.copyOf(values);
+        }
+    }
+
+    public record AnyMatchValues(List<Object> values) {
+        public AnyMatchValues {
+            values = values == null ? List.of() : List.copyOf(values);
+        }
+    }
+
+    public static MultiMatchValues multiMatch(Collection<?> values) {
+        return new MultiMatchValues(values == null ? List.of() : new ArrayList<>(values));
+    }
+
+    public static AnyMatchValues anyMatch(Collection<?> values) {
+        return new AnyMatchValues(values == null ? List.of() : new ArrayList<>(values));
+    }
+
+    public static Object firstSortValue(Object value) {
+        if (value instanceof MultiMatchValues multiMatch) {
+            return multiMatch.values().isEmpty() ? null : multiMatch.values().get(0);
+        }
+        if (value instanceof AnyMatchValues anyMatch) {
+            return anyMatch.values().isEmpty() ? null : anyMatch.values().get(0);
+        }
+        return value;
+    }
+
+    @FunctionalInterface
+    public interface PathResolver {
+        Resolution resolve(String identifier);
+    }
+
+    public record Resolution(boolean resolved, Object value) {
+        public static Resolution unresolved() {
+            return new Resolution(false, null);
+        }
+
+        public static Resolution resolved(Object value) {
+            return new Resolution(true, value);
+        }
+    }
+
     private enum TokenType {
         LPAREN,
         RPAREN,
+        COMMA,
         AND,
         OR,
         OPERATOR,
@@ -297,49 +457,95 @@ public final class RuleEvaluator {
             Map<String, Object> record,
             Map<String, Object> body,
             Map<String, String> query,
+            Map<String, String> headers,
+            String requestContext,
             String method,
             RequestPrincipal principal,
-            Function<String, List<Map<String, Object>>> collectionResolver
+            Function<String, List<Map<String, Object>>> collectionResolver,
+            PathResolver pathResolver
     ) {
         public Context {
             record = record == null ? Map.of() : record;
             body = body == null ? Map.of() : body;
             query = query == null ? Map.of() : query;
+            headers = RuleRequestContext.of(Map.of(), headers).headers();
+            requestContext = requestContext == null || requestContext.isBlank()
+                    ? RuleRequestContext.DEFAULT
+                    : requestContext;
             method = method == null ? "GET" : method;
             collectionResolver = collectionResolver == null ? ignored -> List.of() : collectionResolver;
         }
 
         Object resolve(String identifier) {
-            String normalized = applyModifier(identifier);
+            ModifierParts parts = modifierParts(identifier);
+            String normalized = parts.field();
+            if ("isset".equals(parts.modifier())) {
+                return pathExists(normalized);
+            }
+            if ("changed".equals(parts.modifier())) {
+                return fieldChanged(normalized);
+            }
             Object value = switch (normalized) {
                 case "@now" -> DateTimeFormatter.ISO_INSTANT.format(Instant.now());
                 case "@todayStart" -> LocalDate.now(ZoneOffset.UTC).atStartOfDay().toInstant(ZoneOffset.UTC).toString();
                 case "@todayEnd" -> LocalDate.now(ZoneOffset.UTC).plusDays(1).atStartOfDay().minusNanos(1).toInstant(ZoneOffset.UTC).toString();
                 case "@request.method" -> method;
-                case "@request.context" -> "default";
-                case "@request.headers" -> Map.of(); // Mocked empty headers
+                case "@request.context" -> requestContext;
+                case "@request.headers" -> headers;
                 case "@request.auth.id" -> principal != null ? principal.id() : null;
                 case "@request.auth.collectionId" -> principal != null ? principal.collectionId() : null;
                 case "@request.auth.collectionName" -> principal != null ? principal.collectionName() : null;
                 default -> resolvePath(normalized);
             };
-            if (identifier.endsWith(":lower") && value != null) {
-                return String.valueOf(value).toLowerCase(Locale.ROOT);
-            }
-            if (identifier.endsWith(":isset")) {
-                return value != null;
-            }
-            return value;
+            return applyModifier(value, parts.modifier());
         }
 
-        private String applyModifier(String identifier) {
-            int modifier = identifier.indexOf(':');
-            return modifier < 0 ? identifier : identifier.substring(0, modifier);
+        private Object applyModifier(Object value, String modifier) {
+            if (value instanceof MultiMatchValues multiMatch) {
+                List<Object> modified = new ArrayList<>();
+                for (Object item : multiMatch.values()) {
+                    if ("each".equals(modifier)) {
+                        modified.addAll(toCollection(item));
+                    } else {
+                        modified.add(applyScalarModifier(item, modifier));
+                    }
+                }
+                return new MultiMatchValues(modified);
+            }
+            return applyScalarModifier(value, modifier);
+        }
+
+        private Object applyScalarModifier(Object value, String modifier) {
+            return switch (modifier) {
+                case "" -> value;
+                case "lower" -> value == null ? null : String.valueOf(value).toLowerCase(Locale.ROOT);
+                case "length" -> valueLength(value);
+                case "each" -> new EachValues(toCollection(value));
+                default -> throw invalidFilter("Unknown filter modifier `" + modifier + "`.");
+            };
+        }
+
+        private ModifierParts modifierParts(String identifier) {
+            int modifier = identifier.lastIndexOf(':');
+            if (modifier < 0 || modifier < identifier.lastIndexOf('.')) {
+                return new ModifierParts(identifier, "");
+            }
+            String value = identifier.substring(modifier + 1);
+            if (!List.of("lower", "length", "each", "isset", "changed").contains(value)) {
+                throw invalidFilter("Unknown filter modifier `" + value + "`.");
+            }
+            return new ModifierParts(identifier.substring(0, modifier), value);
         }
 
         private Object resolvePath(String identifier) {
             if (identifier.startsWith("@collection.")) {
                 return resolveCollection(identifier.substring("@collection.".length()));
+            }
+            if (pathResolver != null) {
+                Resolution resolution = pathResolver.resolve(identifier);
+                if (resolution != null && resolution.resolved()) {
+                    return resolution.value();
+                }
             }
             if (identifier.startsWith("@request.auth.")) {
                 return read(principal == null ? Map.of() : principal.asRuleMap(), identifier.substring("@request.auth.".length()));
@@ -350,6 +556,9 @@ public final class RuleEvaluator {
             if (identifier.startsWith("@request.query.")) {
                 return read(query, identifier.substring("@request.query.".length()));
             }
+            if (identifier.startsWith("@request.headers.")) {
+                return read(headers, identifier.substring("@request.headers.".length()).toLowerCase(Locale.ROOT));
+            }
             if (record.containsKey(identifier)) {
                 return record.get(identifier);
             }
@@ -359,10 +568,10 @@ public final class RuleEvaluator {
             return read(record, identifier);
         }
 
-        private List<Object> resolveCollection(String path) {
+        private MultiMatchValues resolveCollection(String path) {
             int dot = path.indexOf('.');
             if (dot <= 0 || dot == path.length() - 1) {
-                return List.of();
+                return multiMatch(List.of());
             }
             String collection = path.substring(0, dot);
             int alias = collection.indexOf(':');
@@ -377,7 +586,7 @@ public final class RuleEvaluator {
                     values.add(value);
                 }
             }
-            return values;
+            return multiMatch(values);
         }
 
         private Object read(Map<?, ?> source, String path) {
@@ -392,6 +601,60 @@ public final class RuleEvaluator {
                 }
             }
             return current;
+        }
+
+        private boolean pathExists(String identifier) {
+            if (identifier.startsWith("@request.body.")) {
+                return containsPath(body, identifier.substring("@request.body.".length()));
+            }
+            if (identifier.startsWith("@request.query.")) {
+                return query.containsKey(identifier.substring("@request.query.".length()));
+            }
+            if (identifier.startsWith("@request.auth.")) {
+                return principal != null && containsPath(
+                        principal.asRuleMap(),
+                        identifier.substring("@request.auth.".length())
+                );
+            }
+            if (identifier.startsWith("@request.headers.")) {
+                return headers.containsKey(identifier.substring("@request.headers.".length()).toLowerCase(Locale.ROOT));
+            }
+            return containsPath(record, identifier);
+        }
+
+        private boolean fieldChanged(String identifier) {
+            if (!identifier.startsWith("@request.body.")) {
+                return false;
+            }
+            String path = identifier.substring("@request.body.".length());
+            return containsPath(body, path) && !valuesEqual(read(body, path), read(record, path));
+        }
+
+        private boolean containsPath(Map<?, ?> source, String path) {
+            Object current = source;
+            for (String part : path.split("\\.")) {
+                if (!(current instanceof Map<?, ?> map) || !map.containsKey(part)) {
+                    return false;
+                }
+                current = map.get(part);
+            }
+            return true;
+        }
+
+        private int valueLength(Object value) {
+            if (value == null) {
+                return 0;
+            }
+            if (value instanceof Collection<?> collection) {
+                return collection.size();
+            }
+            if (value instanceof Map<?, ?> map) {
+                return map.size();
+            }
+            return String.valueOf(value).isBlank() ? 0 : 1;
+        }
+
+        private record ModifierParts(String field, String modifier) {
         }
     }
 
@@ -453,9 +716,44 @@ public final class RuleEvaluator {
                 case NUMBER -> token.value.contains(".") ? Double.parseDouble(token.value) : Long.parseLong(token.value);
                 case BOOLEAN -> Boolean.parseBoolean(token.value);
                 case NULL -> null;
-                case IDENTIFIER -> context.resolve(token.value);
+                case IDENTIFIER -> peek().type == TokenType.LPAREN
+                        ? parseFunction(token.value)
+                        : context.resolve(token.value);
                 default -> throw invalidFilter("Expected filter operand near `" + token.value + "`.");
             };
+        }
+
+        private Object parseFunction(String name) {
+            consume(TokenType.LPAREN, "Expected `(` after filter function name.");
+            List<FilterFunctionSupport.Argument> arguments = new ArrayList<>();
+            if (peek().type != TokenType.RPAREN) {
+                do {
+                    Token argument = advance();
+                    FilterFunctionSupport.ArgumentType type = switch (argument.type) {
+                        case STRING -> FilterFunctionSupport.ArgumentType.TEXT;
+                        case NUMBER -> FilterFunctionSupport.ArgumentType.NUMBER;
+                        case IDENTIFIER -> FilterFunctionSupport.ArgumentType.IDENTIFIER;
+                        case NULL -> FilterFunctionSupport.ArgumentType.NULL;
+                        case BOOLEAN -> FilterFunctionSupport.ArgumentType.BOOLEAN;
+                        default -> throw invalidFilter("Invalid argument for filter function `" + name + "`.");
+                    };
+                    Object value = switch (argument.type) {
+                        case NUMBER -> argument.value.contains(".")
+                                ? Double.parseDouble(argument.value)
+                                : Long.parseLong(argument.value);
+                        case NULL -> null;
+                        case BOOLEAN -> Boolean.parseBoolean(argument.value);
+                        default -> argument.value;
+                    };
+                    arguments.add(new FilterFunctionSupport.Argument(type, value));
+                } while (match(TokenType.COMMA));
+            }
+            consume(TokenType.RPAREN, "Expected `)` after filter function arguments.");
+            try {
+                return FilterFunctionSupport.evaluate(name, arguments, context::resolve);
+            } catch (IllegalArgumentException e) {
+                throw invalidFilter(e.getMessage());
+            }
         }
 
         private boolean match(TokenType type) {

@@ -3,6 +3,9 @@
     "includes": [
       {
         "pattern": "pocketbase-admin/.*"
+      },
+      {
+        "pattern": "pocketbase-oauth2-providers\\.json"
       }
     ]
   }

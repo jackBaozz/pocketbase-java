@@ -52,6 +52,43 @@ class SchemaMigrationPlannerTest {
         assertFalse(plan.stream().anyMatch(op -> "dropField".equals(op.get("type"))));
     }
 
+    @Test
+    void viewPlansUseTheSubmittedQueryInsteadOfPlaceholderSql() {
+        CollectionSchema current = collection("published_posts");
+        current.type = "view";
+        current.viewQuery = "select id, title from posts where published = 1";
+
+        CollectionSchema desired = collection("public_posts");
+        desired.type = "view";
+        desired.viewQuery = "select id, title from posts where published = 1 order by title";
+
+        var plan = SchemaMigrationPlanner.plan(current, desired, name -> "`" + name + "`");
+
+        assertEquals(1, plan.size());
+        assertEquals("replaceView", plan.get(0).get("type"));
+        assertEquals(
+                "DROP VIEW IF EXISTS `published_posts`; CREATE VIEW `public_posts` AS select id, title from posts where published = 1 order by title",
+                plan.get(0).get("sql")
+        );
+    }
+
+    @Test
+    void plannerEmitsDialectSpecificTypeAndIndexOperations() {
+        CollectionSchema current = collection("posts", new FieldSchema("f1", "count", "text", false, false, false));
+        current.indexes = List.of("CREATE INDEX idx_posts_count ON posts (count)");
+        CollectionSchema desired = collection("posts", new FieldSchema("f1", "count", "number", false, false, false));
+
+        var plan = SchemaMigrationPlanner.plan(
+                current,
+                desired,
+                name -> "`" + name + "`",
+                JooqDatabase.Engine.MYSQL
+        );
+
+        assertTrue(plan.stream().anyMatch(op -> String.valueOf(op.get("sql")).contains("MODIFY COLUMN `count`")));
+        assertTrue(plan.stream().anyMatch(op -> "DROP INDEX `idx_posts_count` ON `posts`".equals(op.get("sql"))));
+    }
+
     private CollectionSchema collection(String name, FieldSchema... fields) {
         CollectionSchema schema = new CollectionSchema();
         schema.id = "pbc_" + name;

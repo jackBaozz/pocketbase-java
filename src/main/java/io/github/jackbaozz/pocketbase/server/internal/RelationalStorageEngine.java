@@ -38,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -68,6 +69,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     private final SettingsRepository settingsRepository;
     private final BackupRepository backupRepository;
     private final FileRepository fileRepository;
+    private final AsyncJobRunner cronRunner = new AsyncJobRunner("pocketbase-java-cron-relational");
 
     private RelationalStorageEngine(Path dataDir, ObjectMapper mapper, TokenService tokenService, JooqDatabase.Engine engine) {
         this.mapper = mapper;
@@ -82,11 +84,11 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
         this.database = JooqDatabase.open(engine, dataDir);
 
+        this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
         this.collectionRepository = new CollectionRepository(database, mapper);
         this.recordRepository = new RecordRepository(database, mapper, collectionRepository, this, dataDir);
-        this.authRepository = new AuthRepository(database, mapper, tokenService, this, recordRepository, dataDir);
-        this.logRepository = new LogRepository(database, mapper);
-        this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
+        this.logRepository = new LogRepository(database, mapper, settingsRepository);
+        this.authRepository = new AuthRepository(database, mapper, tokenService, this, recordRepository, settingsRepository, dataDir);
         this.backupRepository = new BackupRepository(database, mapper, dataDir);
         this.fileRepository = new FileRepository(database, mapper, dataDir, tokenService, collectionRepository, recordRepository, this);
 
@@ -135,7 +137,11 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     public Map<String, Object> getSettings(Map<String, String> query) { return settingsRepository.getSettings(query); }
 
     @Override
-    public Map<String, Object> updateSettings(JsonNode body, Map<String, String> query) { return settingsRepository.updateSettings(body, query); }
+    public Map<String, Object> updateSettings(JsonNode body, Map<String, String> query) {
+        Map<String, Object> result = settingsRepository.updateSettings(body, query);
+        logRepository.cleanupForCurrentSettings();
+        return result;
+    }
 
     @Override
     public void testS3(JsonNode body) { settingsRepository.testS3(body); }
@@ -182,13 +188,41 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         if (!exists) {
             throw new ApiException(404, "Missing or invalid cron job");
         }
+        cronRunner.execute(() -> runCronJob(id));
+    }
+
+    @Override
+    public void close() {
+        cronRunner.close();
+        database.close();
+    }
+
+    private void runCronJob(String id) {
         switch (id) {
+            case "__pbLogsCleanup__" -> logRepository.deleteOldLogs();
+            case "__pbDBOptimize__" -> optimizeDatabase();
             case "__pbMFACleanup__" -> authRepository.pruneExpiredMfas();
             case "__pbOTPCleanup__" -> authRepository.pruneExpiredOtps();
             case AUTO_BACKUP_JOB_ID -> runAutoBackupCron();
-            default -> {
-                // __pbLogsCleanup__ and __pbDBOptimize__ remain no-op placeholders for now.
+            default -> throw new ApiException(404, "Missing or invalid cron job");
+        }
+    }
+
+    private void optimizeDatabase() {
+        switch (database.engine()) {
+            case SQLITE -> {
+                database.dsl().fetch("PRAGMA wal_checkpoint(TRUNCATE)");
+                database.dsl().execute("PRAGMA optimize");
             }
+            case MYSQL -> {
+                for (org.jooq.Record table : database.dsl().fetch("SHOW TABLES")) {
+                    Object tableName = table.get(0);
+                    if (tableName != null && !String.valueOf(tableName).isBlank()) {
+                        database.dsl().execute("ANALYZE TABLE " + database.quoteIdentifier(String.valueOf(tableName)));
+                    }
+                }
+            }
+            case POSTGRES -> database.dsl().execute("ANALYZE");
         }
     }
 
@@ -196,7 +230,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     public Map<String, Object> fileToken(RequestPrincipal principal) { return fileRepository.fileToken(principal); }
 
     @Override
-    public Map<String, Object> listBackups(int page, int perPage) { return backupRepository.listBackups(page, perPage); }
+    public List<Map<String, Object>> listBackups() { return backupRepository.listBackups(); }
 
     @Override
     public void deleteBackup(String key) { backupRepository.deleteBackup(key); }
@@ -214,10 +248,16 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     public Map<String, Object> bootstrapSuperuser(JsonNode body) { return authRepository.bootstrapSuperuser(body); }
 
     @Override
-    public Map<String, Object> authWithPassword(String collection, JsonNode body, Map<String, String> query) { return authRepository.authWithPassword(collection, body, query); }
+    public Map<String, Object> authWithPassword(String collection, JsonNode body, Map<String, String> query, AuthOriginContext origin) { return authRepository.authWithPassword(collection, body, query, origin); }
 
     @Override
-    public Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal) { return authRepository.authWithOAuth2(collection, body, query, principal); }
+    public Map<String, Object> authWithPassword(String collection, JsonNode body, RuleRequestContext request, AuthOriginContext origin) { return authRepository.authWithPassword(collection, body, request, origin); }
+
+    @Override
+    public Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal, AuthOriginContext origin) { return authRepository.authWithOAuth2(collection, body, query, principal, origin); }
+
+    @Override
+    public Map<String, Object> authWithOAuth2(String collection, JsonNode body, RuleRequestContext request, RequestPrincipal principal, AuthOriginContext origin) { return authRepository.authWithOAuth2(collection, body, request, principal, origin); }
 
     @Override
     public Map<String, Object> authRefresh(String collection, RequestPrincipal principal, Map<String, String> query) { return authRepository.authRefresh(collection, principal, query); }
@@ -288,28 +328,52 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     public Map<String, Object> requestOtp(String collection, JsonNode body) { return authRepository.requestOtp(collection, body); }
 
     @Override
-    public Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query) { return authRepository.authWithOtp(collection, body, query); }
+    public Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query, AuthOriginContext origin) { return authRepository.authWithOtp(collection, body, query, origin); }
+
+    @Override
+    public Map<String, Object> authWithOtp(String collection, JsonNode body, RuleRequestContext request, AuthOriginContext origin) { return authRepository.authWithOtp(collection, body, request, origin); }
 
     @Override
     public Map<String, Object> listRecords(String collection, Map<String, String> query, RequestPrincipal principal) { return recordRepository.listRecords(collection, query, principal); }
 
     @Override
+    public Map<String, Object> listRecords(String collection, RuleRequestContext request, RequestPrincipal principal) { return recordRepository.listRecords(collection, request, principal); }
+
+    @Override
     public Map<String, Object> getRecord(String collection, String id, Map<String, String> query, RequestPrincipal principal) { return recordRepository.getRecord(collection, id, query, principal); }
+
+    @Override
+    public Map<String, Object> getRecord(String collection, String id, RuleRequestContext request, RequestPrincipal principal) { return recordRepository.getRecord(collection, id, request, principal); }
 
     @Override
     public Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) { return recordRepository.createRecord(collection, body, files, query, principal); }
 
     @Override
+    public Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal) { return recordRepository.createRecord(collection, body, files, request, principal); }
+
+    @Override
     public Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) { return recordRepository.updateRecord(collection, id, body, files, query, principal); }
+
+    @Override
+    public Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal) { return recordRepository.updateRecord(collection, id, body, files, request, principal); }
 
     @Override
     public Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) { return recordRepository.upsertRecord(collection, id, body, files, query, principal); }
 
     @Override
+    public Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal) { return recordRepository.upsertRecord(collection, id, body, files, request, principal); }
+
+    @Override
     public void deleteRecord(String collection, String id, RequestPrincipal principal) { recordRepository.deleteRecord(collection, id, principal); }
 
     @Override
+    public void deleteRecord(String collection, String id, RuleRequestContext request, RequestPrincipal principal) { recordRepository.deleteRecord(collection, id, request, principal); }
+
+    @Override
     public Path filePath(String collectionIdOrName, String recordId, String filename, RequestPrincipal principal) { return fileRepository.filePath(collectionIdOrName, recordId, filename, principal); }
+
+    @Override
+    public Path filePath(String collectionIdOrName, String recordId, String filename, RuleRequestContext request, RequestPrincipal principal) { return fileRepository.filePath(collectionIdOrName, recordId, filename, request, principal); }
 
     @Override
     public Path backupFile(String key) { return backupRepository.backupFile(key); }
@@ -353,15 +417,25 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         try {
             DSLContext dsl = database.dsl();
             createCollectionsTable(dsl);
+            ensureCollectionMetadataColumns(dsl);
             createSuperusersTable(dsl);
             createLogsTable(dsl);
             createMfasTable(dsl);
             createExternalAuthsTable(dsl);
+            createAuthOriginsTable(dsl);
             createOtpsTable(dsl);
             createAuthRequestsTable(dsl);
             createParamsTable(dsl);
             ensureParamsKeyColumn(dsl);
+            ensureAuthSystemTableColumns(dsl);
+            migrateSystemCollectionIds(dsl);
             ensureSuperusersCollection(dsl);
+            ensureAuthSystemCollections(dsl);
+            ensureAuthSystemIndexes(dsl);
+            backfillLegacyCollectionIndexes(dsl);
+            ensureCollectionMetadataDefaults(dsl);
+            collectionRepository.ensureAuthCollectionFields();
+            collectionRepository.ensureAuthTokenSecrets();
 
         } catch (DataAccessException e) {
             throw new RuntimeException("failed to bootstrap system tables", e);
@@ -375,6 +449,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("name"), SQLDataType.VARCHAR(255))
                 .column(DSL.name("type"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("schema"), SQLDataType.CLOB)
+                .column(DSL.name("indexes"), SQLDataType.CLOB)
                 .column(DSL.name("system"), SQLDataType.INTEGER)
                 .column(DSL.name("createRule"), SQLDataType.CLOB)
                 .column(DSL.name("listRule"), SQLDataType.CLOB)
@@ -382,11 +457,119 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("updateRule"), SQLDataType.CLOB)
                 .column(DSL.name("deleteRule"), SQLDataType.CLOB)
                 .column(DSL.name("options"), SQLDataType.CLOB)
+                .column(DSL.name("created"), SQLDataType.VARCHAR(64))
+                .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
                 .constraints(
                         DSL.constraint(DSL.name("pk__collections")).primaryKey(DSL.name("id")),
                         DSL.constraint(DSL.name("uk__collections_name")).unique(DSL.name("name"))
                 )
                 .execute();
+    }
+
+    private void ensureCollectionMetadataColumns(DSLContext dsl) {
+        ensureColumn(dsl, "_collections", "indexes", SQLDataType.CLOB);
+        ensureColumn(dsl, "_collections", "created", SQLDataType.VARCHAR(64));
+        ensureColumn(dsl, "_collections", "updated", SQLDataType.VARCHAR(64));
+    }
+
+    private void ensureCollectionMetadataDefaults(DSLContext dsl) {
+        Table<?> collections = DSL.table(DSL.name("_collections"));
+        Field<String> indexes = DSL.field(DSL.name("indexes"), String.class);
+        Field<String> created = DSL.field(DSL.name("created"), String.class);
+        Field<String> updated = DSL.field(DSL.name("updated"), String.class);
+        String now = Instant.now().toString();
+        dsl.update(collections).set(indexes, "[]").where(indexes.isNull()).execute();
+        dsl.update(collections).set(created, now).where(created.isNull()).execute();
+        dsl.update(collections).set(updated, created).where(updated.isNull()).execute();
+    }
+
+    private void backfillLegacyCollectionIndexes(DSLContext dsl) {
+        Table<?> collections = DSL.table(DSL.name("_collections"));
+        Field<String> id = DSL.field(DSL.name("id"), String.class);
+        Field<String> name = DSL.field(DSL.name("name"), String.class);
+        Field<String> indexes = DSL.field(DSL.name("indexes"), String.class);
+        var rows = dsl.select(id, name)
+                .from(collections)
+                .where(indexes.isNull())
+                .fetch();
+        for (org.jooq.Record row : rows) {
+            String collectionName = row.get(name);
+            List<String> definitions = switch (database.engine()) {
+                case SQLITE -> sqliteIndexDefinitions(dsl, collectionName);
+                case MYSQL -> mysqlIndexDefinitions(dsl, collectionName);
+                case POSTGRES -> postgresIndexDefinitions(dsl, collectionName);
+            };
+            try {
+                dsl.update(collections)
+                        .set(indexes, mapper.writeValueAsString(definitions))
+                        .where(id.eq(row.get(id)))
+                        .execute();
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to backfill collection index metadata", e);
+            }
+        }
+    }
+
+    private List<String> sqliteIndexDefinitions(DSLContext dsl, String table) {
+        return dsl.fetch(
+                        "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+                        table
+                ).map(record -> normalizedIndexDefinition(record.get("sql", String.class), table))
+                .stream()
+                .filter(definition -> !definition.isBlank())
+                .toList();
+    }
+
+    private List<String> mysqlIndexDefinitions(DSLContext dsl, String table) {
+        return dsl.fetch(
+                        "SELECT index_name, non_unique, "
+                                + "GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') AS columns_list "
+                                + "FROM information_schema.statistics "
+                                + "WHERE table_schema = DATABASE() AND table_name = ? AND index_name <> 'PRIMARY' "
+                                + "GROUP BY index_name, non_unique ORDER BY index_name",
+                        table
+                ).map(record -> {
+                    String indexName = record.get("index_name", String.class);
+                    Integer nonUnique = record.get("non_unique", Integer.class);
+                    String columns = record.get("columns_list", String.class);
+                    if (indexName == null || columns == null) {
+                        return "";
+                    }
+                    String unique = nonUnique != null && nonUnique == 0 ? "UNIQUE " : "";
+                    String quotedColumns = java.util.Arrays.stream(columns.split(","))
+                            .map(String::trim)
+                            .map(column -> "`" + column.replace("`", "``") + "`")
+                            .collect(java.util.stream.Collectors.joining(", "));
+                    return "CREATE " + unique + "INDEX `" + indexName.replace("`", "``")
+                            + "` ON `" + table.replace("`", "``") + "` (" + quotedColumns + ")";
+                }).stream()
+                .filter(definition -> !definition.isBlank())
+                .toList();
+    }
+
+    private List<String> postgresIndexDefinitions(DSLContext dsl, String table) {
+        return dsl.fetch(
+                        "SELECT indexdef FROM pg_indexes "
+                                + "WHERE schemaname = current_schema() AND tablename = ? AND indexname NOT LIKE '%_pkey' "
+                                + "ORDER BY indexname",
+                        table
+                ).map(record -> {
+                    String definition = record.get("indexdef", String.class);
+                    if (definition == null) {
+                        return "";
+                    }
+                    return normalizedIndexDefinition(
+                            definition.replaceFirst("(?i)\\s+USING\\s+btree\\s*", " "),
+                            table
+                    );
+                }).stream()
+                .filter(definition -> !definition.isBlank())
+                .toList();
+    }
+
+    private String normalizedIndexDefinition(String raw, String table) {
+        String normalized = CollectionIndexSupport.normalizeDefinition(raw, table);
+        return normalized.isBlank() ? raw : normalized;
     }
 
 
@@ -396,6 +579,8 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("email"), SQLDataType.VARCHAR(320))
                 .column(DSL.name("passwordHash"), SQLDataType.VARCHAR(255))
                 .column(DSL.name("tokenKey"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("emailVisibility"), SQLDataType.BOOLEAN.defaultValue(false))
+                .column(DSL.name("verified"), SQLDataType.BOOLEAN.defaultValue(true))
                 .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
                 .constraints(
@@ -424,8 +609,8 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
                 .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
-                .column(DSL.name("recordId"), SQLDataType.VARCHAR(255))
-                .column(DSL.name("collectionId"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("recordRef"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("collectionRef"), SQLDataType.VARCHAR(255))
                 .column(DSL.name("method"), SQLDataType.VARCHAR(64))
                 .constraints(DSL.constraint(DSL.name("pk__mfas")).primaryKey(DSL.name("id")))
                 .execute();
@@ -437,11 +622,30 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
                 .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
-                .column(DSL.name("recordId"), SQLDataType.VARCHAR(255))
-                .column(DSL.name("collectionId"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("recordRef"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("collectionRef"), SQLDataType.VARCHAR(255))
                 .column(DSL.name("provider"), SQLDataType.VARCHAR(128))
                 .column(DSL.name("providerId"), SQLDataType.VARCHAR(255))
                 .constraints(DSL.constraint(DSL.name("pk__externalAuths")).primaryKey(DSL.name("id")))
+                .execute();
+    }
+
+    private void createAuthOriginsTable(DSLContext dsl) {
+        dsl.createTableIfNotExists(DSL.name("_authOrigins"))
+                .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
+                .column(DSL.name("created"), SQLDataType.VARCHAR(64))
+                .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
+                .column(DSL.name("collectionRef"), SQLDataType.VARCHAR(255).nullable(false))
+                .column(DSL.name("recordRef"), SQLDataType.VARCHAR(255).nullable(false))
+                .column(DSL.name("fingerprint"), SQLDataType.VARCHAR(64).nullable(false))
+                .constraints(
+                        DSL.constraint(DSL.name("pk__authOrigins")).primaryKey(DSL.name("id")),
+                        DSL.constraint(DSL.name("uk__authOrigins_pair")).unique(
+                                DSL.name("collectionRef"),
+                                DSL.name("recordRef"),
+                                DSL.name("fingerprint")
+                        )
+                )
                 .execute();
     }
 
@@ -451,9 +655,9 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
                 .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                 .column(DSL.name("updated"), SQLDataType.VARCHAR(64))
-                .column(DSL.name("recordId"), SQLDataType.VARCHAR(255))
-                .column(DSL.name("collectionId"), SQLDataType.VARCHAR(255))
-                .column(DSL.name("passwordHash"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("recordRef"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("collectionRef"), SQLDataType.VARCHAR(255))
+                .column(DSL.name("password"), SQLDataType.VARCHAR(255))
                 .column(DSL.name("sentTo"), SQLDataType.VARCHAR(320))
                 .column(DSL.name("failedAttempts"), SQLDataType.INTEGER)
                 .constraints(DSL.constraint(DSL.name("pk__otps")).primaryKey(DSL.name("id")))
@@ -504,34 +708,331 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         }
     }
 
+    private void ensureAuthSystemTableColumns(DSLContext dsl) {
+        ensureColumn(dsl, "_mfas", "collectionRef", SQLDataType.VARCHAR(255));
+        ensureColumn(dsl, "_mfas", "recordRef", SQLDataType.VARCHAR(255));
+        copyLegacyColumn(dsl, "_mfas", "collectionRef", "collectionId");
+        copyLegacyColumn(dsl, "_mfas", "recordRef", "recordId");
+
+        ensureColumn(dsl, "_externalAuths", "collectionRef", SQLDataType.VARCHAR(255));
+        ensureColumn(dsl, "_externalAuths", "recordRef", SQLDataType.VARCHAR(255));
+        copyLegacyColumn(dsl, "_externalAuths", "collectionRef", "collectionId");
+        copyLegacyColumn(dsl, "_externalAuths", "recordRef", "recordId");
+
+        ensureColumn(dsl, "_otps", "collectionRef", SQLDataType.VARCHAR(255));
+        ensureColumn(dsl, "_otps", "recordRef", SQLDataType.VARCHAR(255));
+        ensureColumn(dsl, "_otps", "password", SQLDataType.VARCHAR(255));
+        copyLegacyColumn(dsl, "_otps", "collectionRef", "collectionId");
+        copyLegacyColumn(dsl, "_otps", "recordRef", "recordId");
+        copyLegacyColumn(dsl, "_otps", "password", "passwordHash");
+    }
+
+    private void ensureColumn(DSLContext dsl, String table, String column, org.jooq.DataType<?> type) {
+        try {
+            dsl.alterTable(DSL.name(table)).add(DSL.name(column), type).execute();
+        } catch (DataAccessException ignored) {
+        }
+    }
+
+    private void copyLegacyColumn(DSLContext dsl, String table, String target, String legacy) {
+        try {
+            Field<String> targetField = DSL.field(DSL.name(target), String.class);
+            Field<String> legacyField = DSL.field(DSL.name(legacy), String.class);
+            dsl.update(DSL.table(DSL.name(table)))
+                    .set(targetField, legacyField)
+                    .where(targetField.isNull().and(legacyField.isNotNull()))
+                    .execute();
+        } catch (DataAccessException ignored) {
+        }
+    }
+
 
     private void ensureSuperusersCollection(DSLContext dsl) {
         Table<?> collections = DSL.table(DSL.name("_collections"));
         Field<String> id = DSL.field(DSL.name("id"), String.class);
         Field<String> name = DSL.field(DSL.name("name"), String.class);
         Field<String> type = DSL.field(DSL.name("type"), String.class);
+        Field<String> schema = DSL.field(DSL.name("schema"), String.class);
+        Field<String> indexes = DSL.field(DSL.name("indexes"), String.class);
+        Field<String> options = DSL.field(DSL.name("options"), String.class);
         Field<Integer> system = DSL.field(DSL.name("system"), Integer.class);
-        boolean exists = dsl.fetchExists(DSL.selectOne().from(collections).where(id.eq("pbc_superusers")));
+        CollectionSchema defaults = AuthSystemCollections.superusers();
+        String fields;
+        String indexDefinitions;
+        try {
+            fields = mapper.writeValueAsString(defaults.fields);
+            indexDefinitions = mapper.writeValueAsString(defaults.indexes);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to serialize superusers collection schema", e);
+        }
+        boolean exists = dsl.fetchExists(DSL.selectOne().from(collections).where(name.eq(SystemCollections.SUPERUSERS)));
         if (!exists) {
             dsl.insertInto(collections)
-                    .columns(id, name, type, system)
-                    .values("pbc_superusers", "_superusers", "auth", 1)
+                    .columns(id, name, type, schema, indexes, system, options)
+                    .values(
+                            SystemCollections.SUPERUSERS_ID,
+                            SystemCollections.SUPERUSERS,
+                            "auth",
+                            fields,
+                            indexDefinitions,
+                            1,
+                            "{\"authToken\":{\"duration\":86400}}"
+                    )
                     .execute();
+            return;
+        }
+        dsl.update(collections)
+                .set(id, SystemCollections.SUPERUSERS_ID)
+                .set(type, "auth")
+                .set(schema, fields)
+                .set(indexes, indexDefinitions)
+                .set(system, 1)
+                .where(name.eq(SystemCollections.SUPERUSERS))
+                .execute();
+    }
+
+    private void ensureAuthSystemCollections(DSLContext dsl) {
+        Table<?> collections = DSL.table(DSL.name("_collections"));
+        Field<String> id = DSL.field(DSL.name("id"), String.class);
+        Field<String> name = DSL.field(DSL.name("name"), String.class);
+        Field<String> type = DSL.field(DSL.name("type"), String.class);
+        Field<String> schema = DSL.field(DSL.name("schema"), String.class);
+        Field<String> indexes = DSL.field(DSL.name("indexes"), String.class);
+        Field<Integer> system = DSL.field(DSL.name("system"), Integer.class);
+        Field<String> createRule = DSL.field(DSL.name("createRule"), String.class);
+        Field<String> listRule = DSL.field(DSL.name("listRule"), String.class);
+        Field<String> viewRule = DSL.field(DSL.name("viewRule"), String.class);
+        Field<String> updateRule = DSL.field(DSL.name("updateRule"), String.class);
+        Field<String> deleteRule = DSL.field(DSL.name("deleteRule"), String.class);
+        Field<String> options = DSL.field(DSL.name("options"), String.class);
+
+        for (CollectionSchema collection : AuthSystemCollections.defaults()) {
+            String fields;
+            String indexDefinitions;
+            try {
+                fields = mapper.writeValueAsString(collection.fields);
+                indexDefinitions = mapper.writeValueAsString(collection.indexes);
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to serialize system collection schema", e);
+            }
+            boolean exists = dsl.fetchExists(dsl.selectOne().from(collections).where(name.eq(collection.name)));
+            if (!exists) {
+                dsl.insertInto(collections)
+                        .columns(id, name, type, schema, indexes, system, createRule, listRule, viewRule, updateRule, deleteRule, options)
+                        .values(
+                                collection.id,
+                                collection.name,
+                                collection.type,
+                                fields,
+                                indexDefinitions,
+                                1,
+                                collection.createRule,
+                                collection.listRule,
+                                collection.viewRule,
+                                collection.updateRule,
+                                collection.deleteRule,
+                                "{}"
+                        )
+                        .execute();
+                continue;
+            }
+            dsl.update(collections)
+                    .set(type, collection.type)
+                    .set(schema, fields)
+                    .set(indexes, indexDefinitions)
+                    .set(system, 1)
+                    .set(createRule, collection.createRule)
+                    .set(listRule, collection.listRule)
+                    .set(viewRule, collection.viewRule)
+                    .set(updateRule, collection.updateRule)
+                    .set(deleteRule, collection.deleteRule)
+                    .where(name.eq(collection.name))
+                    .execute();
+        }
+    }
+
+    private void ensureAuthSystemIndexes(DSLContext dsl) {
+        List<CollectionSchema> systemCollections = new ArrayList<>();
+        systemCollections.add(AuthSystemCollections.superusers());
+        systemCollections.addAll(AuthSystemCollections.defaults());
+        for (CollectionSchema collection : systemCollections) {
+            for (String index : collection.indexes) {
+                String sql = CollectionIndexSupport.createSql(index, collection.name, database::quoteIdentifier);
+                if (sql.isBlank()) {
+                    continue;
+                }
+                try {
+                    dsl.execute(sql);
+                } catch (DataAccessException ignored) {
+                    // Existing system indexes are expected on subsequent starts.
+                }
+            }
+        }
+    }
+
+    private void migrateSystemCollectionIds(DSLContext dsl) {
+        Table<?> collections = DSL.table(DSL.name("_collections"));
+        Field<String> id = DSL.field(DSL.name("id"), String.class);
+        Field<String> name = DSL.field(DSL.name("name"), String.class);
+        for (SystemCollections.Definition definition : SystemCollections.definitions()) {
+            org.jooq.Record row = dsl.select(id)
+                    .from(collections)
+                    .where(name.eq(definition.name()))
+                    .fetchOne();
+            if (row == null) {
+                continue;
+            }
+            String previousId = row.get(id);
+            if (definition.officialId().equals(previousId)) {
+                continue;
+            }
+            boolean targetExists = dsl.fetchExists(dsl.selectOne()
+                    .from(collections)
+                    .where(id.eq(definition.officialId())));
+            if (targetExists) {
+                throw new IllegalStateException("system collection id migration target already exists: " + definition.officialId());
+            }
+            rewriteRelationalCollectionReferences(dsl, previousId, definition.officialId());
+            migrateRelationalCollectionSchemas(dsl, previousId, definition.officialId());
+            dsl.update(collections)
+                    .set(id, definition.officialId())
+                    .where(name.eq(definition.name()))
+                    .execute();
+            migrateStorageDirectory(previousId, definition.officialId());
+        }
+    }
+
+    private void rewriteRelationalCollectionReferences(DSLContext dsl, String previousId, String officialId) {
+        for (String table : List.of("_authOrigins", "_externalAuths", "_mfas", "_otps")) {
+            Field<String> collectionRef = DSL.field(DSL.name("collectionRef"), String.class);
+            dsl.update(DSL.table(DSL.name(table)))
+                    .set(collectionRef, officialId)
+                    .where(collectionRef.eq(previousId))
+                    .execute();
+        }
+        Field<String> collectionId = DSL.field(DSL.name("collectionId"), String.class);
+        dsl.update(DSL.table(DSL.name("_authRequests")))
+                .set(collectionId, officialId)
+                .where(collectionId.eq(previousId))
+                .execute();
+    }
+
+    private void migrateRelationalCollectionSchemas(DSLContext dsl, String previousId, String officialId) {
+        Field<String> id = DSL.field(DSL.name("id"), String.class);
+        Field<String> schema = DSL.field(DSL.name("schema"), String.class);
+        var rows = dsl.select(id, schema).from(DSL.table(DSL.name("_collections"))).fetch();
+        for (org.jooq.Record row : rows) {
+            String rawSchema = row.get(schema);
+            if (rawSchema == null || rawSchema.isBlank()) {
+                continue;
+            }
+            try {
+                List<FieldSchema> fields = mapper.readValue(rawSchema, new TypeReference<List<FieldSchema>>() {});
+                boolean changed = false;
+                for (FieldSchema field : fields) {
+                    if (previousId.equals(field.collectionId)) {
+                        field.collectionId = officialId;
+                        changed = true;
+                    }
+                    if (field.collectionIds != null && field.collectionIds.contains(previousId)) {
+                        field.collectionIds = field.collectionIds.stream()
+                                .map(value -> previousId.equals(value) ? officialId : value)
+                                .toList();
+                        changed = true;
+                    }
+                    if (field.options != null) {
+                        for (Map.Entry<String, JsonNode> entry : field.options.entrySet()) {
+                            JsonNode replacement = replaceJsonValue(entry.getValue(), previousId, officialId);
+                            if (!Objects.equals(replacement, entry.getValue())) {
+                                entry.setValue(replacement);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                if (changed) {
+                    dsl.update(DSL.table(DSL.name("_collections")))
+                            .set(schema, mapper.writeValueAsString(fields))
+                            .where(id.eq(row.get(id)))
+                            .execute();
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to migrate collection relation metadata", e);
+            }
+        }
+    }
+
+    private JsonNode replaceJsonValue(JsonNode value, String previousId, String officialId) {
+        if (value == null || value.isNull()) {
+            return value;
+        }
+        if (value.isTextual()) {
+            return previousId.equals(value.asText()) ? mapper.getNodeFactory().textNode(officialId) : value;
+        }
+        if (value.isArray()) {
+            ArrayNode copy = value.deepCopy();
+            for (int i = 0; i < copy.size(); i++) {
+                copy.set(i, replaceJsonValue(copy.get(i), previousId, officialId));
+            }
+            return copy;
+        }
+        if (value.isObject()) {
+            ObjectNode copy = value.deepCopy();
+            List<String> names = new ArrayList<>();
+            copy.fieldNames().forEachRemaining(names::add);
+            for (String name : names) {
+                copy.set(name, replaceJsonValue(copy.get(name), previousId, officialId));
+            }
+            return copy;
+        }
+        return value;
+    }
+
+    private void migrateStorageDirectory(String previousId, String officialId) {
+        Path source = dataDir.resolve("storage").resolve(previousId);
+        if (!Files.exists(source)) {
+            return;
+        }
+        Path target = dataDir.resolve("storage").resolve(officialId);
+        try {
+            if (!Files.exists(target)) {
+                Files.createDirectories(target.getParent());
+                Files.move(source, target);
+                return;
+            }
+            try (java.util.stream.Stream<Path> paths = Files.walk(source)) {
+                for (Path path : paths.sorted().toList()) {
+                    Path destination = target.resolve(source.relativize(path));
+                    if (Files.isDirectory(path)) {
+                        Files.createDirectories(destination);
+                    } else if (!Files.exists(destination)) {
+                        Files.move(path, destination);
+                    } else if (Files.mismatch(path, destination) != -1L) {
+                        throw new IllegalStateException("conflicting files found while migrating system collection " + previousId);
+                    } else {
+                        Files.delete(path);
+                    }
+                }
+            }
+            try (java.util.stream.Stream<Path> paths = Files.walk(source)) {
+                for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                    Files.deleteIfExists(path);
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to migrate system collection storage from " + previousId, e);
         }
     }
 
 
     @Override
-    public Map<String, Object> health() {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("canBackup", true);
-        data.put("dataDir", dataDir.toString());
-        data.put("superuserReady", database.dsl().fetchCount(DSL.table(DSL.name("_superusers"))) > 0);
-        return Map.of(
-                "code", 200,
-                "message", "API is healthy.",
-                "data", data
-        );
+    public boolean canBackup() {
+        return backupRepository.canBackup();
+    }
+
+    @Override
+    public boolean hasSuperusers() {
+        return database.dsl().fetchCount(DSL.table(DSL.name("_superusers"))) > 0;
     }
 
 
@@ -583,12 +1084,32 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
     @Override
     public boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal) {
+        return canView(collection, record, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    @Override
+    public boolean canView(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         if (principal != null && principal.superuser()) {
             return true;
         }
         return collection.viewRule != null && RuleEvaluator.matches(
                 collection.viewRule,
-                RuleEvaluator.context(record, null, query == null ? Map.of() : query, "GET", principal, this::recordsForRule)
+                RecordFieldResolverSupport.context(
+                        this,
+                        collection,
+                        record,
+                        null,
+                        request,
+                        "GET",
+                        principal,
+                        true,
+                        false
+                )
         );
     }
 

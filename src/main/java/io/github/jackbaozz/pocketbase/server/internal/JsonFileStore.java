@@ -3,6 +3,8 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
@@ -12,8 +14,10 @@ import java.io.OutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
@@ -43,7 +47,7 @@ import java.util.zip.ZipOutputStream;
  * Small persistent store used by the native-friendly embedded server.
  */
 public final class JsonFileStore implements StorageEngine, RecordProcessor.StoreContext {
-    public static final String SUPERUSERS = "_superusers";
+    public static final String SUPERUSERS = SystemCollections.SUPERUSERS;
 
     private static final TypeReference<List<CollectionSchema>> COLLECTION_LIST = new TypeReference<>() {
     };
@@ -53,8 +57,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     };
     private static final TypeReference<Map<String, Object>> STRING_OBJECT_MAP = new TypeReference<>() {
     };
-    private static final Pattern NAME_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,62}$");
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    private static final Set<String> INTERNAL_TABLE_NAMES = Set.of(
+            "_collections",
+            "_params",
+            "_migrations",
+            "_logs",
+            "_authRequests"
+    );
     private static final int MAX_ACTIVITY_LOGS = 10_000;
     private static final int SQL_MAX_QUERY_LENGTH = 5000;
     private static final int SQL_MAX_ROWS = 1000;
@@ -84,7 +94,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private final Path settingsFile;
     private final Path logsFile;
     private final Path authRequestsFile;
+    private final Path authOriginsFile;
     private final Path externalAuthsFile;
+    private final Path mfasFile;
     private final Path otpsFile;
     private final Path recordsDir;
     private final Path storageDir;
@@ -98,8 +110,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private final List<Map<String, Object>> logs = new ArrayList<>();
     private final List<Map<String, Object>> mfas = new ArrayList<>();
     private final List<Map<String, Object>> authRequests = new ArrayList<>();
+    private final List<Map<String, Object>> authOrigins = new ArrayList<>();
     private final List<Map<String, Object>> externalAuths = new ArrayList<>();
     private final List<Map<String, Object>> otps = new ArrayList<>();
+    private final Set<String> evaluatingViewCollections = new LinkedHashSet<>();
+    private final AsyncJobRunner cronRunner = new AsyncJobRunner("pocketbase-java-cron-jsonl");
+    private final BackupOperationGuard backupOperations = new BackupOperationGuard();
     private RealtimeHub realtimeHub;
 
     private JsonFileStore(Path dataDir, ObjectMapper mapper, TokenService tokenService) {
@@ -108,7 +124,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         this.settingsFile = dataDir.resolve("pb_settings.json");
         this.logsFile = dataDir.resolve("logs.json");
         this.authRequestsFile = dataDir.resolve("auth_requests.json");
+        this.authOriginsFile = dataDir.resolve("auth_origins.json");
         this.externalAuthsFile = dataDir.resolve("external_auths.json");
+        this.mfasFile = dataDir.resolve("mfas.json");
         this.otpsFile = dataDir.resolve("otps.json");
         this.recordsDir = dataDir.resolve("records");
         this.storageDir = dataDir.resolve("storage");
@@ -143,8 +161,108 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return mapper;
     }
 
+    @Override
+    public synchronized Map<String, Object> authWithPassword(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        return authWithPasswordInternal(collection, body, request, origin);
+    }
+
+    @Override
+    public synchronized Map<String, Object> authWithOAuth2(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            RequestPrincipal principal,
+            AuthOriginContext origin
+    ) {
+        return authWithOAuth2Internal(collection, body, request, principal, origin);
+    }
+
+    @Override
+    public synchronized Map<String, Object> authWithOtp(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        return authWithOtpInternal(collection, body, request, origin);
+    }
+
+    @Override
+    public synchronized Map<String, Object> listRecords(
+            String collection,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return listRecordsInternal(collection, request, principal);
+    }
+
+    @Override
+    public synchronized Map<String, Object> getRecord(
+            String collection,
+            String id,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return getRecordInternal(collection, id, request, principal);
+    }
+
+    @Override
+    public synchronized Map<String, Object> createRecord(
+            String collection,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return createRecordInternal(collection, body, files, request, principal);
+    }
+
+    @Override
+    public synchronized Map<String, Object> updateRecord(
+            String collection,
+            String id,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return updateRecordInternal(collection, id, body, files, request, principal);
+    }
+
+    @Override
+    public synchronized Map<String, Object> upsertRecord(
+            String collection,
+            String id,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return upsertRecordInternal(collection, id, body, files, request, principal);
+    }
+
+    @Override
+    public synchronized void deleteRecord(
+            String collection,
+            String id,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        deleteRecordInternal(collection, id, request, principal);
+    }
+
     public void realtimeHub(RealtimeHub realtimeHub) {
         this.realtimeHub = realtimeHub;
+    }
+
+    @Override
+    public void close() {
+        cronRunner.close();
     }
 
     public Optional<Map<String, Object>> verifyToken(String token) {
@@ -160,16 +278,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 .map(RequestPrincipal::fromClaims);
     }
 
-    public synchronized Map<String, Object> health() {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("canBackup", true);
-        data.put("dataDir", dataDir.toString());
-        data.put("superuserReady", hasSuperusers());
-        return Map.of(
-                "code", 200,
-                "message", "API is healthy.",
-                "data", data
-        );
+    public boolean canBackup() {
+        return backupOperations.available();
     }
 
     public synchronized Map<String, Object> getSettings(Map<String, String> query) {
@@ -182,10 +292,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(400, "Settings payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
-        deepMerge(settings, mapper.convertValue(body, STRING_OBJECT_MAP));
-        normalizeSettings();
-        saveSettings();
-        return getSettings(query);
+        Map<String, Object> snapshot = copyMap(settings);
+        try {
+            deepMerge(settings, mapper.convertValue(body, STRING_OBJECT_MAP));
+            normalizeSettings();
+            HttpRateLimiter.validateSettings(settings);
+            saveSettings();
+            pruneLogs();
+            saveLogs();
+            return getSettings(query);
+        } catch (RuntimeException e) {
+            settings.clear();
+            settings.putAll(snapshot);
+            throw e;
+        }
     }
 
     public synchronized void testS3(JsonNode body) {
@@ -261,26 +381,25 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> listLogs(Map<String, String> query) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
-        int page = parsePositive(safeQuery.get("page"), 1);
-        int perPage = parsePositive(safeQuery.get("perPage"), 30);
-        String sort = safeQuery.getOrDefault("sort", "-created");
+        SearchQuerySupport.Parameters search = SearchQuerySupport.parse(safeQuery);
+        SearchFieldValidationSupport.validateLogs(search);
         List<Map<String, Object>> items = new ArrayList<>();
         for (int i = 0; i < logs.size(); i++) {
             Map<String, Object> log = copyMap(logs.get(i));
             log.put(INTERNAL_ROWID, i + 1);
-            if (matchesLogFilter(log, safeQuery.get("filter"))) {
+            if (matchesLogFilter(log, search.filter())) {
                 items.add(log);
             }
         }
-        sort(items, sort);
+        SearchQuerySupport.sortMaps(items, search.sort(), "-created");
         int total = items.size();
-        int from = Math.min(total, (page - 1) * perPage);
-        int to = Math.min(total, from + perPage);
+        int from = search.fromIndex(total);
+        int to = Math.min(total, from + search.perPage());
         List<Map<String, Object>> pageItems = items.subList(from, to).stream()
                 .map(this::withoutInternalLogFields)
                 .map(log -> selectFields(log, safeQuery.get("fields")))
                 .collect(Collectors.toCollection(ArrayList::new));
-        return paginated(page, perPage, total, pageItems);
+        return SearchQuerySupport.result(search, total, pageItems);
     }
 
     public synchronized Map<String, Object> getLog(String id, Map<String, String> query) {
@@ -295,6 +414,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized List<Map<String, Object>> logStats(Map<String, String> query) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
+        SearchFieldValidationSupport.validateLogFilter(safeQuery.get("filter"));
         Map<String, Map<String, Object>> grouped = new LinkedHashMap<>();
         logs.stream()
                 .map(this::copyMap)
@@ -339,9 +459,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     .findFirst()
                     .orElseThrow(() -> new ApiException(404, "Missing or invalid cron job"));
         }
-        Thread runner = new Thread(() -> runCronJob(job.id()), "pocketbase-java-cron-" + job.id());
-        runner.setDaemon(true);
-        runner.start();
+        cronRunner.execute(() -> runCronJob(job.id()));
     }
 
     public synchronized Map<String, Object> runSql(JsonNode body) {
@@ -410,43 +528,29 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             );
         }
 
-        SqlResult result;
         try {
-            List<String> statements = splitSqlStatements(query).stream()
-                    .map(String::trim)
-                    .filter(statement -> !statement.isBlank())
-                    .collect(Collectors.toCollection(ArrayList::new));
-            if (statements.isEmpty()) {
-                throw new IllegalArgumentException("empty query");
-            }
-            String upper = statements.get(0).toUpperCase(Locale.ROOT);
-            boolean writeMode = SQL_WRITE_PREFIXES.stream().anyMatch(upper::startsWith);
-            if (writeMode) {
-                throw new IllegalArgumentException("write statements are not allowed");
-            }
-            result = new SqlResult(0, List.of(), List.of());
-            for (String statement : statements) {
-                result = executeSqlSelect(statement);
-            }
+            return previewViewQuery(query, 10);
         } catch (RuntimeException e) {
-            String message = "Invalid view query. Raw error:\n"
+            String message = "Invalid view query. Raw error: \n"
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-            throw new ApiException(
-                    400,
-                    message,
-                    ApiErrors.invalidField("query", message)
-            );
+            throw new ApiException(400, message, Map.of());
         }
+    }
 
+    private Map<String, Object> previewViewQuery(String query, int sampleSize) {
+        String statement = ViewQuerySupport.normalizeSingleSelect(query);
+        SqlResult result = executeSqlSelect(statement);
         List<List<Object>> limitRows = result.rows();
-        if (limitRows.size() > 10) {
-            limitRows = limitRows.subList(0, 10);
+        if (limitRows.size() > sampleSize) {
+            limitRows = limitRows.subList(0, sampleSize);
         }
-
-        return orderedMap(
-                "columns", result.columns(),
-                "rows", limitRows
-        );
+        List<ViewQuerySupport.Column> columns = result.columns().stream()
+                .map(column -> new ViewQuerySupport.Column(
+                        String.valueOf(column.get("name")),
+                        String.valueOf(column.getOrDefault("type", ""))
+                ))
+                .toList();
+        return ViewQuerySupport.result(columns, limitRows);
     }
 
     private SqlResult executeSql(String query) {
@@ -701,6 +805,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             collection.fields.add(field);
         }
         normalizeCollection(collection, false);
+        CollectionRuleSupport.validate(
+                collection,
+                "Failed to create collection.",
+                identifier -> resolveRuleCollection(collection, identifier)
+        );
         collectionsByName.put(collection.name, collection);
         recordsByCollectionId.put(collection.id, new ArrayList<>());
         saveAll();
@@ -1340,6 +1449,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         saveLogs();
     }
 
+    @Override
     public synchronized boolean hasSuperusers() {
         CollectionSchema collection = collectionsByName.get(SUPERUSERS);
         return collection != null && !records(collection).isEmpty();
@@ -1355,20 +1465,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     public synchronized Map<String, Object> listCollections(Map<String, String> query) {
         Map<String, String> safeQuery = query == null ? Map.of() : query;
-        int page = parsePositive(safeQuery.get("page"), 1);
-        int perPage = parsePositive(safeQuery.get("perPage"), 100);
+        SearchQuerySupport.Parameters search = SearchQuerySupport.parse(safeQuery);
+        SearchFieldValidationSupport.validateCollections(search);
         List<Map<String, Object>> items = collectionsByName.values().stream()
                 .map(this::collectionMap)
-                .filter(collection -> matchesCollectionFilter(collection, safeQuery.get("filter")))
+                .filter(collection -> matchesCollectionFilter(collection, search.filter()))
                 .collect(Collectors.toCollection(ArrayList::new));
-        sort(items, safeQuery.get("sort"));
+        SearchQuerySupport.sortMaps(items, search.sort(), null);
         int total = items.size();
-        int from = Math.min(total, (page - 1) * perPage);
-        int to = Math.min(total, from + perPage);
+        int from = search.fromIndex(total);
+        int to = Math.min(total, from + search.perPage());
         List<Map<String, Object>> pageItems = items.subList(from, to).stream()
                 .map(item -> selectFields(item, safeQuery.get("fields")))
                 .collect(Collectors.toCollection(ArrayList::new));
-        return paginated(page, perPage, total, pageItems);
+        return SearchQuerySupport.result(search, total, pageItems);
     }
 
     public synchronized Map<String, Object> collectionScaffolds() {
@@ -1384,7 +1494,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public synchronized List<Map<String, Object>> oauth2ProviderMetadata() {
-        return oauth2Providers().stream()
+        return OAuth2ProviderManager.providers().stream()
                 .map(provider -> orderedMap(
                         "name", provider.name(),
                         "displayName", provider.displayName(),
@@ -1404,13 +1514,35 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
         CollectionSchema collection = mapper.convertValue(body, CollectionSchema.class);
+        applyAuthOptions(collection, body);
+        if (body.has("fields") || body.has("schema")) {
+            collection.fields = SchemaIdSupport.canonicalizeSubmittedFields(collection.fields);
+        }
+        if ("view".equals(collection.type)) {
+            collection.viewQuery = viewQueryFromBody(body, collection.viewQuery);
+            prepareViewCollection(collection, "Failed to create collection.");
+        }
         normalizeCollection(collection, false);
-        if (collectionsByName.containsKey(collection.name)) {
-            throw new ApiException(400, "Failed to create collection.", ApiErrors.notUniqueField("name"));
-        }
-        if (findCollectionOrNull(collection.id) != null) {
-            throw new ApiException(400, "Failed to create collection.", ApiErrors.notUniqueField("id"));
-        }
+        AuthCollectionConfigMerge.mergeSubmitted(mapper, collection, new CollectionSchema(), body);
+        CollectionModelValidation.validate(
+                null,
+                collection,
+                body,
+                collectionsByName.values(),
+                this::jsonTableExists,
+                "Failed to create collection."
+        );
+        collection.indexes = CollectionIndexSupport.normalize(
+                collection,
+                collectionIndexNames(null),
+                "Failed to create collection."
+        );
+        AuthCollectionConfigValidation.validate(collection, "Failed to create collection.");
+        CollectionRuleSupport.validate(
+                collection,
+                "Failed to create collection.",
+                identifier -> resolveRuleCollection(collection, identifier)
+        );
         collectionsByName.put(collection.name, copyCollection(collection));
         recordsByCollectionId.put(collection.id, new ArrayList<>());
         saveAll();
@@ -1418,7 +1550,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public synchronized CollectionSchema updateCollection(String idOrName, JsonNode body) {
-        CollectionSchema existing = findCollection(idOrName);
+        CollectionSchema persisted = findCollection(idOrName);
+        CollectionSchema existing = copyCollection(persisted);
         if (!body.isObject()) {
             throw new ApiException(400, "Collection payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
@@ -1429,6 +1562,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         if (body.hasNonNull("type") && !existing.system) {
             existing.type = body.get("type").asText();
+        }
+        JsonNode options = body.get("options");
+        if (body.has("viewQuery") || body.path("options").has("query") || body.path("options").has("viewQuery")) {
+            existing.viewQuery = viewQueryFromBody(body, existing.viewQuery);
         }
         if (body.has("listRule")) {
             existing.listRule = nullableText(body.get("listRule"));
@@ -1445,15 +1582,31 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (body.has("deleteRule")) {
             existing.deleteRule = nullableText(body.get("deleteRule"));
         }
+        if (body.has("authRule") || options != null && options.has("authRule")) {
+            JsonNode node = body.has("authRule") ? body.get("authRule") : options.get("authRule");
+            existing.authRule = nullableText(node);
+        }
+        if (body.has("manageRule") || options != null && options.has("manageRule")) {
+            JsonNode node = body.has("manageRule") ? body.get("manageRule") : options.get("manageRule");
+            existing.manageRule = nullableText(node);
+        }
         JsonNode fields = body.has("fields") ? body.get("fields") : body.get("schema");
-        if (fields != null && fields.isArray() && !existing.system) {
+        if (fields != null && fields.isArray()) {
             existing.fields = mapper.convertValue(fields, new TypeReference<>() {
             });
+            existing.fields = SchemaIdSupport.canonicalizeSubmittedFields(existing.fields);
+            SchemaIdSupport.assignMissingFieldIds(existing.fields, persisted.fields);
+            if (!"view".equals(persisted.type)) {
+                CollectionFieldProtection.validateSystemFieldUpdate(
+                        persisted.fields,
+                        existing.fields,
+                        "Failed to update collection."
+                );
+            }
         }
         if (body.has("indexes") && body.get("indexes").isArray()) {
             existing.indexes = mapper.convertValue(body.get("indexes"), new TypeReference<>() {});
         }
-        JsonNode options = body.get("options");
         if (body.has("passwordAuth") || options != null && options.has("passwordAuth")) {
             JsonNode node = body.has("passwordAuth") ? body.get("passwordAuth") : options.get("passwordAuth");
             existing.passwordAuth = mapper.convertValue(node, CollectionSchema.PasswordAuthConfig.class);
@@ -1490,15 +1643,55 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode node = body.has("fileToken") ? body.get("fileToken") : options.get("fileToken");
             existing.fileToken = mapper.convertValue(node, CollectionSchema.TokenConfig.class);
         }
+        if (body.has("authAlert") || options != null && options.has("authAlert")) {
+            JsonNode node = body.has("authAlert") ? body.get("authAlert") : options.get("authAlert");
+            existing.authAlert = mapper.convertValue(node, CollectionSchema.AuthAlertConfig.class);
+        }
+        if (body.has("verificationTemplate") || options != null && options.has("verificationTemplate")) {
+            JsonNode node = body.has("verificationTemplate") ? body.get("verificationTemplate") : options.get("verificationTemplate");
+            existing.verificationTemplate = mapper.convertValue(node, CollectionSchema.EmailTemplate.class);
+        }
+        if (body.has("resetPasswordTemplate") || options != null && options.has("resetPasswordTemplate")) {
+            JsonNode node = body.has("resetPasswordTemplate") ? body.get("resetPasswordTemplate") : options.get("resetPasswordTemplate");
+            existing.resetPasswordTemplate = mapper.convertValue(node, CollectionSchema.EmailTemplate.class);
+        }
+        if (body.has("confirmEmailChangeTemplate") || options != null && options.has("confirmEmailChangeTemplate")) {
+            JsonNode node = body.has("confirmEmailChangeTemplate") ? body.get("confirmEmailChangeTemplate") : options.get("confirmEmailChangeTemplate");
+            existing.confirmEmailChangeTemplate = mapper.convertValue(node, CollectionSchema.EmailTemplate.class);
+        }
+        CollectionResponseSupport.preserveOAuth2ClientSecrets(persisted.oauth2, existing.oauth2);
+        if ("view".equals(existing.type)) {
+            prepareViewCollection(existing, "Failed to update collection.");
+        }
         normalizeCollection(existing, true);
-        if (!oldName.equals(existing.name) && collectionsByName.containsKey(existing.name)) {
-            existing.name = oldName;
-            throw new ApiException(400, "Failed to update collection.", ApiErrors.notUniqueField("name"));
+        AuthCollectionConfigMerge.mergeSubmitted(mapper, existing, persisted, body);
+        CollectionModelValidation.validate(
+                persisted,
+                existing,
+                body,
+                collectionsByName.values(),
+                this::jsonTableExists,
+                "Failed to update collection."
+        );
+        CollectionRuleSupport.validate(
+                existing,
+                "Failed to update collection.",
+                identifier -> resolveRuleCollection(existing, identifier)
+        );
+        existing.indexes = CollectionIndexSupport.normalize(
+                existing,
+                collectionIndexNames(persisted.id),
+                "Failed to update collection."
+        );
+        AuthCollectionConfigValidation.validate(existing, "Failed to update collection.");
+        AuthSystemCollections.applySaveInvariants(existing);
+        if ("auth".equals(existing.type) && authRuleChanged(persisted.authRule, existing.authRule)) {
+            existing.authToken.secret = IdGenerator.secret();
         }
         if (!oldName.equals(existing.name)) {
             collectionsByName.remove(oldName);
-            collectionsByName.put(existing.name, existing);
         }
+        collectionsByName.put(existing.name, existing);
 
         Set<String> allowedFields = new LinkedHashSet<>(Arrays.asList("id", "created", "updated", "collectionId", "collectionName", "expand"));
         if ("auth".equals(existing.type)) {
@@ -1506,15 +1699,17 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         existing.fields.forEach(f -> allowedFields.add(f.name));
 
-        boolean recordsChanged = false;
-        for (Map<String, Object> record : records(existing)) {
-            boolean changed = record.keySet().removeIf(key -> !allowedFields.contains(key));
-            if (changed) {
-                recordsChanged = true;
+        if (!"view".equals(existing.type)) {
+            boolean recordsChanged = false;
+            for (Map<String, Object> record : records(existing)) {
+                boolean changed = record.keySet().removeIf(key -> !allowedFields.contains(key));
+                if (changed) {
+                    recordsChanged = true;
+                }
             }
-        }
-        if (recordsChanged) {
-            saveRecords(existing);
+            if (recordsChanged) {
+                saveRecords(existing);
+            }
         }
 
         existing.updated = now();
@@ -1529,6 +1724,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
         collectionsByName.remove(collection.name);
         recordsByCollectionId.remove(collection.id);
+        clearAuthRecordDependents(collection.id, null);
         try {
             Files.deleteIfExists(recordsFile(collection));
             deleteRecursively(collectionStorageDir(collection));
@@ -1544,6 +1740,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             throw new ApiException(400, "System collections cannot be truncated.");
         }
         records(collection).clear();
+        if ("auth".equals(collection.type)) {
+            clearAuthRecordDependents(collection.id, null);
+        }
         saveRecords(collection);
         deleteRecursively(collectionStorageDir(collection));
     }
@@ -1583,6 +1782,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Each collection must be a JSON object."));
             }
             CollectionSchema imported = mapper.convertValue(item, CollectionSchema.class);
+            imported.fields = SchemaIdSupport.canonicalizeSubmittedFields(imported.fields);
             CollectionSchema existing = existingCollectionForImport(imported);
             if (existing != null) {
                 if (imported.id == null || imported.id.isBlank()) {
@@ -1594,13 +1794,49 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 if (existing.system) {
                     imported.system = true;
                 }
+                SchemaIdSupport.assignMissingFieldIds(imported.fields, existing.fields);
+                if (!"view".equals(existing.type)) {
+                    CollectionFieldProtection.validateSystemFieldUpdate(
+                            existing.fields,
+                            imported.fields,
+                            "Failed to import collections."
+                    );
+                }
             } else {
                 if (imported.id == null || imported.id.isBlank()) {
-                    imported.id = "pbc_" + IdGenerator.id();
+                    String importedType = normalizeType(imported.type == null || imported.type.isBlank() ? "base" : imported.type);
+                    imported.id = SchemaIdSupport.nextCollectionId(
+                            importedType,
+                            imported.name,
+                            candidate -> nextCollections.values().stream()
+                                    .anyMatch(collection -> Objects.equals(collection.id, candidate))
+                                    || seenIds.contains(candidate)
+                    );
                 }
                 imported.created = now();
             }
             normalizeCollection(imported, existing != null);
+            AuthCollectionConfigMerge.mergeSubmitted(
+                    mapper,
+                    imported,
+                    existing == null ? new CollectionSchema() : existing,
+                    item
+            );
+            CollectionModelValidation.validate(
+                    existing,
+                    imported,
+                    item,
+                    nextCollections.values(),
+                    this::jsonTableExists,
+                    "Failed to import collections."
+            );
+            imported.indexes = CollectionIndexSupport.normalize(
+                    imported,
+                    collectionIndexNames(nextCollections.values(), existing == null ? null : existing.id),
+                    "Failed to import collections."
+            );
+            AuthCollectionConfigValidation.validate(imported, "Failed to import collections.");
+            AuthSystemCollections.applySaveInvariants(imported);
             imported.updated = now();
             if (!seenIds.add(imported.id)) {
                 throw new ApiException(400, "Failed to import collections.", fieldError("collections", "validation_invalid_value", "Duplicate collection id: " + imported.id));
@@ -1610,6 +1846,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             }
             putImportedCollection(nextCollections, imported, existing);
             newOrUpdated.add(imported);
+        }
+
+        for (CollectionSchema imported : newOrUpdated) {
+            CollectionRuleSupport.validate(
+                    imported,
+                    "Failed to import collections.",
+                    identifier -> nextCollections.values().stream()
+                            .filter(candidate -> Objects.equals(identifier, candidate.id)
+                                    || Objects.equals(identifier, candidate.name))
+                            .findFirst()
+                            .orElse(null)
+            );
         }
 
         List<String> deleted = new ArrayList<>();
@@ -1647,33 +1895,65 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public synchronized Map<String, Object> listRecords(String collectionName, Map<String, String> query, RequestPrincipal principal) {
+        return listRecordsInternal(collectionName, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    private Map<String, Object> listRecordsInternal(
+            String collectionName,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        Map<String, String> query = request.query();
         CollectionSchema collection = findCollection(collectionName);
-        int page = parsePositive(query.get("page"), 1);
-        int perPage = parsePositive(query.get("perPage"), 30);
+        requireSuperuserRecordsAccess(collection, principal);
+        SearchQuerySupport.Parameters search = SearchQuerySupport.parse(query);
+        SearchQuerySupport.rejectSuperuserOnlyRuleFields(query, principal);
+        SearchFieldValidationSupport.validateRecords(this, collection, search, principal);
         if (!isSuperuser(principal) && collection.listRule == null) {
             throw new ApiException(403, "Only superusers can list this collection.");
         }
         boolean includeHidden = isSuperuser(principal);
         List<Map<String, Object>> source = records(collection).stream()
-                .filter(record -> isSuperuser(principal) || matchesRule(collection.listRule, record, null, query, "GET", principal))
-                .filter(record -> matchesFilter(record, query.get("filter"), query, principal))
-                .map(record -> RecordProcessor.process(this, collection, record, includeHidden, query, principal))
+                .filter(record -> isSuperuser(principal) || matchesRule(collection, collection.listRule, record, null, request, "GET", principal))
+                .filter(record -> matchesFilter(collection, record, search.filter(), request, principal))
                 .collect(Collectors.toCollection(ArrayList::new));
-        sort(source, query.get("sort"));
+        SearchQuerySupport.sortMaps(source, search.sort(), "created", (record, path) ->
+                RecordFieldResolverSupport.resolveSortValue(
+                        this,
+                        collection,
+                        record,
+                        path,
+                        request,
+                        principal,
+                        isSuperuser(principal),
+                        !isSuperuser(principal)
+                ));
         int total = source.size();
-        int from = Math.min(total, (page - 1) * perPage);
-        int to = Math.min(total, from + perPage);
-        return paginated(page, perPage, total, new ArrayList<>(source.subList(from, to)));
+        int from = search.fromIndex(total);
+        int to = Math.min(total, from + search.perPage());
+        List<Map<String, Object>> pageItems = source.subList(from, to).stream()
+                .map(record -> RecordProcessor.process(this, collection, record, includeHidden, request, principal))
+                .collect(Collectors.toCollection(ArrayList::new));
+        return SearchQuerySupport.result(search, total, pageItems);
     }
 
     public synchronized Map<String, Object> getRecord(String collectionName, String id, Map<String, String> query, RequestPrincipal principal) {
+        return getRecordInternal(collectionName, id, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    private Map<String, Object> getRecordInternal(
+            String collectionName,
+            String id,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         CollectionSchema collection = findCollection(collectionName);
+        requireSuperuserRecordsAccess(collection, principal);
         Map<String, Object> record = findRecord(collection, id);
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
-        if (!canViewExpandedRecord(collection, record, safeQuery, principal)) {
+        if (!canViewExpandedRecord(collection, record, request, principal)) {
             throw new ApiException(404, "Record not found.");
         }
-        return RecordProcessor.process(this, collection, record, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, record, isSuperuser(principal), request, principal);
     }
 
     public synchronized Map<String, Object> createRecord(String collectionName, JsonNode body, RequestPrincipal principal) {
@@ -1696,26 +1976,63 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, String> query,
             RequestPrincipal principal
     ) {
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
+        return createRecordInternal(
+                collectionName,
+                body,
+                files,
+                RuleRequestContext.of(query, Map.of()),
+                principal
+        );
+    }
+
+    private Map<String, Object> createRecordInternal(
+            String collectionName,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         CollectionSchema collection = findCollection(collectionName);
+        requireSuperuserRecordsAccess(collection, principal);
         requireWritableRecordCollection(collection);
-        if (collection.system && !SUPERUSERS.equals(collection.name)) {
-            throw new ApiException(403, "System collection is read-only.");
-        }
-        Map<String, Object> record = buildRecord(collection, bodyWithFileMarkers(collection, body, files), null);
-        FileChanges fileChanges = prepareFileChanges(collection, record, files, body, null);
-        record.putAll(fileChanges.values());
         if (!isSuperuser(principal) && collection.createRule == null) {
             throw new ApiException(403, "Only superusers can create records in this collection.");
         }
-        if (!isSuperuser(principal) && !matchesRule(collection.createRule, record, record, safeQuery, "POST", principal)) {
+        JsonNode writableBody = RecordInputProtection.writableBody(collection, body, principal);
+        Map<String, List<UploadedFile>> writableFiles = RecordInputProtection.writableFiles(collection, files, principal);
+        Map<String, Object> record = buildRecord(
+                collection,
+                bodyWithFileMarkers(collection, writableBody, writableFiles),
+                null
+        );
+        validateAuthSystemRecord(collection, record, null);
+        Map<String, Object> manageCandidate = new LinkedHashMap<>(record);
+        if ("auth".equals(collection.type)) {
+            manageCandidate.put("verified", false);
+        }
+        boolean manageAccess = AuthRecordMutationSupport.hasManageAccess(
+                collection,
+                manageCandidate,
+                jsonToMap(body),
+                request,
+                "POST",
+                principal,
+                this
+        );
+        AuthRecordMutationSupport.validate(collection, null, record, body, manageAccess, passwordField(collection));
+        if (SUPERUSERS.equals(collection.name)) {
+            record.put("verified", true);
+        }
+        FileChanges fileChanges = prepareFileChanges(collection, record, writableFiles, writableBody, null);
+        record.putAll(fileChanges.values());
+        if (!isSuperuser(principal) && !matchesRule(collection, collection.createRule, record, record, request, "POST", principal)) {
             throw new ApiException(400, "The record failed the collection create rule.");
         }
         writeFileChanges(collection, record, fileChanges);
         records(collection).add(record);
         saveRecords(collection);
         publishRealtime(collection, "create", record);
-        return RecordProcessor.process(this, collection, record, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, record, isSuperuser(principal), request, principal);
     }
 
     public synchronized Map<String, Object> updateRecord(String collectionName, String id, JsonNode body, RequestPrincipal principal) {
@@ -1733,7 +2050,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, String> query,
             RequestPrincipal principal
     ) {
-        return upsertRecord(collectionName, id, body, Map.of(), query, principal);
+        return upsertRecordInternal(
+                collectionName,
+                id,
+                body,
+                Map.of(),
+                RuleRequestContext.of(query, Map.of()),
+                principal
+        );
     }
 
     public synchronized Map<String, Object> upsertRecord(
@@ -1742,6 +2066,24 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode body,
             Map<String, List<UploadedFile>> files,
             Map<String, String> query,
+            RequestPrincipal principal
+    ) {
+        return upsertRecordInternal(
+                collectionName,
+                id,
+                body,
+                files,
+                RuleRequestContext.of(query, Map.of()),
+                principal
+        );
+    }
+
+    private Map<String, Object> upsertRecordInternal(
+            String collectionName,
+            String id,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
             RequestPrincipal principal
     ) {
         if (body == null || !body.isObject()) {
@@ -1756,9 +2098,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             upsertBody.put("id", recordId);
         }
         if (findRecordOrNull(collection, recordId) == null) {
-            return createRecord(collectionName, upsertBody, files, query, principal);
+            return createRecordInternal(collectionName, upsertBody, files, request, principal);
         }
-        return updateRecord(collectionName, recordId, upsertBody, files, query, principal);
+        return updateRecordInternal(collectionName, recordId, upsertBody, files, request, principal);
     }
 
     public synchronized Map<String, Object> updateRecord(
@@ -1779,31 +2121,100 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, String> query,
             RequestPrincipal principal
     ) {
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
+        return updateRecordInternal(
+                collectionName,
+                id,
+                body,
+                files,
+                RuleRequestContext.of(query, Map.of()),
+                principal
+        );
+    }
+
+    private Map<String, Object> updateRecordInternal(
+            String collectionName,
+            String id,
+            JsonNode body,
+            Map<String, List<UploadedFile>> files,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         CollectionSchema collection = findCollection(collectionName);
+        requireSuperuserRecordsAccess(collection, principal);
         requireWritableRecordCollection(collection);
         Map<String, Object> existing = findRecord(collection, id);
-        requireRecordRule(collection, collection.updateRule, existing, jsonToMap(body), safeQuery, "PATCH", principal, "update");
-        Map<String, Object> patch = buildRecord(collection, bodyWithFileMarkers(collection, body, files), existing);
-        FileChanges fileChanges = prepareFileChanges(collection, patch, files, body, existing);
+        requireRecordRule(collection, collection.updateRule, existing, jsonToMap(body), request, "PATCH", principal, "update");
+        JsonNode writableBody = RecordInputProtection.writableBody(collection, body, principal);
+        Map<String, List<UploadedFile>> writableFiles = RecordInputProtection.writableFiles(collection, files, principal);
+        Map<String, Object> patch = buildRecord(
+                collection,
+                bodyWithFileMarkers(collection, writableBody, writableFiles),
+                existing
+        );
+        Map<String, Object> candidate = new LinkedHashMap<>(existing);
+        candidate.putAll(patch);
+        validateAuthSystemRecord(collection, candidate, id);
+        boolean manageAccess = AuthRecordMutationSupport.hasManageAccess(
+                collection,
+                existing,
+                jsonToMap(body),
+                request,
+                "PATCH",
+                principal,
+                this
+        );
+        AuthRecordMutationSupport.validate(collection, existing, patch, body, manageAccess, passwordField(collection));
+        Object previousPassword = "auth".equals(collection.type) ? existing.get(passwordField(collection)) : null;
+        boolean passwordChanged = "auth".equals(collection.type)
+                && patch.containsKey(passwordField(collection))
+                && !Objects.equals(previousPassword, patch.get(passwordField(collection)));
+        boolean emailChanged = "auth".equals(collection.type)
+                && patch.containsKey("email")
+                && !Objects.equals(existing.get("email"), patch.get("email"));
+        if (passwordChanged || emailChanged) {
+            patch.put("tokenKey", IdGenerator.secret());
+        }
+        if (SUPERUSERS.equals(collection.name)) {
+            patch.put("verified", true);
+        }
+        FileChanges fileChanges = prepareFileChanges(collection, patch, writableFiles, writableBody, existing);
         patch.putAll(fileChanges.values());
         existing.putAll(patch);
+        if (passwordChanged || emailChanged) {
+            clearAuthSecurityState(collection.id, id);
+        }
         existing.put("updated", now());
         writeFileChanges(collection, existing, fileChanges);
         saveRecords(collection);
         publishRealtime(collection, "update", existing);
-        return RecordProcessor.process(this, collection, existing, isSuperuser(principal), safeQuery, principal);
+        return RecordProcessor.process(this, collection, existing, isSuperuser(principal), request, principal);
     }
 
     public synchronized void deleteRecord(String collectionName, String id, RequestPrincipal principal) {
+        deleteRecordInternal(collectionName, id, RuleRequestContext.empty(), principal);
+    }
+
+    private void deleteRecordInternal(
+            String collectionName,
+            String id,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         CollectionSchema collection = findCollection(collectionName);
+        requireSuperuserRecordsAccess(collection, principal);
         requireWritableRecordCollection(collection);
         Map<String, Object> existing = findRecord(collection, id);
-        requireRecordRule(collection, collection.deleteRule, existing, null, Map.of(), "DELETE", principal, "delete");
+        requireRecordRule(collection, collection.deleteRule, existing, null, request, "DELETE", principal, "delete");
         List<Map<String, Object>> records = records(collection);
+        if (SUPERUSERS.equals(collection.name) && records.size() <= 1) {
+            throw new ApiException(400, "You can't delete the only existing superuser.");
+        }
         boolean removed = records.removeIf(record -> Objects.equals(record.get("id"), id));
         if (!removed) {
             throw new ApiException(404, "Record not found.");
+        }
+        if ("auth".equals(collection.type)) {
+            clearAuthRecordDependents(collection.id, id);
         }
         saveRecords(collection);
         publishRealtime(collection, "delete", existing);
@@ -1815,11 +2226,69 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
     }
 
+    private void validateAuthSystemRecord(CollectionSchema collection, Map<String, Object> candidate, String currentId) {
+        if (!AuthSystemCollections.contains(collection.name)) {
+            return;
+        }
+        String collectionRef = String.valueOf(candidate.getOrDefault("collectionRef", ""));
+        String recordRef = String.valueOf(candidate.getOrDefault("recordRef", ""));
+        CollectionSchema authCollection = findCollectionOrNull(collectionRef);
+        if (authCollection == null || !"auth".equals(authCollection.type)) {
+            throw new ApiException(400, "Failed to validate record.",
+                    fieldError("collectionRef", "validation_invalid_value", "Missing or invalid auth collection reference."));
+        }
+        if (findRecordOrNull(authCollection, recordRef) == null) {
+            throw new ApiException(400, "Failed to validate record.",
+                    fieldError("recordRef", "validation_invalid_value", "Missing or invalid auth record reference."));
+        }
+        for (Map<String, Object> existing : records(collection)) {
+            if (currentId != null && Objects.equals(currentId, existing.get("id"))) {
+                continue;
+            }
+            boolean duplicate = switch (collection.name) {
+                case AuthSystemCollections.AUTH_ORIGINS -> sameSystemFields(
+                        existing,
+                        candidate,
+                        "collectionRef",
+                        "recordRef",
+                        "fingerprint"
+                );
+                case AuthSystemCollections.EXTERNAL_AUTHS -> sameSystemFields(
+                        existing,
+                        candidate,
+                        "collectionRef",
+                        "recordRef",
+                        "provider"
+                ) || sameSystemFields(existing, candidate, "collectionRef", "provider", "providerId");
+                default -> false;
+            };
+            if (duplicate) {
+                throw new ApiException(400, "Failed to validate record.",
+                        fieldError("recordRef", "validation_not_unique", "The system auth record already exists."));
+            }
+        }
+    }
+
+    private boolean sameSystemFields(Map<String, Object> left, Map<String, Object> right, String... fields) {
+        for (String field : fields) {
+            if (!Objects.equals(left.get(field), right.get(field))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public synchronized <T> T transactional(java.util.function.Supplier<T> operation) {
         Map<String, CollectionSchema> collectionsSnapshot = new LinkedHashMap<>();
-        mapper.convertValue(new ArrayList<>(collectionsByName.values()), COLLECTION_LIST)
+        collectionsByName.values().stream()
+                .map(this::copyCollection)
                 .forEach(collection -> collectionsSnapshot.put(collection.name, collection));
         Map<String, List<Map<String, Object>>> recordsSnapshot = mapper.convertValue(recordsByCollectionId, RECORD_MAP);
+        List<Map<String, Object>> mfasSnapshot = mapper.convertValue(mfas, RECORD_LIST);
+        List<Map<String, Object>> authRequestsSnapshot = mapper.convertValue(authRequests, RECORD_LIST);
+        List<Map<String, Object>> authOriginsSnapshot = mapper.convertValue(authOrigins, RECORD_LIST);
+        List<Map<String, Object>> externalAuthsSnapshot = mapper.convertValue(externalAuths, RECORD_LIST);
+        List<Map<String, Object>> otpsSnapshot = mapper.convertValue(otps, RECORD_LIST);
         Path storageSnapshot = null;
         try {
             storageSnapshot = snapshotStorage();
@@ -1829,12 +2298,22 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             collectionsByName.putAll(collectionsSnapshot);
             recordsByCollectionId.clear();
             recordsByCollectionId.putAll(recordsSnapshot);
+            restoreRecords(mfas, mfasSnapshot);
+            restoreRecords(authRequests, authRequestsSnapshot);
+            restoreRecords(authOrigins, authOriginsSnapshot);
+            restoreRecords(externalAuths, externalAuthsSnapshot);
+            restoreRecords(otps, otpsSnapshot);
             restoreStorageSnapshot(storageSnapshot);
             saveAll();
             throw e;
         } finally {
             deleteRecursively(storageSnapshot);
         }
+    }
+
+    private void restoreRecords(List<Map<String, Object>> target, List<Map<String, Object>> snapshot) {
+        target.clear();
+        target.addAll(snapshot);
     }
 
     private Path snapshotStorage() {
@@ -1862,46 +2341,47 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
     }
 
-    public synchronized Map<String, Object> listBackups(int page, int perPage) {
+    public synchronized List<Map<String, Object>> listBackups() {
         try {
             Files.createDirectories(backupsDir);
-            List<Map<String, Object>> items;
             try (Stream<Path> paths = Files.list(backupsDir)) {
-                items = paths
+                return paths
                         .filter(path -> Files.isRegularFile(path) && path.getFileName().toString().endsWith(".zip"))
                         .map(this::backupInfo)
                         .sorted((left, right) -> String.valueOf(right.get("modified")).compareTo(String.valueOf(left.get("modified"))))
                         .collect(Collectors.toCollection(ArrayList::new));
             }
-            int safePage = Math.max(1, page);
-            int safePerPage = Math.max(1, perPage);
-            int total = items.size();
-            int from = Math.min(total, (safePage - 1) * safePerPage);
-            int to = Math.min(total, from + safePerPage);
-            return paginated(safePage, safePerPage, total, new ArrayList<>(items.subList(from, to)));
         } catch (IOException e) {
             throw new IllegalStateException("failed to list backups", e);
         }
     }
 
     public synchronized Map<String, Object> createBackup(JsonNode body) {
-        saveAll();
         String requested = body == null || !body.hasNonNull("name") ? "" : body.get("name").asText();
-        String key = backupKey(requested.isBlank() ? "backup_" + BACKUP_TIMESTAMP.format(Instant.now()) + ".zip" : requested);
-        Path backup = backupPath(key);
-        if (Files.exists(backup)) {
-            throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
-        }
-        try {
-            Files.createDirectories(backupsDir);
-            try (OutputStream output = Files.newOutputStream(backup, StandardOpenOption.CREATE_NEW);
-                 ZipOutputStream zip = new ZipOutputStream(output)) {
-                zipDirectory(dataDir, zip);
+        String key = createBackupKey(requested);
+        return backupOperations.run(key, () -> {
+            saveAll();
+            Path backup = backupPath(key);
+            if (Files.exists(backup)) {
+                throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
             }
-            return backupInfo(backup);
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to create backup", e);
-        }
+            Path temporary = null;
+            try {
+                Files.createDirectories(backupsDir);
+                temporary = Files.createTempFile(backupsDir, ".create-backup-", ".tmp");
+                try (OutputStream output = Files.newOutputStream(temporary, StandardOpenOption.TRUNCATE_EXISTING);
+                     ZipOutputStream zip = new ZipOutputStream(output)) {
+                    zipDirectory(dataDir, zip);
+                }
+                publishBackup(temporary, backup);
+                temporary = null;
+                return backupInfo(backup);
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to create backup", e);
+            } finally {
+                deleteTemporaryBackup(temporary);
+            }
+        });
     }
 
     public synchronized Map<String, Object> uploadBackup(String filename, byte[] bytes) {
@@ -1913,25 +2393,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (Files.exists(backup)) {
             throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
         }
+        Path temporary = null;
         try {
             Files.createDirectories(backupsDir);
-            Files.write(backup, bytes, StandardOpenOption.CREATE_NEW);
-            validateBackupZip(backup);
+            temporary = Files.createTempFile(backupsDir, ".upload-backup-", ".tmp");
+            Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING);
+            publishBackup(temporary, backup);
+            temporary = null;
             return backupInfo(backup);
         } catch (IOException e) {
-            try {
-                Files.deleteIfExists(backup);
-            } catch (IOException ignored) {
-                // best effort cleanup
-            }
             throw new IllegalStateException("failed to upload backup", e);
-        } catch (RuntimeException e) {
-            try {
-                Files.deleteIfExists(backup);
-            } catch (IOException ignored) {
-                // best effort cleanup
-            }
-            throw e;
+        } finally {
+            deleteTemporaryBackup(temporary);
         }
     }
 
@@ -1941,10 +2414,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public synchronized void deleteBackup(String key) {
+        String safeKey = backupKey(key);
+        if (backupOperations.active(safeKey)) {
+            throw new ApiException(400, "The backup is currently being used and cannot be deleted.");
+        }
         try {
-            boolean deleted = Files.deleteIfExists(backupPath(key));
+            boolean deleted = Files.deleteIfExists(backupPath(safeKey));
             if (!deleted) {
-                throw new ApiException(404, "Backup not found.");
+                throw new ApiException(400, "Invalid or already deleted backup file.");
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to delete backup", e);
@@ -1954,45 +2431,50 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     public synchronized Map<String, Object> restoreBackup(String key) {
         Path backup = backupFile(key);
         if (backup == null) {
-            throw new ApiException(404, "Backup not found.");
+            throw new ApiException(400, "Missing or invalid backup file.");
         }
-        Path temp = null;
-        try {
-            String currentSecret = Files.exists(secretFile) ? Files.readString(secretFile, StandardCharsets.UTF_8) : "";
-            Path parent = dataDir.toAbsolutePath().getParent();
-            temp = Files.createTempDirectory(parent == null ? Path.of(".").toAbsolutePath() : parent, "pb_restore_");
-            unzipBackup(backup, temp);
-            clearDataDirForRestore();
-            copyDirectory(temp, dataDir);
-            if (!currentSecret.isBlank()) {
-                Files.writeString(secretFile, currentSecret, StandardCharsets.UTF_8);
+        String safeKey = backup.getFileName().toString();
+        return backupOperations.run(safeKey, () -> {
+            Path temp = null;
+            try {
+                String currentSecret = Files.exists(secretFile) ? Files.readString(secretFile, StandardCharsets.UTF_8) : "";
+                Path parent = dataDir.toAbsolutePath().getParent();
+                temp = Files.createTempDirectory(parent == null ? Path.of(".").toAbsolutePath() : parent, "pb_restore_");
+                unzipBackup(backup, temp);
+                clearDataDirForRestore();
+                copyDirectory(temp, dataDir);
+                if (!currentSecret.isBlank()) {
+                    Files.writeString(secretFile, currentSecret, StandardCharsets.UTF_8);
+                }
+                Files.createDirectories(recordsDir);
+                Files.createDirectories(storageDir);
+                Files.createDirectories(backupsDir);
+                load();
+                return Map.of("restored", safeKey);
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to restore backup", e);
+            } finally {
+                if (temp != null) {
+                    deleteRecursively(temp);
+                }
             }
-            Files.createDirectories(recordsDir);
-            Files.createDirectories(storageDir);
-            Files.createDirectories(backupsDir);
-            load();
-            return Map.of("restored", key);
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to restore backup", e);
-        } finally {
-            if (temp != null) {
-                deleteRecursively(temp);
-            }
-        }
+        });
     }
 
     public synchronized Map<String, Object> authMethods(String collectionName) {
         CollectionSchema collection = findCollection(collectionName);
         if (!"auth".equals(collection.type)) {
-            throw new ApiException(400, "The collection is not an auth collection.");
+            throw new ApiException(404, "The requested resource wasn't found.");
         }
         Map<String, Object> password = new LinkedHashMap<>();
         password.put("enabled", collection.passwordAuth.enabled);
-        password.put("identityFields", new ArrayList<>(collection.passwordAuth.identityFields));
+        password.put("identityFields", collection.passwordAuth.enabled
+                ? new ArrayList<>(collection.passwordAuth.identityFields)
+                : List.of());
         Map<String, Object> oauth2 = new LinkedHashMap<>();
         List<Map<String, Object>> oauthProviders = collection.oauth2.enabled
                 ? collection.oauth2.providers.stream()
-                .map(provider -> oauth2ProviderMetadata(provider.name))
+                .map(provider -> OAuth2ProviderManager.providerMetadata(provider.name))
                 .filter(Objects::nonNull)
                 .map(metadata -> {
                     CollectionSchema.OAuth2ProviderConfig config = collection.oauth2.providers.stream()
@@ -2018,7 +2500,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 .filter(Objects::nonNull)
                 .collect(Collectors.toCollection(ArrayList::new))
                 : List.of();
-        oauth2.put("enabled", collection.oauth2.enabled && !oauthProviders.isEmpty());
+        oauth2.put("enabled", collection.oauth2.enabled);
         oauth2.put("providers", oauthProviders);
         Map<String, Object> mfa = new LinkedHashMap<>();
         mfa.put("enabled", collection.mfa.enabled);
@@ -2035,6 +2517,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                         .map(provider -> orderedMap(
                                 "name", provider.get("name"),
                                 "displayName", provider.get("displayName"),
+                                "logo", "",
                                 "state", provider.get("state"),
                                 "authURL", provider.get("authURL"),
                                 "authUrl", provider.get("authUrl"),
@@ -2054,6 +2537,34 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, String> query,
             RequestPrincipal principal
     ) {
+        return authWithOAuth2(collectionName, body, query, principal, AuthOriginContext.empty());
+    }
+
+    public synchronized Map<String, Object> authWithOAuth2(
+            String collectionName,
+            JsonNode body,
+            Map<String, String> query,
+            RequestPrincipal principal,
+            AuthOriginContext origin
+    ) {
+        return authWithOAuth2Internal(
+                collectionName,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                principal,
+                origin
+        );
+    }
+
+    private Map<String, Object> authWithOAuth2Internal(
+            String collectionName,
+            JsonNode body,
+            RuleRequestContext request,
+            RequestPrincipal principal,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.OAUTH2);
+        Map<String, String> query = request.query();
         CollectionSchema collection = authCollection(collectionName);
         if (!collection.oauth2.enabled) {
             throw new ApiException(403, "The collection is not configured to allow OAuth2 authentication.");
@@ -2088,22 +2599,37 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             if (!payload.hasNonNull("email") && !oauthUser.email().isBlank()) {
                 payload.put("email", oauthUser.email());
             }
-            if (!payload.hasNonNull("verified")) {
-                payload.put("verified", !oauthUser.email().isBlank());
-            }
             if (!payload.hasNonNull(passwordField(collection))) {
-                payload.put(passwordField(collection), IdGenerator.prefixed("oauth2_") + IdGenerator.id());
+                String generatedPassword = IdGenerator.prefixed("oauth2_") + IdGenerator.id();
+                payload.put(passwordField(collection), generatedPassword);
+                payload.put("passwordConfirm", generatedPassword);
             }
-            if (!payload.hasNonNull("name") && !oauthUser.name().isBlank() && collectionHasField(collection, "name")) {
-                payload.put("name", oauthUser.name());
+            Map<String, List<UploadedFile>> mappedFiles = OAuth2FieldMappingSupport.apply(
+                    collection,
+                    payload,
+                    oauthUser,
+                    (field, value) -> oauthUsernameAvailable(collection, field, value)
+            );
+            RuleRequestContext createRequest = RuleRequestContext.of(
+                    Map.of(),
+                    request.headers(),
+                    RuleRequestContext.OAUTH2
+            );
+            Map<String, Object> created = createRecordInternal(
+                    collection.name,
+                    payload,
+                    mappedFiles,
+                    createRequest,
+                    principal
+            );
+            record = findRecord(collection, String.valueOf(created.get("id")));
+            if (!oauthUser.email().isBlank()
+                    && oauthUser.email().equalsIgnoreCase(String.valueOf(record.getOrDefault("email", "")))
+                    && !truthyObject(record.get("verified"))) {
+                record.put("verified", true);
+                touch(record);
+                saveRecords(collection);
             }
-            if (!payload.hasNonNull("username") && !oauthUser.username().isBlank() && collectionHasField(collection, "username")) {
-                payload.put("username", oauthUser.username());
-            }
-            record = buildRecord(collection, payload, null);
-            records(collection).add(record);
-            saveRecords(collection);
-            publishRealtime(collection, "create", record);
             isNew = true;
         } else {
             boolean changed = false;
@@ -2111,14 +2637,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                     && oauthUser.email().equalsIgnoreCase(String.valueOf(record.getOrDefault("email", "")))
                     && !truthyObject(record.get("verified"))) {
                 record.put("verified", true);
-                changed = true;
-            }
-            if (collectionHasField(collection, "name") && textSetting(record.get("name")).isBlank() && !oauthUser.name().isBlank()) {
-                record.put("name", oauthUser.name());
-                changed = true;
-            }
-            if (collectionHasField(collection, "username") && textSetting(record.get("username")).isBlank() && !oauthUser.username().isBlank()) {
-                record.put("username", oauthUser.username());
                 changed = true;
             }
             if (changed) {
@@ -2132,7 +2650,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         meta.put("isNew", isNew);
 
         String mfaId = bodyOrQueryText(body, query, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId, "oauth2", meta);
+        return handleAuthWithMfa(collection, record, request, mfaId, "oauth2", meta, origin, body, principal);
+    }
+
+    private boolean oauthUsernameAvailable(CollectionSchema collection, String field, String value) {
+        FieldSchema schema = collection.fields.stream()
+                .filter(candidate -> candidate != null && field.equals(candidate.name))
+                .findFirst()
+                .orElse(null);
+        boolean unique = schema != null && (schema.unique || collection.indexes.stream()
+                .anyMatch(index -> CollectionIndexSupport.isSingleColumnUnique(index, field)));
+        if (!unique) {
+            return true;
+        }
+        return records(collection).stream().noneMatch(record -> Objects.equals(record.get(field), value));
     }
 
     public synchronized Map<String, Object> requestOtp(String collectionName, JsonNode body) {
@@ -2151,14 +2682,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (otp == null) {
             otp = new LinkedHashMap<>();
             otp.put("id", IdGenerator.id());
-            otp.put("collectionId", collection.id);
-            otp.put("collectionName", collection.name);
-            otp.put("recordId", record.get("id"));
+            otp.put("collectionRef", collection.id);
+            otp.put("recordRef", record.get("id"));
             otp.put("created", now());
             otps.add(otp);
         }
         otp.put("sentTo", email);
-        otp.put("passwordHash", PasswordHasher.hash(code));
+        otp.put("password", PasswordHasher.hash(code));
         otp.put("failedAttempts", 0);
         otp.remove("lastFailed");
         otp.put("updated", now());
@@ -2175,6 +2705,31 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode body,
             Map<String, String> query
     ) {
+        return authWithOtp(collectionName, body, query, AuthOriginContext.empty());
+    }
+
+    public synchronized Map<String, Object> authWithOtp(
+            String collectionName,
+            JsonNode body,
+            Map<String, String> query,
+            AuthOriginContext origin
+    ) {
+        return authWithOtpInternal(
+                collectionName,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                origin
+        );
+    }
+
+    private Map<String, Object> authWithOtpInternal(
+            String collectionName,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.OTP);
+        Map<String, String> query = request.query();
         CollectionSchema collection = authCollection(collectionName);
         if (!collection.otp.enabled) {
             throw new ApiException(403, "The collection is not configured to allow OTP authentication.");
@@ -2189,21 +2744,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
 
         Map<String, Object> otp = findOtp(otpId);
-        if (!Objects.equals(collection.id, String.valueOf(otp.get("collectionId")))
-                && !Objects.equals(collection.name, String.valueOf(otp.get("collectionName")))) {
+        if (!Objects.equals(collection.id, String.valueOf(otp.get("collectionRef")))) {
             throw invalidOtp();
         }
         if (otpExpired(otp)) {
             deleteOtp(otpId);
             throw invalidOtp();
         }
-        Map<String, Object> record = findRecordOrNull(collection, String.valueOf(otp.get("recordId")));
+        Map<String, Object> record = findRecordOrNull(collection, String.valueOf(otp.get("recordRef")));
         if (record == null) {
             deleteOtp(otpId);
             throw invalidOtp();
         }
         ensureOtpAttemptsAllowed(otp);
-        if (!PasswordHasher.verifyOrDummy(password, String.valueOf(otp.get("passwordHash")))) {
+        if (!PasswordHasher.verifyOrDummy(password, String.valueOf(otp.get("password")))) {
             recordOtpFailure(otp);
             throw invalidOtp();
         }
@@ -2217,13 +2771,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             if (!collection.mfa.enabled) {
                 record.put(passwordField(collection), PasswordHasher.hash(IdGenerator.prefixed("otp_") + IdGenerator.id()));
                 rotateAuthTokenKey(record);
+                clearAuthSecurityState(collection.id, String.valueOf(record.get("id")));
             }
             touch(record);
             saveRecords(collection);
         }
 
         String mfaId = bodyOrQueryText(body, query, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId, "otp");
+        return handleAuthWithMfa(collection, record, request, mfaId, "otp", Map.of(), origin, body, null);
     }
 
     public synchronized void requestPasswordReset(String collectionName, JsonNode body) {
@@ -2250,6 +2805,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         action.record().put(passwordField, PasswordHasher.hash(password));
         action.record().put("verified", true);
         rotateAuthTokenKey(action.record());
+        clearAuthSecurityState(action.collection().id, String.valueOf(action.record().get("id")));
         touch(action.record());
         saveRecords(action.collection());
     }
@@ -2330,6 +2886,23 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     public synchronized Path filePath(String collectionIdOrName, String recordId, String filename, RequestPrincipal principal) {
+        return filePath(
+                collectionIdOrName,
+                recordId,
+                filename,
+                RuleRequestContext.empty().withContext(RuleRequestContext.PROTECTED_FILE),
+                principal
+        );
+    }
+
+    @Override
+    public synchronized Path filePath(
+            String collectionIdOrName,
+            String recordId,
+            String filename,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         CollectionSchema collection = findCollectionOrNull(collectionIdOrName);
         if (collection == null || recordId == null || recordId.isBlank() || filename == null || filename.isBlank()) {
             return null;
@@ -2346,7 +2919,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             return null;
         }
         if (fields.stream().allMatch(this::protectedFileField)) {
-            requireProtectedFileAccess(collection, record, principal);
+            requireProtectedFileAccess(collection, record, request, principal);
         }
         Path file = storageDir.resolve(collection.id).resolve(recordId).resolve(filename).normalize();
         Path recordDir = storageDir.resolve(collection.id).resolve(recordId).normalize();
@@ -2389,6 +2962,31 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             JsonNode body,
             Map<String, String> query
     ) {
+        return authWithPassword(collectionName, body, query, AuthOriginContext.empty());
+    }
+
+    public synchronized Map<String, Object> authWithPassword(
+            String collectionName,
+            JsonNode body,
+            Map<String, String> query,
+            AuthOriginContext origin
+    ) {
+        return authWithPasswordInternal(
+                collectionName,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                origin
+        );
+    }
+
+    private Map<String, Object> authWithPasswordInternal(
+            String collectionName,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.PASSWORD);
+        Map<String, String> query = request.query();
         CollectionSchema collection = authCollection(collectionName);
         if (!collection.passwordAuth.enabled) {
             throw new ApiException(403, "The collection is not configured to allow password authentication.");
@@ -2409,7 +3007,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
 
         String mfaId = bodyOrQueryText(body, query, "mfaId", null);
-        return handleAuthWithMfa(collection, record, query, mfaId, "password");
+        return handleAuthWithMfa(collection, record, request, mfaId, "password", Map.of(), origin, body, null);
     }
 
     public synchronized Map<String, Object> authRefresh(String collectionName, RequestPrincipal principal) {
@@ -2446,19 +3044,44 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String method,
             Map<String, Object> meta
     ) {
+        return handleAuthWithMfa(
+                collection,
+                record,
+                RuleRequestContext.of(query, Map.of()),
+                mfaIdParam,
+                method,
+                meta,
+                AuthOriginContext.empty(),
+                null,
+                null
+        );
+    }
+
+    private Map<String, Object> handleAuthWithMfa(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            String mfaIdParam,
+            String method,
+            Map<String, Object> meta,
+            AuthOriginContext origin,
+            JsonNode body,
+            RequestPrincipal requestPrincipal
+    ) {
         if (!collection.mfa.enabled) {
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
         if (mfaIdParam != null && !mfaIdParam.isBlank()) {
             Map<String, Object> mfa = mfas.stream()
                     .filter(item -> Objects.equals(item.get("id"), mfaIdParam))
-                    .filter(item -> Objects.equals(item.get("recordId"), record.get("id")))
-                    .filter(item -> Objects.equals(item.get("collectionId"), collection.id))
+                    .filter(item -> Objects.equals(item.get("recordRef"), record.get("id")))
+                    .filter(item -> Objects.equals(item.get("collectionRef"), collection.id))
                     .findFirst()
                     .orElse(null);
             if (mfa == null || mfaExpired(collection, mfa)) {
                 if (mfa != null) {
                     mfas.remove(mfa);
+                    saveMfas();
                 }
                 throw invalidMfaId("Missing or invalid MFA ID.");
             }
@@ -2466,21 +3089,37 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 throw invalidMfaId("MFA requires a different auth method.");
             }
             mfas.remove(mfa);
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            saveMfas();
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
-        boolean requireMfa = collection.mfa.rule != null && !collection.mfa.rule.isBlank() &&
-                RuleEvaluator.matches(collection.mfa.rule, ruleContext(record, null, query, "POST", null));
+        boolean requireMfa = collection.mfa.rule == null || collection.mfa.rule.isBlank() ||
+                RuleEvaluator.matches(
+                        collection.mfa.rule,
+                        RecordFieldResolverSupport.context(
+                                this,
+                                collection,
+                                record,
+                                null,
+                                request,
+                                "POST",
+                                null,
+                                true,
+                                false
+                        ));
         if (!requireMfa) {
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
         String newMfaId = IdGenerator.id();
         Map<String, Object> mfaRecord = new LinkedHashMap<>();
         mfaRecord.put("id", newMfaId);
-        mfaRecord.put("created", now());
-        mfaRecord.put("collectionId", collection.id);
-        mfaRecord.put("recordId", record.get("id"));
+        String timestamp = now();
+        mfaRecord.put("created", timestamp);
+        mfaRecord.put("updated", timestamp);
+        mfaRecord.put("collectionRef", collection.id);
+        mfaRecord.put("recordRef", record.get("id"));
         mfaRecord.put("method", method);
         mfas.add(mfaRecord);
+        saveMfas();
         throw new ApiException(401, "MFA required.", Map.of("mfaId", newMfaId));
     }
 
@@ -2492,6 +3131,158 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String method
     ) {
         return handleAuthWithMfa(collection, record, query, mfaIdParam, method, Map.of());
+    }
+
+    private Map<String, Object> authenticatedResponse(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            Map<String, Object> meta,
+            AuthOriginContext origin,
+            JsonNode body,
+            RequestPrincipal requestPrincipal
+    ) {
+        requireAuthRule(collection, record, body, request, requestPrincipal);
+        Map<String, Object> response = authResponse(
+                collection,
+                record,
+                request,
+                tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION),
+                "auth",
+                meta
+        );
+        recordAuthOrigin(collection, record, origin);
+        return response;
+    }
+
+    private void requireAuthRule(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            JsonNode body,
+            RuleRequestContext request,
+            RequestPrincipal requestPrincipal
+    ) {
+        if (collection.authRule == null
+                || !collection.authRule.isBlank()
+                && !RuleEvaluator.matches(
+                collection.authRule,
+                RecordFieldResolverSupport.context(
+                        this,
+                        collection,
+                        record,
+                        jsonToMap(body),
+                        request,
+                        "POST",
+                        requestPrincipal,
+                        true,
+                        false
+                )
+        )) {
+            throw new ApiException(403, "The request doesn't satisfy the collection requirements to authenticate.");
+        }
+    }
+
+    private void recordAuthOrigin(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            AuthOriginContext origin
+    ) {
+        if (collection == null
+                || collection.authAlert == null
+                || !collection.authAlert.enabled
+                || record == null
+                || origin == null
+                || origin.ip().isBlank() && origin.userAgent().isBlank()) {
+            return;
+        }
+
+        String recordId = String.valueOf(record.getOrDefault("id", ""));
+        List<Map<String, Object>> origins = authOrigins.stream()
+                .filter(item -> Objects.equals(collection.id, item.get("collectionRef")))
+                .filter(item -> Objects.equals(recordId, String.valueOf(item.getOrDefault("recordRef", ""))))
+                .sorted(Comparator.comparing((Map<String, Object> item) -> String.valueOf(item.getOrDefault("updated", ""))).reversed())
+                .collect(Collectors.toCollection(ArrayList::new));
+        String fingerprint = origin.fingerprint();
+        Map<String, Object> current = origins.stream()
+                .filter(item -> Objects.equals(fingerprint, item.get("fingerprint")))
+                .findFirst()
+                .orElse(null);
+        String timestamp = now();
+        if (current != null) {
+            current.put("updated", timestamp);
+            saveAuthOrigins();
+            return;
+        }
+
+        if (!origins.isEmpty() && !textSetting(record.get("email")).isBlank()) {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("id", IdGenerator.id());
+            request.put("type", "authAlert");
+            request.put("collectionId", collection.id);
+            request.put("collectionName", collection.name);
+            request.put("recordId", recordId);
+            request.put("email", record.get("email"));
+            request.put("alertInfo", origin.alertInfo());
+            request.put("created", timestamp);
+            request.put("expires", Instant.now().plus(Duration.ofHours(2)).toString());
+            if (!AuthMailSupport.sendAsync(collection, record, request, settings, null)) {
+                authRequests.add(request);
+                pruneAuthRequests();
+                saveAuthRequests();
+            }
+        }
+
+        Map<String, Object> created = new LinkedHashMap<>();
+        created.put("id", IdGenerator.id());
+        created.put("collectionRef", collection.id);
+        created.put("recordRef", recordId);
+        created.put("fingerprint", fingerprint);
+        created.put("created", timestamp);
+        created.put("updated", timestamp);
+        authOrigins.add(created);
+
+        List<Map<String, Object>> currentOrigins = authOrigins.stream()
+                .filter(item -> Objects.equals(collection.id, item.get("collectionRef")))
+                .filter(item -> Objects.equals(recordId, String.valueOf(item.getOrDefault("recordRef", ""))))
+                .sorted(Comparator.comparing((Map<String, Object> item) -> String.valueOf(item.getOrDefault("updated", ""))).reversed())
+                .toList();
+        if (currentOrigins.size() > 5) {
+            authOrigins.removeAll(currentOrigins.subList(5, currentOrigins.size()));
+        }
+        saveAuthOrigins();
+    }
+
+    private void clearAuthOrigins(String collectionId, String recordId) {
+        boolean changed = authOrigins.removeIf(origin -> Objects.equals(collectionId, origin.get("collectionRef"))
+                && (recordId == null || Objects.equals(recordId, String.valueOf(origin.getOrDefault("recordRef", "")))));
+        if (changed) {
+            saveAuthOrigins();
+        }
+    }
+
+    private void clearAuthSecurityState(String collectionId, String recordId) {
+        clearAuthOrigins(collectionId, recordId);
+        boolean mfasChanged = mfas.removeIf(record -> systemRecordMatches(record, collectionId, recordId));
+        if (mfasChanged) {
+            saveMfas();
+        }
+        boolean otpsChanged = otps.removeIf(record -> systemRecordMatches(record, collectionId, recordId));
+        if (otpsChanged) {
+            saveOtps();
+        }
+    }
+
+    private void clearAuthRecordDependents(String collectionId, String recordId) {
+        clearAuthSecurityState(collectionId, recordId);
+        boolean changed = externalAuths.removeIf(record -> systemRecordMatches(record, collectionId, recordId));
+        if (changed) {
+            saveExternalAuths();
+        }
+    }
+
+    private boolean systemRecordMatches(Map<String, Object> record, String collectionId, String recordId) {
+        return Objects.equals(collectionId, record.get("collectionRef"))
+                && (recordId == null || Objects.equals(recordId, String.valueOf(record.getOrDefault("recordRef", ""))));
     }
 
     private ApiException invalidMfaId(String message) {
@@ -2534,7 +3325,26 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String tokenType,
             Map<String, Object> meta
     ) {
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
+        return authResponse(
+                collection,
+                record,
+                RuleRequestContext.of(query, Map.of()),
+                ttl,
+                tokenType,
+                meta
+        );
+    }
+
+    private Map<String, Object> authResponse(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            Duration ttl,
+            String tokenType,
+            Map<String, Object> meta
+    ) {
+        RuleRequestContext safeRequest = request == null ? RuleRequestContext.empty() : request;
+        Map<String, String> safeQuery = safeRequest.query();
         ensureAuthTokenKey(collection, record);
         Map<String, Object> claims = new LinkedHashMap<>();
         claims.put("sub", record.get("id"));
@@ -2548,10 +3358,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         RequestPrincipal authPrincipal = RequestPrincipal.fromClaims(claims);
         Map<String, String> recordQuery = new LinkedHashMap<>(safeQuery);
         recordQuery.remove("fields");
+        RuleRequestContext recordRequest = RuleRequestContext.of(recordQuery, safeRequest.headers());
         Map<String, Object> response = new LinkedHashMap<>();
         Duration actualTtl = ttl == null ? tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION) : ttl;
         response.put("token", tokenService.create(claims, actualTtl, tokenSigningSecret(collection.authToken, record.get("tokenKey"))));
-        response.put("record", RecordProcessor.process(this, collection, record, false, recordQuery, authPrincipal));
+        response.put("record", RecordProcessor.process(this, collection, record, false, recordRequest, authPrincipal));
         response.put("meta", meta == null ? Map.of() : meta);
         return selectFields(response, safeQuery.get("fields"));
     }
@@ -2644,6 +3455,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         request.put("token", token);
         request.put("created", now());
         request.put("expires", DateTimeFormatter.ISO_INSTANT.format(Instant.now().plus(ttl == null ? Duration.ofHours(2) : ttl)));
+        if (AuthMailSupport.sendAsync(collection, record, request, settings, null)) {
+            return token;
+        }
         authRequests.add(request);
         pruneAuthRequests();
         saveAuthRequests();
@@ -2652,13 +3466,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private void ensureAuthTokenKey(CollectionSchema collection, Map<String, Object> record) {
         if (textSetting(record.get("tokenKey")).isBlank()) {
-            record.put("tokenKey", IdGenerator.prefixed("tk_"));
+            record.put("tokenKey", IdGenerator.secret());
             saveRecords(collection);
         }
     }
 
     private void rotateAuthTokenKey(Map<String, Object> record) {
-        record.put("tokenKey", IdGenerator.prefixed("tk_"));
+        record.put("tokenKey", IdGenerator.secret());
     }
 
     private Map<String, Object> findAuthRecordByEmail(CollectionSchema collection, String email) {
@@ -2705,10 +3519,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private Map<String, Object> findOAuth2LinkedRecord(CollectionSchema collection, String provider, String providerId) {
         return externalAuths.stream()
-                .filter(item -> Objects.equals(collection.id, item.get("collectionId")))
+                .filter(item -> Objects.equals(collection.id, item.get("collectionRef")))
                 .filter(item -> provider.equalsIgnoreCase(String.valueOf(item.get("provider"))))
                 .filter(item -> Objects.equals(providerId, item.get("providerId")))
-                .map(item -> findRecordOrNull(collection, String.valueOf(item.get("recordId"))))
+                .map(item -> findRecordOrNull(collection, String.valueOf(item.get("recordRef"))))
                 .filter(Objects::nonNull)
                 .findFirst()
                 .orElse(null);
@@ -2716,7 +3530,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private void upsertExternalAuth(CollectionSchema collection, Map<String, Object> record, String provider, String providerId) {
         Map<String, Object> existing = externalAuths.stream()
-                .filter(item -> Objects.equals(collection.id, item.get("collectionId")))
+                .filter(item -> Objects.equals(collection.id, item.get("collectionRef")))
                 .filter(item -> provider.equalsIgnoreCase(String.valueOf(item.get("provider"))))
                 .filter(item -> Objects.equals(providerId, item.get("providerId")))
                 .findFirst()
@@ -2728,9 +3542,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             existing.put("created", timestamp);
             externalAuths.add(existing);
         }
-        existing.put("collectionId", collection.id);
-        existing.put("collectionName", collection.name);
-        existing.put("recordId", record.get("id"));
+        existing.put("collectionRef", collection.id);
+        existing.put("recordRef", record.get("id"));
         existing.put("provider", provider);
         existing.put("providerId", providerId);
         existing.put("updated", timestamp);
@@ -2739,8 +3552,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private Map<String, Object> latestReusableOtp(CollectionSchema collection, Map<String, Object> record) {
         List<Map<String, Object>> active = otps.stream()
-                .filter(otp -> Objects.equals(collection.id, otp.get("collectionId")))
-                .filter(otp -> Objects.equals(record.get("id"), otp.get("recordId")))
+                .filter(otp -> Objects.equals(collection.id, otp.get("collectionRef")))
+                .filter(otp -> Objects.equals(record.get("id"), otp.get("recordRef")))
                 .filter(otp -> !otpExpired(otp))
                 .sorted((left, right) -> String.valueOf(right.getOrDefault("created", "")).compareTo(String.valueOf(left.getOrDefault("created", ""))))
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -2798,7 +3611,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private boolean otpExpired(Map<String, Object> otp) {
         try {
-            return Instant.parse(String.valueOf(otp.get("expires"))).isBefore(Instant.now());
+            Object expires = otp.get("expires");
+            if (expires != null && !String.valueOf(expires).isBlank()) {
+                return Instant.parse(String.valueOf(expires)).isBefore(Instant.now());
+            }
+            CollectionSchema collection = findCollectionOrNull(String.valueOf(otp.getOrDefault("collectionRef", "")));
+            long duration = collection != null && collection.otp != null && collection.otp.duration > 0
+                    ? collection.otp.duration
+                    : 180L;
+            return Instant.parse(String.valueOf(otp.get("created"))).plusSeconds(duration).isBefore(Instant.now());
         } catch (RuntimeException e) {
             return true;
         }
@@ -2883,14 +3704,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private void pruneOtps() {
-        Instant now = Instant.now();
-        otps.removeIf(otp -> {
-            try {
-                return Instant.parse(String.valueOf(otp.get("expires"))).isBefore(now);
-            } catch (Exception ignored) {
-                return true;
-            }
-        });
+        otps.removeIf(this::otpExpired);
         int overflow = otps.size() - 1000;
         if (overflow > 0) {
             otps.subList(0, overflow).clear();
@@ -2903,7 +3717,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         loadSettings();
         loadLogs();
         loadAuthRequests();
+        loadAuthOrigins();
         loadExternalAuths();
+        loadMfas();
         loadOtps();
         if (Files.exists(schemaFile)) {
             JsonNode root = mapper.readTree(schemaFile.toFile());
@@ -2913,7 +3729,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 collectionsByName.put(collection.name, collection);
             }
         }
+        migrateSystemCollectionIds();
         ensureSuperuserCollection();
+        ensureAuthSystemCollections();
+        pruneMfas();
+        pruneOtps();
         for (CollectionSchema collection : collectionsByName.values()) {
             Path file = recordsFile(collection);
             if (Files.exists(file)) {
@@ -2946,8 +3766,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 }
             }
             records(collection).forEach(record -> {
-                if ("auth".equals(collection.type) && textSetting(record.get("tokenKey")).isBlank()) {
-                    record.put("tokenKey", IdGenerator.prefixed("tk_"));
+                if ("auth".equals(collection.type)) {
+                    if (textSetting(record.get("tokenKey")).isBlank()) {
+                        record.put("tokenKey", IdGenerator.secret());
+                    }
+                    record.putIfAbsent("emailVisibility", false);
+                    record.putIfAbsent("verified", SUPERUSERS.equals(collection.name));
                 }
             });
         }
@@ -2979,11 +3803,37 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         pruneAuthRequests();
     }
 
+    private void loadAuthOrigins() throws IOException {
+        authOrigins.clear();
+        if (Files.exists(authOriginsFile)) {
+            authOrigins.addAll(mapper.readValue(authOriginsFile.toFile(), RECORD_LIST));
+        }
+        authOrigins.forEach(record -> AuthSystemCollections.normalizeLegacyRecord(
+                AuthSystemCollections.AUTH_ORIGINS,
+                record
+        ));
+    }
+
     private void loadExternalAuths() throws IOException {
         externalAuths.clear();
         if (Files.exists(externalAuthsFile)) {
             externalAuths.addAll(mapper.readValue(externalAuthsFile.toFile(), RECORD_LIST));
         }
+        externalAuths.forEach(record -> AuthSystemCollections.normalizeLegacyRecord(
+                AuthSystemCollections.EXTERNAL_AUTHS,
+                record
+        ));
+    }
+
+    private void loadMfas() throws IOException {
+        mfas.clear();
+        if (Files.exists(mfasFile)) {
+            mfas.addAll(mapper.readValue(mfasFile.toFile(), RECORD_LIST));
+        }
+        mfas.forEach(record -> AuthSystemCollections.normalizeLegacyRecord(
+                AuthSystemCollections.MFAS,
+                record
+        ));
     }
 
     private void loadOtps() throws IOException {
@@ -2991,7 +3841,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (Files.exists(otpsFile)) {
             otps.addAll(mapper.readValue(otpsFile.toFile(), RECORD_LIST));
         }
-        pruneOtps();
+        otps.forEach(record -> AuthSystemCollections.normalizeLegacyRecord(
+                AuthSystemCollections.OTPS,
+                record
+        ));
     }
 
     private Map<String, Object> createSuperuser(JsonNode body) {
@@ -3015,6 +3868,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         Map<String, Object> errors = new LinkedHashMap<>();
 
         for (FieldSchema field : collection.fields) {
+            if (AuthCollectionFields.isManagedRecordField(field.name)
+                    || AuthSystemCollections.isManagedField(field.name)) {
+                continue;
+            }
             JsonNode value = body.get(field.name);
             if (value == null || value.isMissingNode()) {
                 if (!update && field.required) {
@@ -3048,7 +3905,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             values.put("created", timestamp);
             values.put("updated", timestamp);
             if ("auth".equals(collection.type)) {
-                values.put("tokenKey", IdGenerator.prefixed("tk_"));
+                values.put("tokenKey", IdGenerator.secret());
+                values.putIfAbsent("emailVisibility", false);
+                values.putIfAbsent("verified", SUPERUSERS.equals(collection.name));
             }
         }
         return values;
@@ -3056,7 +3915,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
     private void enforceUnique(CollectionSchema collection, Map<String, Object> values, String currentId, Map<String, Object> errors) {
         for (FieldSchema field : collection.fields) {
-            if (!field.unique || !values.containsKey(field.name) || values.get(field.name) == null) {
+            boolean unique = field.unique || collection.indexes.stream()
+                    .anyMatch(index -> CollectionIndexSupport.isSingleColumnUnique(index, field.name));
+            if (!unique || !values.containsKey(field.name) || values.get(field.name) == null) {
                 continue;
             }
             Object candidate = values.get(field.name);
@@ -3083,6 +3944,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             if ("password".equals(normalizeType(field.type))) {
                 continue;
             }
+            if ("tokenKey".equals(field.name)) {
+                continue;
+            }
             if (field.hidden && !includeHidden) {
                 continue;
             }
@@ -3100,11 +3964,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             Map<String, String> query,
             RequestPrincipal principal
     ) {
+        return canViewExpandedRecord(collection, record, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    private boolean canViewExpandedRecord(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         if (isSuperuser(principal)) {
             return true;
         }
         return collection.viewRule != null
-                && matchesRule(collection.viewRule, record, null, query == null ? Map.of() : query, "GET", principal);
+                && matchesRule(collection, collection.viewRule, record, null, request, "GET", principal);
     }
 
     private JsonNode bodyWithFileMarkers(
@@ -3229,21 +4102,27 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return value != null && value.asBoolean(false);
     }
 
-    private void requireProtectedFileAccess(CollectionSchema collection, Map<String, Object> record, RequestPrincipal principal) {
+    private void requireProtectedFileAccess(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         if (isSuperuser(principal)) {
             return;
         }
-        if (principal == null) {
-            throw new ApiException(403, "Protected file token required.", ApiErrors.requiredField("token"));
-        }
         if (collection.viewRule == null) {
-            throw new ApiException(403, "Protected file is not accessible.",
-                    ApiErrors.invalidField("token", "Protected file is not accessible."));
+            throw fileNotFound();
         }
-        if (!matchesRule(collection.viewRule, record, null, Map.of(), "GET", principal)) {
-            throw new ApiException(403, "Protected file is not accessible.",
-                    ApiErrors.invalidField("token", "Protected file is not accessible."));
+        RuleRequestContext protectedRequest = (request == null ? RuleRequestContext.empty() : request)
+                .withContext(RuleRequestContext.PROTECTED_FILE);
+        if (!matchesRule(collection, collection.viewRule, record, null, protectedRequest, "GET", principal)) {
+            throw fileNotFound();
         }
+    }
+
+    private ApiException fileNotFound() {
+        return new ApiException(404, "The requested resource wasn't found.");
     }
 
     private void publishRealtime(CollectionSchema collection, String action, Map<String, Object> record) {
@@ -3256,7 +4135,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             if (!canReceiveRealtime(collection, record, subscription, principal)) {
                 return null;
             }
-            return RecordProcessor.process(this, collection, record, isSuperuser(principal), subscription.query(), principal);
+            return RecordProcessor.process(
+                    this,
+                    collection,
+                    record,
+                    isSuperuser(principal),
+                    RuleRequestContext.of(
+                            subscription.query(),
+                            subscription.headers(),
+                            RuleRequestContext.REALTIME
+                    ),
+                    principal
+            );
         });
     }
 
@@ -3264,27 +4154,49 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             CollectionSchema collection,
             Map<String, Object> record,
             RealtimeHub.Subscription subscription,
-            RequestPrincipal principal
+        RequestPrincipal principal
     ) {
         if (isSuperuser(principal)) {
-            return matchesRealtimeFilter(subscription, record, principal);
+            return matchesRealtimeFilter(collection, subscription, record, principal);
         }
         String rule = subscription.wildcard() ? collection.listRule : collection.viewRule;
         if (rule == null) {
             return false;
         }
-        return matchesRule(rule, record, null, subscription.query(), "GET", principal)
-                && matchesRealtimeFilter(subscription, record, principal);
+        RuleRequestContext request = RuleRequestContext.of(
+                subscription.query(),
+                subscription.headers(),
+                RuleRequestContext.REALTIME
+        );
+        return matchesRule(collection, rule, record, null, request, "GET", principal)
+                && matchesRealtimeFilter(collection, subscription, record, principal);
     }
 
     private boolean matchesRealtimeFilter(
+            CollectionSchema collection,
             RealtimeHub.Subscription subscription,
             Map<String, Object> record,
             RequestPrincipal principal
     ) {
         String filter = subscription.filter();
         return filter == null || filter.isBlank()
-                || RuleEvaluator.matches(filter, ruleContext(record, null, subscription.query(), "GET", principal));
+                || RuleEvaluator.matches(
+                filter,
+                RecordFieldResolverSupport.context(
+                        this,
+                        collection,
+                        record,
+                        null,
+                        RuleRequestContext.of(
+                                subscription.query(),
+                                subscription.headers(),
+                                RuleRequestContext.REALTIME
+                        ),
+                        "GET",
+                        principal,
+                        isSuperuser(principal),
+                        !isSuperuser(principal)
+                ));
     }
 
     private List<UploadedFile> filesFor(Map<String, List<UploadedFile>> files, String field) {
@@ -3491,18 +4403,41 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             RequestPrincipal principal,
             String action
     ) {
+        requireRecordRule(
+                collection,
+                rule,
+                record,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                method,
+                principal,
+                action
+        );
+    }
+
+    private void requireRecordRule(
+            CollectionSchema collection,
+            String rule,
+            Map<String, Object> record,
+            Map<String, Object> body,
+            RuleRequestContext request,
+            String method,
+            RequestPrincipal principal,
+            String action
+    ) {
         if (isSuperuser(principal)) {
             return;
         }
         if (rule == null) {
             throw new ApiException(403, "Only superusers can " + action + " this record.");
         }
-        if (!matchesRule(rule, record, body, query, method, principal)) {
+        if (!matchesRule(collection, rule, record, body, request, method, principal)) {
             throw new ApiException(404, "Record not found.");
         }
     }
 
     private boolean matchesRule(
+            CollectionSchema collection,
             String rule,
             Map<String, Object> record,
             Map<String, Object> body,
@@ -3510,11 +4445,49 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String method,
             RequestPrincipal principal
     ) {
-        return RuleEvaluator.matches(rule, ruleContext(record, body, query, method, principal));
+        return matchesRule(
+                collection,
+                rule,
+                record,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                method,
+                principal
+        );
+    }
+
+    private boolean matchesRule(
+            CollectionSchema collection,
+            String rule,
+            Map<String, Object> record,
+            Map<String, Object> body,
+            RuleRequestContext request,
+            String method,
+            RequestPrincipal principal
+    ) {
+        return RuleEvaluator.matches(
+                rule,
+                RecordFieldResolverSupport.context(
+                        this,
+                        collection,
+                        record,
+                        body,
+                        request,
+                        method,
+                        principal,
+                        true,
+                        false
+                ));
     }
 
     private boolean isSuperuser(RequestPrincipal principal) {
         return principal != null && principal.superuser();
+    }
+
+    private void requireSuperuserRecordsAccess(CollectionSchema collection, RequestPrincipal principal) {
+        if (SUPERUSERS.equals(collection.name) && !isSuperuser(principal)) {
+            throw new ApiException(403, "Only superusers can access this collection.");
+        }
     }
 
     private Map<String, Object> jsonToMap(JsonNode node) {
@@ -3526,8 +4499,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private Map<String, Object> collectionMap(CollectionSchema collection) {
-        return mapper.convertValue(copyCollection(collection), new TypeReference<>() {
-        });
+        return CollectionResponseSupport.redactSecrets(collectionPersistenceMap(collection));
+    }
+
+    private Map<String, Object> collectionPersistenceMap(CollectionSchema collection) {
+        Map<String, Object> result = mapper.convertValue(copyCollection(collection), new TypeReference<>() {});
+        if ("auth".equals(collection.type)) {
+            result.put("authRule", nullableJsonValue(collection.authRule));
+            result.put("manageRule", nullableJsonValue(collection.manageRule));
+        }
+        return result;
+    }
+
+    private Object nullableJsonValue(Object value) {
+        return value == null ? NullNode.instance : value;
     }
 
     private Map<String, Object> copyMap(Map<String, Object> source) {
@@ -3624,21 +4609,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             String email,
             String code
     ) {
-        Map<String, Object> smtp = settingsSection("smtp");
-        if (truthyObject(smtp.get("enabled")) && !textSetting(smtp.get("host")).isBlank()) {
-            SmtpMailer.Settings smtpSettings = smtpSettings(copyMap(smtp));
-            SmtpMailer.Message message = new SmtpMailer.Message(
-                    textSetting(settingsSection("meta").get("senderName")),
-                    senderAddress(),
-                    email,
-                    "Your one-time password",
-                    "<p>Your one-time password is <strong>" + escapeHtml(code) + "</strong>.</p>",
-                    "Your one-time password is " + code + "."
-            );
-            sendOtpMessageAsync(otpId, smtpSettings, message);
-            return;
-        }
-
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("id", IdGenerator.id());
         request.put("type", "otp");
@@ -3650,28 +4620,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         request.put("password", code);
         request.put("created", now());
         request.put("expires", DateTimeFormatter.ISO_INSTANT.format(Instant.now().plus(Duration.ofSeconds(collection.otp.duration))));
+        if (AuthMailSupport.sendAsync(collection, record, request, settings, () -> deleteOtp(otpId))) {
+            return;
+        }
         authRequests.add(request);
         pruneAuthRequests();
         saveAuthRequests();
-    }
-
-    private void sendOtpMessageAsync(String otpId, SmtpMailer.Settings settings, SmtpMailer.Message message) {
-        Thread sender = new Thread(() -> {
-            try {
-                SmtpMailer.send(settings, message);
-            } catch (RuntimeException e) {
-                deleteOtp(otpId);
-            }
-        }, "pocketbase-java-otp-" + otpId);
-        sender.setDaemon(true);
-        sender.start();
-    }
-
-    private String escapeHtml(String value) {
-        return value == null ? "" : value
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;");
     }
 
     private TestEmailContent testEmailContent(String template, Map<String, Object> settings) {
@@ -3940,9 +4894,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     private void pruneLogs() {
         Map<String, Object> logSettings = settingsSection("logs");
         int maxDays = intSetting(logSettings.get("maxDays"), 5);
+        int minLevel = intSetting(logSettings.get("minLevel"), 0);
         Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(Duration.ofDays(maxDays));
         logs.removeIf(log -> {
             if (maxDays <= 0) {
+                return true;
+            }
+            if (intSetting(log.get("level"), 0) < minLevel) {
                 return true;
             }
             try {
@@ -3961,7 +4919,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         mfas.removeIf(mfa -> {
             try {
                 CollectionSchema collection = collectionsByName.values().stream()
-                        .filter(c -> Objects.equals(c.id, mfa.get("collectionId")))
+                        .filter(c -> Objects.equals(c.id, mfa.get("collectionRef")))
                         .findFirst()
                         .orElse(null);
                 if (collection == null) {
@@ -3996,10 +4954,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 saveLogs();
             }
             case "__pbDBOptimize__", "__pbOTPCleanup__" -> {
-                // No-op placeholders matching official built-in cron ids for the JSON store runtime.
+                if ("__pbOTPCleanup__".equals(id)) {
+                    pruneOtps();
+                    saveOtps();
+                }
             }
             case "__pbMFACleanup__" -> {
                 pruneMfas();
+                saveMfas();
             }
             case AUTO_BACKUP_JOB_ID -> runAutoBackupCron();
             default -> throw new ApiException(404, "Missing or invalid cron job");
@@ -4091,6 +5053,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private void cleanupRemovedCollectionData(Set<String> existingIds) {
+        boolean originsChanged = authOrigins.removeIf(record -> !existingIds.contains(String.valueOf(record.get("collectionRef"))));
+        boolean externalChanged = externalAuths.removeIf(record -> !existingIds.contains(String.valueOf(record.get("collectionRef"))));
+        boolean mfasChanged = mfas.removeIf(record -> !existingIds.contains(String.valueOf(record.get("collectionRef"))));
+        boolean otpsChanged = otps.removeIf(record -> !existingIds.contains(String.valueOf(record.get("collectionRef"))));
+        if (originsChanged) saveAuthOrigins();
+        if (externalChanged) saveExternalAuths();
+        if (mfasChanged) saveMfas();
+        if (otpsChanged) saveOtps();
         try {
             Files.createDirectories(recordsDir);
             try (Stream<Path> paths = Files.list(recordsDir)) {
@@ -4201,32 +5171,70 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return out;
     }
 
+    private String viewQueryFromBody(JsonNode body, String fallback) {
+        if (body != null && body.has("viewQuery")) {
+            return body.path("viewQuery").asText("");
+        }
+        JsonNode options = body == null ? null : body.get("options");
+        if (options != null && options.isObject()) {
+            if (options.has("viewQuery")) {
+                return options.path("viewQuery").asText("");
+            }
+            if (options.has("query")) {
+                return options.path("query").asText("");
+            }
+        }
+        return fallback;
+    }
+
+    private void prepareViewCollection(CollectionSchema collection, String message) {
+        collection.fields = new ArrayList<>();
+        if (collection.viewQuery == null || collection.viewQuery.isBlank()) {
+            throw new ApiException(400, message, ApiErrors.requiredField("viewQuery"));
+        }
+        try {
+            Map<String, Object> preview = previewViewQuery(collection.viewQuery, 10);
+            collection.fields = mapper.convertValue(preview.get("fields"), new TypeReference<>() {
+            });
+            for (FieldSchema field : collection.fields) {
+                field.type = normalizeType(field.type == null || field.type.isBlank() ? "text" : field.type);
+            }
+            SchemaIdSupport.assignMissingFieldIds(collection.fields, List.of());
+        } catch (RuntimeException e) {
+            String rawError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            if (rawError.length() > 500) {
+                rawError = rawError.substring(0, 500);
+            }
+            throw new ApiException(
+                    400,
+                    message,
+                    ApiErrors.fieldError("viewQuery", "validation_invalid_view_query", "Invalid query - " + rawError)
+            );
+        }
+    }
+
     private void normalizeCollection(CollectionSchema collection, boolean existing) {
-        if (collection.id == null || collection.id.isBlank()) {
-            collection.id = IdGenerator.prefixed("pbc_");
-        }
-        String message = existing ? "Failed to update collection." : "Failed to create collection.";
-        if (collection.name == null || collection.name.isBlank()) {
-            throw new ApiException(400, message, ApiErrors.requiredField("name"));
-        }
-        if (!NAME_PATTERN.matcher(collection.name).matches()) {
-            throw new ApiException(400, message, fieldError("name", "validation_invalid_format", "Use letters, numbers and underscore."));
-        }
         collection.type = normalizeType(collection.type == null || collection.type.isBlank() ? "base" : collection.type);
-        if (!"base".equals(collection.type) && !"auth".equals(collection.type) && !"view".equals(collection.type)) {
-            throw new ApiException(400, "Unsupported collection type.", fieldError("type", "validation_invalid_value", "Supported types are base, auth and view."));
+        if (collection.id == null || collection.id.isBlank()) {
+            collection.id = SchemaIdSupport.nextCollectionId(
+                    collection.type,
+                    collection.name,
+                    candidate -> findCollectionOrNull(candidate) != null
+            );
         }
         if (collection.fields == null) {
             collection.fields = new ArrayList<>();
         }
-        if ("auth".equals(collection.type)) {
-            ensureAuthFields(collection);
+        if ("base".equals(collection.type)) {
+            SchemaIdSupport.ensureBaseIdField(collection.fields);
+        } else if ("auth".equals(collection.type)) {
+            AuthCollectionFields.normalize(collection);
             normalizeAuthConfig(collection);
         }
-        Set<String> names = new LinkedHashSet<>();
         for (FieldSchema field : collection.fields) {
-            normalizeField(field, names);
+            normalizeField(field);
         }
+        SchemaIdSupport.assignMissingFieldIds(collection.fields, List.of());
         String timestamp = now();
         if (!existing || collection.created == null || collection.created.isBlank()) {
             collection.created = timestamp;
@@ -4236,20 +5244,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
     }
 
-    private void normalizeField(FieldSchema field, Set<String> names) {
-        if (field.id == null || field.id.isBlank()) {
-            field.id = IdGenerator.prefixed("field_");
-        }
-        if (field.name == null || field.name.isBlank() || !NAME_PATTERN.matcher(field.name).matches()) {
-            throw new ApiException(400, "Invalid field name.", fieldError("fields", "validation_invalid_value", "Use letters, numbers and underscore."));
-        }
-        if (!names.add(field.name)) {
-            throw new ApiException(400, "Duplicate field name.", fieldError(field.name, "validation_invalid_value", "Duplicate field name."));
+    private void normalizeField(FieldSchema field) {
+        if (field == null) {
+            return;
         }
         field.type = normalizeType(field.type == null || field.type.isBlank() ? "text" : field.type);
         if (field.options == null) {
             field.options = new LinkedHashMap<>();
         }
+    }
+
+    private boolean jsonTableExists(String name) {
+        return name != null && INTERNAL_TABLE_NAMES.stream().anyMatch(table -> table.equalsIgnoreCase(name));
     }
 
     private CollectionSchema scaffoldCollection(String type) {
@@ -4259,90 +5265,27 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         collection.type = type;
         collection.system = false;
         collection.fields = new ArrayList<>();
-        if ("auth".equals(type)) {
-            collection.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
-            collection.fields.add(new FieldSchema("field_password", "password", "password", true, false, true));
-            collection.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
+        if ("base".equals(type)) {
+            SchemaIdSupport.ensureBaseIdField(collection.fields);
+        } else if ("auth".equals(type)) {
+            AuthCollectionFields.normalize(collection);
         }
         return collection;
-    }
-
-    private List<OAuth2ProviderMetadata> oauth2Providers() {
-        return List.of(
-                new OAuth2ProviderMetadata("apple", "Apple", ""),
-                new OAuth2ProviderMetadata("bitbucket", "Bitbucket", ""),
-                new OAuth2ProviderMetadata("box", "Box", ""),
-                new OAuth2ProviderMetadata("discord", "Discord", ""),
-                new OAuth2ProviderMetadata("facebook", "Facebook", ""),
-                new OAuth2ProviderMetadata("gitea", "Gitea", ""),
-                new OAuth2ProviderMetadata("gitee", "Gitee", ""),
-                new OAuth2ProviderMetadata("github", "GitHub", ""),
-                new OAuth2ProviderMetadata("gitlab", "GitLab", ""),
-                new OAuth2ProviderMetadata("google", "Google", ""),
-                new OAuth2ProviderMetadata("instagram", "Instagram", ""),
-                new OAuth2ProviderMetadata("kakao", "Kakao", ""),
-                new OAuth2ProviderMetadata("lark", "Lark", ""),
-                new OAuth2ProviderMetadata("linear", "Linear", ""),
-                new OAuth2ProviderMetadata("livechat", "LiveChat", ""),
-                new OAuth2ProviderMetadata("mailcow", "mailcow", ""),
-                new OAuth2ProviderMetadata("microsoft", "Microsoft", ""),
-                new OAuth2ProviderMetadata("monday", "monday.com", ""),
-                new OAuth2ProviderMetadata("notion", "Notion", ""),
-                new OAuth2ProviderMetadata("oidc", "OIDC", ""),
-                new OAuth2ProviderMetadata("patreon", "Patreon", ""),
-                new OAuth2ProviderMetadata("planningcenter", "Planning Center", ""),
-                new OAuth2ProviderMetadata("spotify", "Spotify", ""),
-                new OAuth2ProviderMetadata("strava", "Strava", ""),
-                new OAuth2ProviderMetadata("trakt", "Trakt", ""),
-                new OAuth2ProviderMetadata("twitch", "Twitch", ""),
-                new OAuth2ProviderMetadata("twitter", "Twitter", ""),
-                new OAuth2ProviderMetadata("vk", "VK", ""),
-                new OAuth2ProviderMetadata("wakatime", "WakaTime", ""),
-                new OAuth2ProviderMetadata("yandex", "Yandex", "")
-        );
-    }
-
-    private OAuth2ProviderMetadata oauth2ProviderMetadata(String name) {
-        if (name == null || name.isBlank()) {
-            return null;
-        }
-        return oauth2Providers().stream()
-                .filter(provider -> provider.name().equalsIgnoreCase(name))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private void ensureAuthFields(CollectionSchema collection) {
-        boolean hasEmail = collection.fields.stream().anyMatch(field -> "email".equals(field.name));
-        boolean hasPassword = collection.fields.stream().anyMatch(field -> "password".equals(field.name));
-        boolean hasVerified = collection.fields.stream().anyMatch(field -> "verified".equals(field.name));
-        if (!hasEmail) {
-            collection.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
-        }
-        if (!hasPassword) {
-            collection.fields.add(new FieldSchema("field_password", "password", "password", true, false, true));
-        }
-        if (!hasVerified) {
-            collection.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
-        }
     }
 
     private void normalizeAuthConfig(CollectionSchema collection) {
         if (collection.passwordAuth == null) {
             collection.passwordAuth = new CollectionSchema.PasswordAuthConfig();
         }
-        if (collection.passwordAuth.identityFields == null || collection.passwordAuth.identityFields.isEmpty()) {
+        if (collection.passwordAuth.identityFields == null) {
             collection.passwordAuth.identityFields = new ArrayList<>(List.of("email"));
         } else {
             LinkedHashSet<String> identities = new LinkedHashSet<>();
             for (String field : collection.passwordAuth.identityFields) {
                 String value = field == null ? "" : field.trim();
-                if ("email".equals(value) || "username".equals(value)) {
+                if (!value.isBlank()) {
                     identities.add(value);
                 }
-            }
-            if (identities.isEmpty()) {
-                identities.add("email");
             }
             collection.passwordAuth.identityFields = new ArrayList<>(identities);
         }
@@ -4350,13 +5293,19 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (collection.otp == null) {
             collection.otp = new CollectionSchema.OtpConfig();
         }
-        collection.otp.duration = Math.max(60L, collection.otp.duration <= 0 ? 300L : collection.otp.duration);
-        collection.otp.length = Math.max(4, Math.min(12, collection.otp.length <= 0 ? 6 : collection.otp.length));
+        collection.otp.emailTemplate = normalizeEmailTemplate(collection.otp.emailTemplate, CollectionSchema.EmailTemplate.otp());
 
         if (collection.mfa == null) {
             collection.mfa = new CollectionSchema.MfaConfig();
         }
-        collection.mfa.duration = Math.max(60L, collection.mfa.duration <= 0 ? 1800L : collection.mfa.duration);
+
+        if (collection.authAlert == null) {
+            collection.authAlert = new CollectionSchema.AuthAlertConfig();
+        }
+        collection.authAlert.emailTemplate = normalizeEmailTemplate(collection.authAlert.emailTemplate, CollectionSchema.EmailTemplate.authAlert());
+        collection.verificationTemplate = normalizeEmailTemplate(collection.verificationTemplate, CollectionSchema.EmailTemplate.verification());
+        collection.resetPasswordTemplate = normalizeEmailTemplate(collection.resetPasswordTemplate, CollectionSchema.EmailTemplate.passwordReset());
+        collection.confirmEmailChangeTemplate = normalizeEmailTemplate(collection.confirmEmailChangeTemplate, CollectionSchema.EmailTemplate.emailChange());
 
         collection.authToken = normalizeTokenConfig(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
         collection.passwordResetToken = normalizeTokenConfig(collection.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION);
@@ -4370,23 +5319,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         if (collection.oauth2.providers == null) {
             collection.oauth2.providers = new ArrayList<>();
         } else {
-            LinkedHashSet<String> names = new LinkedHashSet<>();
             List<CollectionSchema.OAuth2ProviderConfig> providers = new ArrayList<>();
             for (CollectionSchema.OAuth2ProviderConfig provider : collection.oauth2.providers) {
-                if (provider == null || provider.name == null || provider.name.isBlank()) {
+                if (provider == null) {
+                    providers.add(null);
                     continue;
                 }
-                OAuth2ProviderMetadata metadata = oauth2ProviderMetadata(provider.name);
-                if (metadata == null || !names.add(metadata.name())) {
-                    continue;
-                }
+                OAuth2ProviderManager.ProviderMetadata metadata = OAuth2ProviderManager.providerMetadata(provider.name);
                 CollectionSchema.OAuth2ProviderConfig normalized = new CollectionSchema.OAuth2ProviderConfig();
-                normalized.name = metadata.name();
+                normalized.name = metadata == null ? provider.name : metadata.name();
                 normalized.clientId = textSetting(provider.clientId);
                 normalized.clientSecret = textSetting(provider.clientSecret);
                 normalized.authURL = textSetting(provider.authURL);
                 normalized.tokenURL = textSetting(provider.tokenURL);
                 normalized.userInfoURL = textSetting(provider.userInfoURL);
+                normalized.displayName = textSetting(provider.displayName);
                 normalized.pkce = provider.pkce;
                 normalized.scopes = provider.scopes == null
                         ? new ArrayList<>()
@@ -4395,20 +5342,67 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                         .map(String::trim)
                         .filter(scope -> !scope.isBlank())
                         .collect(Collectors.toCollection(ArrayList::new));
-                OAuth2ProviderManager.validateConfig(normalized);
+                normalized.extra = provider.extra == null
+                        ? new LinkedHashMap<>()
+                        : new LinkedHashMap<>(provider.extra);
                 providers.add(normalized);
             }
             collection.oauth2.providers = providers;
         }
+        OAuth2FieldMappingSupport.normalize(collection);
     }
 
     private CollectionSchema.TokenConfig normalizeTokenConfig(CollectionSchema.TokenConfig config, long fallbackDuration) {
         CollectionSchema.TokenConfig normalized = config == null ? new CollectionSchema.TokenConfig() : config;
         normalized.duration = normalized.duration > 0 ? normalized.duration : fallbackDuration;
-        if (normalized.secret == null) {
-            normalized.secret = "";
+        if (normalized.secret == null || normalized.secret.isBlank()) {
+            normalized.secret = IdGenerator.secret();
         }
         return normalized;
+    }
+
+    private boolean authRuleChanged(String previous, String next) {
+        return !Objects.equals(previous, next)
+                && !Objects.equals(previous == null ? "" : previous, next == null ? "" : next);
+    }
+
+    private CollectionSchema.EmailTemplate normalizeEmailTemplate(
+            CollectionSchema.EmailTemplate template,
+            CollectionSchema.EmailTemplate fallback
+    ) {
+        CollectionSchema.EmailTemplate normalized = template == null ? new CollectionSchema.EmailTemplate() : template;
+        if (normalized.subject == null || normalized.subject.isBlank()) {
+            normalized.subject = fallback.subject;
+        }
+        if (normalized.body == null || normalized.body.isBlank()) {
+            normalized.body = fallback.body;
+        }
+        return normalized;
+    }
+
+    private void applyAuthOptions(CollectionSchema collection, JsonNode body) {
+        if (collection == null || body == null || !body.isObject()) {
+            return;
+        }
+        JsonNode options = body.path("options");
+        if (!options.isObject()) {
+            return;
+        }
+        if (!body.has("passwordAuth") && options.has("passwordAuth")) collection.passwordAuth = mapper.convertValue(options.get("passwordAuth"), CollectionSchema.PasswordAuthConfig.class);
+        if (!body.has("otp") && options.has("otp")) collection.otp = mapper.convertValue(options.get("otp"), CollectionSchema.OtpConfig.class);
+        if (!body.has("mfa") && options.has("mfa")) collection.mfa = mapper.convertValue(options.get("mfa"), CollectionSchema.MfaConfig.class);
+        if (!body.has("oauth2") && options.has("oauth2")) collection.oauth2 = mapper.convertValue(options.get("oauth2"), CollectionSchema.OAuth2Config.class);
+        if (!body.has("authAlert") && options.has("authAlert")) collection.authAlert = mapper.convertValue(options.get("authAlert"), CollectionSchema.AuthAlertConfig.class);
+        if (!body.has("authToken") && options.has("authToken")) collection.authToken = mapper.convertValue(options.get("authToken"), CollectionSchema.TokenConfig.class);
+        if (!body.has("passwordResetToken") && options.has("passwordResetToken")) collection.passwordResetToken = mapper.convertValue(options.get("passwordResetToken"), CollectionSchema.TokenConfig.class);
+        if (!body.has("verificationToken") && options.has("verificationToken")) collection.verificationToken = mapper.convertValue(options.get("verificationToken"), CollectionSchema.TokenConfig.class);
+        if (!body.has("emailChangeToken") && options.has("emailChangeToken")) collection.emailChangeToken = mapper.convertValue(options.get("emailChangeToken"), CollectionSchema.TokenConfig.class);
+        if (!body.has("fileToken") && options.has("fileToken")) collection.fileToken = mapper.convertValue(options.get("fileToken"), CollectionSchema.TokenConfig.class);
+        if (!body.has("verificationTemplate") && options.has("verificationTemplate")) collection.verificationTemplate = mapper.convertValue(options.get("verificationTemplate"), CollectionSchema.EmailTemplate.class);
+        if (!body.has("resetPasswordTemplate") && options.has("resetPasswordTemplate")) collection.resetPasswordTemplate = mapper.convertValue(options.get("resetPasswordTemplate"), CollectionSchema.EmailTemplate.class);
+        if (!body.has("confirmEmailChangeTemplate") && options.has("confirmEmailChangeTemplate")) collection.confirmEmailChangeTemplate = mapper.convertValue(options.get("confirmEmailChangeTemplate"), CollectionSchema.EmailTemplate.class);
+        if (!body.has("authRule") && options.has("authRule")) collection.authRule = nullableText(options.get("authRule"));
+        if (!body.has("manageRule") && options.has("manageRule")) collection.manageRule = nullableText(options.get("manageRule"));
     }
 
     private Duration tokenDuration(CollectionSchema.TokenConfig config, long fallbackSeconds) {
@@ -4469,20 +5463,215 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private void ensureSuperuserCollection() {
-        if (collectionsByName.containsKey(SUPERUSERS)) {
+        CollectionSchema existing = collectionsByName.get(SUPERUSERS);
+        if (existing != null) {
+            existing.id = SystemCollections.SUPERUSERS_ID;
+            existing.name = SUPERUSERS;
+            existing.type = "auth";
+            existing.system = true;
+            existing.fields.removeIf(field -> field != null
+                    && "name".equals(field.name)
+                    && "field_name".equals(field.id));
+            AuthCollectionFields.normalize(existing);
+            for (FieldSchema field : AuthSystemCollections.superusers().fields) {
+                if (existing.fields.stream().noneMatch(candidate -> Objects.equals(candidate.name, field.name))) {
+                    existing.fields.add(field);
+                }
+            }
+            normalizeCollection(existing, true);
             return;
         }
-        CollectionSchema superusers = new CollectionSchema();
-        superusers.id = "pbc_superusers";
-        superusers.name = SUPERUSERS;
-        superusers.type = "auth";
-        superusers.system = true;
-        superusers.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
-        superusers.fields.add(new FieldSchema("field_password", "password", "password", true, false, true));
-        superusers.fields.add(new FieldSchema("field_name", "name", "text", false, false, false));
-        superusers.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
+        CollectionSchema superusers = AuthSystemCollections.superusers();
         normalizeCollection(superusers, false);
         collectionsByName.put(superusers.name, superusers);
+    }
+
+    private void ensureAuthSystemCollections() {
+        for (CollectionSchema defaults : AuthSystemCollections.defaults()) {
+            CollectionSchema existing = findCollectionOrNull(defaults.name);
+            if (existing == null) {
+                normalizeCollection(defaults, false);
+                collectionsByName.put(defaults.name, defaults);
+                continue;
+            }
+            defaults.created = existing.created;
+            defaults.updated = existing.updated;
+            normalizeCollection(defaults, true);
+            collectionsByName.remove(existing.name);
+            collectionsByName.put(defaults.name, defaults);
+        }
+    }
+
+    private void migrateSystemCollectionIds() {
+        for (SystemCollections.Definition definition : SystemCollections.definitions()) {
+            CollectionSchema collection = collectionsByName.get(definition.name());
+            if (collection == null || Objects.equals(collection.id, definition.officialId())) {
+                continue;
+            }
+            String previousId = collection.id;
+            migrateRecordFile(previousId, definition.officialId(), ".jsonl");
+            migrateRecordFile(previousId, definition.officialId(), ".json");
+            migrateStorageDirectory(previousId, definition.officialId());
+            rewriteCollectionIdReferences(previousId, definition.officialId());
+            collection.id = definition.officialId();
+        }
+    }
+
+    private void rewriteCollectionIdReferences(String previousId, String officialId) {
+        for (List<Map<String, Object>> records : List.of(authOrigins, externalAuths, mfas, otps)) {
+            for (Map<String, Object> record : records) {
+                replaceMapValue(record, "collectionRef", previousId, officialId);
+            }
+        }
+        for (Map<String, Object> request : authRequests) {
+            replaceMapValue(request, "collectionId", previousId, officialId);
+        }
+        for (CollectionSchema collection : collectionsByName.values()) {
+            if (collection.fields == null) {
+                continue;
+            }
+            for (FieldSchema field : collection.fields) {
+                if (Objects.equals(field.collectionId, previousId)) {
+                    field.collectionId = officialId;
+                }
+                if (field.collectionIds != null && field.collectionIds.contains(previousId)) {
+                    field.collectionIds = field.collectionIds.stream()
+                            .map(value -> Objects.equals(value, previousId) ? officialId : value)
+                            .toList();
+                }
+                if (field.options != null) {
+                    field.options.replaceAll((key, value) -> replaceJsonValue(value, previousId, officialId));
+                }
+            }
+        }
+    }
+
+    private void replaceMapValue(Map<String, Object> record, String key, String previousId, String officialId) {
+        if (Objects.equals(record.get(key), previousId)) {
+            record.put(key, officialId);
+        }
+    }
+
+    private JsonNode replaceJsonValue(JsonNode value, String previousId, String officialId) {
+        if (value == null || value.isNull()) {
+            return value;
+        }
+        if (value.isTextual()) {
+            return Objects.equals(value.asText(), previousId) ? mapper.getNodeFactory().textNode(officialId) : value;
+        }
+        if (value.isArray()) {
+            ArrayNode copy = value.deepCopy();
+            for (int i = 0; i < copy.size(); i++) {
+                copy.set(i, replaceJsonValue(copy.get(i), previousId, officialId));
+            }
+            return copy;
+        }
+        if (value.isObject()) {
+            ObjectNode copy = value.deepCopy();
+            copy.properties().forEach(entry -> copy.set(
+                    entry.getKey(),
+                    replaceJsonValue(entry.getValue(), previousId, officialId)
+            ));
+            return copy;
+        }
+        return value;
+    }
+
+    private void migrateRecordFile(String previousId, String officialId, String extension) {
+        Path source = recordsDir.resolve(previousId + extension);
+        if (!Files.exists(source)) {
+            return;
+        }
+        Path target = recordsDir.resolve(officialId + extension);
+        try {
+            LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+            if (Files.exists(target)) {
+                mergeMigratedRecords(merged, readRecordFile(target), previousId, officialId);
+            }
+            mergeMigratedRecords(merged, readRecordFile(source), previousId, officialId);
+            Files.createDirectories(recordsDir);
+            if (".jsonl".equals(extension)) {
+                try (java.io.BufferedWriter writer = Files.newBufferedWriter(target)) {
+                    for (Map<String, Object> record : merged.values()) {
+                        writer.write(mapper.writeValueAsString(record));
+                        writer.newLine();
+                    }
+                }
+            } else {
+                mapper.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), merged.values());
+            }
+            Files.deleteIfExists(source);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to migrate system collection records from " + previousId, e);
+        }
+    }
+
+    private List<Map<String, Object>> readRecordFile(Path path) throws IOException {
+        List<Map<String, Object>> records = new ArrayList<>();
+        try (java.io.BufferedReader reader = Files.newBufferedReader(path)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.isBlank()) {
+                    records.add(mapper.readValue(line, STRING_OBJECT_MAP));
+                }
+            }
+            return records;
+        } catch (Exception ignored) {
+            return mapper.readValue(path.toFile(), RECORD_LIST);
+        }
+    }
+
+    private void mergeMigratedRecords(
+            Map<String, Map<String, Object>> merged,
+            List<Map<String, Object>> records,
+            String previousId,
+            String officialId
+    ) {
+        for (Map<String, Object> record : records) {
+            replaceMapValue(record, "collectionId", previousId, officialId);
+            String id = String.valueOf(record.getOrDefault("id", ""));
+            Map<String, Object> existing = merged.putIfAbsent(id, record);
+            if (existing != null && !Objects.equals(existing, record)) {
+                throw new IllegalStateException("conflicting records found while migrating system collection " + previousId);
+            }
+        }
+    }
+
+    private void migrateStorageDirectory(String previousId, String officialId) {
+        Path source = storageDir.resolve(previousId);
+        if (!Files.exists(source)) {
+            return;
+        }
+        Path target = storageDir.resolve(officialId);
+        try {
+            if (!Files.exists(target)) {
+                Files.createDirectories(storageDir);
+                Files.move(source, target);
+                return;
+            }
+            try (Stream<Path> paths = Files.walk(source)) {
+                for (Path path : paths.sorted().toList()) {
+                    Path relative = source.relativize(path);
+                    Path destination = target.resolve(relative);
+                    if (Files.isDirectory(path)) {
+                        Files.createDirectories(destination);
+                    } else if (!Files.exists(destination)) {
+                        Files.move(path, destination);
+                    } else if (Files.mismatch(path, destination) != -1L) {
+                        throw new IllegalStateException("conflicting files found while migrating system collection " + previousId);
+                    } else {
+                        Files.delete(path);
+                    }
+                }
+            }
+            try (Stream<Path> paths = Files.walk(source)) {
+                for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                    Files.deleteIfExists(path);
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to migrate system collection storage from " + previousId, e);
+        }
     }
 
     @Override
@@ -4496,6 +5685,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     @Override
+    public List<Map<String, Object>> recordsForRule(String collectionName) {
+        CollectionSchema collection = findCollectionOrNull(collectionName);
+        return collection == null ? List.of() : records(collection);
+    }
+
+    @Override
     public Map<String, Object> findRecordByEmail(CollectionSchema collection, String email) {
         if (!"auth".equals(collection.type)) return null;
         return findAuthRecordByEmail(collection, email);
@@ -4505,14 +5700,32 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     public void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields) {
         Map<String, Object> record = findRecordOrNull(collection, recordId);
         if (record == null) return;
+        boolean securityChanged = "auth".equals(collection.type)
+                && (fields.containsKey(passwordField(collection))
+                && !Objects.equals(record.get(passwordField(collection)), fields.get(passwordField(collection)))
+                || fields.containsKey("tokenKey")
+                && !Objects.equals(record.get("tokenKey"), fields.get("tokenKey")));
         record.putAll(fields);
         record.put("updated", now());
+        if (securityChanged) {
+            clearAuthSecurityState(collection.id, recordId);
+        }
         saveRecords(collection);
     }
 
     @Override
     public boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal) {
         return canViewExpandedRecord(collection, record, query, principal);
+    }
+
+    @Override
+    public boolean canView(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return canViewExpandedRecord(collection, record, request, principal);
     }
 
     private CollectionSchema findCollection(String idOrName) {
@@ -4523,10 +5736,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         return collection;
     }
 
+    private CollectionSchema resolveRuleCollection(CollectionSchema candidate, String idOrName) {
+        if (candidate != null && (Objects.equals(candidate.id, idOrName) || Objects.equals(candidate.name, idOrName))) {
+            return candidate;
+        }
+        return findCollectionOrNull(idOrName);
+    }
+
     private CollectionSchema findCollectionOrNull(String idOrName) {
         if (idOrName == null || idOrName.isBlank()) {
             return null;
         }
+        idOrName = SystemCollections.canonicalIdentifier(idOrName);
         CollectionSchema direct = collectionsByName.get(idOrName);
         if (direct != null) {
             return direct;
@@ -4537,6 +5758,29 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             }
         }
         return null;
+    }
+
+    private Set<String> collectionIndexNames(String excludedCollectionId) {
+        return collectionIndexNames(collectionsByName.values(), excludedCollectionId);
+    }
+
+    private Set<String> collectionIndexNames(
+            Collection<CollectionSchema> collections,
+            String excludedCollectionId
+    ) {
+        Set<String> names = new LinkedHashSet<>();
+        for (CollectionSchema collection : collections) {
+            if (Objects.equals(collection.id, excludedCollectionId) || collection.indexes == null) {
+                continue;
+            }
+            for (String index : collection.indexes) {
+                String name = CollectionIndexSupport.indexName(index);
+                if (!name.isBlank()) {
+                    names.add(name);
+                }
+            }
+        }
+        return names;
     }
 
     private Map<String, Object> findRecord(CollectionSchema collection, String id) {
@@ -4557,14 +5801,71 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private List<Map<String, Object>> records(CollectionSchema collection) {
+        switch (collection.name) {
+            case AuthSystemCollections.AUTH_ORIGINS:
+                return authOrigins;
+            case AuthSystemCollections.EXTERNAL_AUTHS:
+                return externalAuths;
+            case AuthSystemCollections.MFAS:
+                return mfas;
+            case AuthSystemCollections.OTPS:
+                return otps;
+            default:
+                break;
+        }
+        if ("view".equals(collection.type)) {
+            if (!evaluatingViewCollections.add(collection.id)) {
+                throw new IllegalArgumentException("circular view collection query detected");
+            }
+            try {
+                Map<String, Object> preview = previewViewQuery(collection.viewQuery, SQL_MAX_ROWS);
+                return mapper.convertValue(preview.get("sample"), RECORD_LIST);
+            } finally {
+                evaluatingViewCollections.remove(collection.id);
+            }
+        }
         return recordsByCollectionId.computeIfAbsent(collection.id, ignored -> new ArrayList<>());
     }
 
-    private boolean matchesFilter(Map<String, Object> record, String filter, Map<String, String> query, RequestPrincipal principal) {
+    private boolean matchesFilter(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            String filter,
+            Map<String, String> query,
+            RequestPrincipal principal
+    ) {
+        return matchesFilter(
+                collection,
+                record,
+                filter,
+                RuleRequestContext.of(query, Map.of()),
+                principal
+        );
+    }
+
+    private boolean matchesFilter(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            String filter,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         if (filter == null || filter.isBlank()) {
             return true;
         }
-        return RuleEvaluator.matches(filter, ruleContext(record, null, query, "GET", principal));
+        return RuleEvaluator.matches(
+                filter,
+                RecordFieldResolverSupport.context(
+                        this,
+                        collection,
+                        record,
+                        null,
+                        request,
+                        "GET",
+                        principal,
+                        isSuperuser(principal),
+                        !isSuperuser(principal)
+                ));
     }
 
     private RuleEvaluator.Context ruleContext(
@@ -4639,12 +5940,30 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         try {
             Map<String, Object> info = new LinkedHashMap<>();
             info.put("key", path.getFileName().toString());
-            info.put("name", path.getFileName().toString());
             info.put("size", Files.size(path));
             info.put("modified", DateTimeFormatter.ISO_INSTANT.format(Files.getLastModifiedTime(path).toInstant()));
             return info;
         } catch (IOException e) {
             throw new IllegalStateException("failed to read backup metadata", e);
+        }
+    }
+
+    private void publishBackup(Path temporary, Path target) throws IOException {
+        try {
+            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, target);
+        }
+    }
+
+    private void deleteTemporaryBackup(Path temporary) {
+        if (temporary == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(temporary);
+        } catch (IOException ignored) {
+            // best effort cleanup
         }
     }
 
@@ -4667,6 +5986,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             sanitized += ".zip";
         }
         return sanitized.length() > 120 ? sanitized.substring(sanitized.length() - 120) : sanitized;
+    }
+
+    private String createBackupKey(String requested) {
+        if (requested == null || requested.isBlank()) {
+            return "pb_backup_" + BACKUP_TIMESTAMP.format(Instant.now()) + ".zip";
+        }
+        String key = requested.trim();
+        if (key.length() > 150 || !key.matches("^(@auto_pb_backup_)?[a-z0-9_-]+\\.zip$")) {
+            throw new ApiException(
+                    400,
+                    "An error occurred while validating the submitted data.",
+                    ApiErrors.fieldError("name", "validation_match_invalid", "Must be in a valid format.")
+            );
+        }
+        return key;
     }
 
     private void zipDirectory(Path root, ZipOutputStream zip) throws IOException {
@@ -4807,7 +6141,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         saveSettings();
         saveLogs();
         saveAuthRequests();
+        saveAuthOrigins();
         saveExternalAuths();
+        saveMfas();
         saveOtps();
         saveSchema();
         for (CollectionSchema collection : collectionsByName.values()) {
@@ -4821,6 +6157,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             mapper.writerWithDefaultPrettyPrinter().writeValue(settingsFile.toFile(), settings);
         } catch (IOException e) {
             throw new IllegalStateException("failed to save settings", e);
+        }
+    }
+
+    private void saveAuthOrigins() {
+        try {
+            Files.createDirectories(dataDir);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(authOriginsFile.toFile(), authOrigins);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to save auth origins", e);
         }
     }
 
@@ -4851,6 +6196,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         }
     }
 
+    private void saveMfas() {
+        try {
+            Files.createDirectories(dataDir);
+            mapper.writerWithDefaultPrettyPrinter().writeValue(mfasFile.toFile(), mfas);
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to save mfas", e);
+        }
+    }
+
     private void saveOtps() {
         try {
             Files.createDirectories(dataDir);
@@ -4864,7 +6218,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         try {
             Files.createDirectories(dataDir);
             Map<String, Object> root = new LinkedHashMap<>();
-            root.put("collections", collectionsByName.values());
+            root.put("collections", collectionsByName.values().stream().map(this::collectionPersistenceMap).toList());
             mapper.writerWithDefaultPrettyPrinter().writeValue(schemaFile.toFile(), root);
         } catch (IOException e) {
             throw new IllegalStateException("failed to save schema", e);
@@ -4872,6 +6226,26 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private void saveRecords(CollectionSchema collection) {
+        switch (collection.name) {
+            case AuthSystemCollections.AUTH_ORIGINS -> {
+                saveAuthOrigins();
+                return;
+            }
+            case AuthSystemCollections.EXTERNAL_AUTHS -> {
+                saveExternalAuths();
+                return;
+            }
+            case AuthSystemCollections.MFAS -> {
+                saveMfas();
+                return;
+            }
+            case AuthSystemCollections.OTPS -> {
+                saveOtps();
+                return;
+            }
+            default -> {
+            }
+        }
         try {
             Files.createDirectories(recordsDir);
             try (java.io.BufferedWriter writer = Files.newBufferedWriter(recordsFile(collection))) {
@@ -4894,7 +6268,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private CollectionSchema copyCollection(CollectionSchema collection) {
-        return mapper.convertValue(collection, CollectionSchema.class);
+        CollectionSchema copy = mapper.convertValue(collection, CollectionSchema.class);
+        copy.authRule = collection.authRule;
+        copy.manageRule = collection.manageRule;
+        return copy;
     }
 
     private static String readOrCreateSecret(Path secretFile) throws IOException {
@@ -4974,9 +6351,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
 
     private record TestEmailContent(String subject, String text, String html) {
-    }
-
-    private record OAuth2ProviderMetadata(String name, String displayName, String logo) {
     }
 
     private record CronJob(String id, String expression) {

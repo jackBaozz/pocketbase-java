@@ -35,8 +35,12 @@ public final class RealtimeHub {
     }
 
     public void connect(HttpExchange exchange) throws IOException {
+        connect(exchange, "");
+    }
+
+    public void connect(HttpExchange exchange, String remoteIp) throws IOException {
         String clientId = IdGenerator.id();
-        Client client = new Client(clientId, exchange.getResponseBody());
+        Client client = new Client(clientId, exchange.getResponseBody(), remoteIp);
         clients.put(clientId, client);
 
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
@@ -69,9 +73,22 @@ public final class RealtimeHub {
     }
 
     public void subscribe(String clientId, List<String> topics, SubscriptionOptions options, RequestPrincipal principal) {
+        subscribe(clientId, topics, options, principal, "");
+    }
+
+    public void subscribe(
+            String clientId,
+            List<String> topics,
+            SubscriptionOptions options,
+            RequestPrincipal principal,
+            String remoteIp
+    ) {
         Client client = clients.get(clientId);
         if (client == null) {
             throw new ApiException(404, "Realtime client not found.");
+        }
+        if (!client.matchesRemoteIp(remoteIp)) {
+            throw new ApiException(400, "Invalid realtime client.");
         }
         Set<Subscription> subscriptions = new LinkedHashSet<>();
         for (String topic : topics == null ? List.<String>of() : topics) {
@@ -81,6 +98,20 @@ public final class RealtimeHub {
             subscriptions.add(Subscription.parse(topic, mapper).merge(options));
         }
         client.setSubscriptions(subscriptions, principal);
+    }
+
+    public boolean sendOAuth2Redirect(String clientId, String remoteIp, Map<String, Object> payload) {
+        Client client = clients.get(clientId);
+        if (client == null) {
+            return false;
+        }
+        try {
+            return client.sendOAuth2Redirect(remoteIp, payload);
+        } catch (IOException e) {
+            client.close();
+            clients.remove(client.id());
+            return false;
+        }
     }
 
     public SubscriptionOptions parseSubscriptionOptions(String options) {
@@ -181,7 +212,7 @@ public final class RealtimeHub {
             String target = pieces[0];
             int slash = target.indexOf('/');
             if (slash <= 0 || slash == target.length() - 1) {
-                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("subscriptions", "Invalid realtime subscription topic."));
+                return new Subscription(topic, target, "", false, Map.of(), Map.of());
             }
             String collection = target.substring(0, slash);
             String record = target.substring(slash + 1);
@@ -259,14 +290,16 @@ public final class RealtimeHub {
     private final class Client {
         private final String id;
         private final OutputStream output;
+        private final String remoteIp;
         private final CountDownLatch closed = new CountDownLatch(1);
         private volatile Set<Subscription> subscriptions = Set.of();
         private volatile RequestPrincipal principal;
         private volatile boolean subscribed;
 
-        private Client(String id, OutputStream output) {
+        private Client(String id, OutputStream output, String remoteIp) {
             this.id = id;
             this.output = output;
+            this.remoteIp = remoteIp == null ? "" : remoteIp;
         }
 
         String id() {
@@ -281,13 +314,35 @@ public final class RealtimeHub {
             return subscriptions;
         }
 
+        boolean matchesRemoteIp(String candidate) {
+            return remoteIp.isBlank() || Objects.equals(remoteIp, candidate == null ? "" : candidate);
+        }
+
         void setSubscriptions(Set<Subscription> subscriptions, RequestPrincipal principal) {
-            if (subscribed && !samePrincipal(this.principal, principal)) {
+            if (subscribed && this.principal != null && !samePrincipal(this.principal, principal)) {
                 throw new ApiException(403, "Realtime subscription authorization must match the initial subscription request.");
             }
             this.subscriptions = Set.copyOf(subscriptions);
             this.principal = principal;
             this.subscribed = true;
+        }
+
+        synchronized boolean sendOAuth2Redirect(String candidateIp, Map<String, Object> payload) throws IOException {
+            Subscription oauth2 = subscriptions.stream()
+                    .filter(subscription -> "@oauth2".equals(subscription.topic()))
+                    .findFirst()
+                    .orElse(null);
+            if (oauth2 == null) {
+                return false;
+            }
+            Set<Subscription> remaining = new LinkedHashSet<>(subscriptions);
+            remaining.remove(oauth2);
+            subscriptions = Set.copyOf(remaining);
+            if (!matchesRemoteIp(candidateIp)) {
+                return false;
+            }
+            send("@oauth2", payload, null);
+            return true;
         }
 
         private boolean samePrincipal(RequestPrincipal left, RequestPrincipal right) {

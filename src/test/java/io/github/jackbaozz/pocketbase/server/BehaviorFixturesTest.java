@@ -137,7 +137,8 @@ public class BehaviorFixturesTest {
         assertFalse(body2.has("code"));
         JsonNode typeError = body2.get("data").get("type");
         assertNotNull(typeError, "Missing validation error for type field");
-        assertEquals("validation_invalid_value", typeError.get("code").asText());
+        assertEquals("validation_in_invalid", typeError.get("code").asText());
+        assertEquals("Must be a valid value.", typeError.get("message").asText());
     }
 
     @Test

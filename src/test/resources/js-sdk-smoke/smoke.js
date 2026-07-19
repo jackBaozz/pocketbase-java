@@ -45,6 +45,13 @@ async function run() {
             throw new Error("SDK auth store did not recognize the login as a superuser");
         }
 
+        // PocketBase cookies may omit the record payload when size constrained.
+        pb.authStore.save(authData.token, null);
+        if (!pb.authStore.isSuperuser) {
+            throw new Error("SDK auth store did not recognize the fixed superuser collection id without a record payload");
+        }
+        pb.authStore.save(authData.token, authData.record);
+
         // 3. Testing auth refresh
         console.log("Testing auth refresh...");
         const refreshData = await pb.collection('_superusers').authRefresh();
@@ -114,7 +121,7 @@ async function run() {
         console.log(`File record created: ${fileRecord.id}, avatar: ${fileRecord.avatar}`);
 
         console.log("Testing file download URL...");
-        const fileUrl = pb.files.getUrl(fileRecord, fileRecord.avatar);
+        const fileUrl = pb.files.getURL(fileRecord, fileRecord.avatar);
         console.log(`Downloading from URL: ${fileUrl}`);
         const fileDlRes = await fetch(fileUrl);
         if (!fileDlRes.ok) {
@@ -138,8 +145,21 @@ async function run() {
         batch.collection('smoke_test_collection').create({ title: "Batch 2", count: 2 });
         const batchResult = await batch.send();
         console.log("Batch Result is:", JSON.stringify(batchResult));
-        if (!batchResult || !batchResult.responses || batchResult.responses.length !== 2) {
+        if (!Array.isArray(batchResult) || batchResult.length !== 2) {
             throw new Error(`Batch send returned invalid responses, expected 2`);
+        }
+
+        console.log("Testing SearchProvider skipTotal contract...");
+        const skipTotalPage = await pb.collection('smoke_test_collection').getList(1, 1, {
+            sort: '+title',
+            fields: 'id',
+            skipTotal: true,
+        });
+        if (skipTotalPage.totalItems !== -1 || skipTotalPage.totalPages !== -1) {
+            throw new Error(`skipTotal totals mismatch: ${skipTotalPage.totalItems}/${skipTotalPage.totalPages}`);
+        }
+        if (skipTotalPage.perPage !== 1 || skipTotalPage.items.length !== 1 || skipTotalPage.items[0].title !== undefined) {
+            throw new Error("SearchProvider pagination, sorting, or fields selection did not match the SDK contract");
         }
 
         console.log("Testing batch rollback on failure...");

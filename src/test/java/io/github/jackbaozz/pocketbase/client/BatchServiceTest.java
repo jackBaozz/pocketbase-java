@@ -64,11 +64,9 @@ class BatchServiceTest {
         }
 
         byte[] bytes = """
-                {
-                  "responses": [
-                    {"status": 200, "body": {"id": "created-id", "title": "hello"}}
-                  ]
-                }
+                [
+                  {"status": 200, "body": {"id": "created-id", "title": "hello"}}
+                ]
                 """.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);

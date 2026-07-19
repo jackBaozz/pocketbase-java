@@ -13,6 +13,10 @@ public final class ApiErrors {
         return Map.of("code", code, "message", message);
     }
 
+    public static Map<String, Object> validationError(String code, String message, Map<String, Object> params) {
+        return Map.of("code", code, "message", message, "params", params);
+    }
+
     public static Map<String, Object> fieldError(String field, String code, String message) {
         return Map.of(field, validationError(code, message));
     }

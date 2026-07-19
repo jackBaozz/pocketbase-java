@@ -19,7 +19,21 @@ public final class RecordProcessor {
         Map<String, Object> getRecord(CollectionSchema collection, String id);
         Map<String, Object> findRecordByEmail(CollectionSchema collection, String email);
         void updateRecordField(CollectionSchema collection, String recordId, Map<String, Object> fields);
-        boolean canView(CollectionSchema collection, Map<String, Object> record, Map<String, String> query, RequestPrincipal principal);
+        boolean canView(
+                CollectionSchema collection,
+                Map<String, Object> record,
+                Map<String, String> query,
+                RequestPrincipal principal
+        );
+        default boolean canView(
+                CollectionSchema collection,
+                Map<String, Object> record,
+                RuleRequestContext request,
+                RequestPrincipal principal
+        ) {
+            RuleRequestContext safeRequest = request == null ? RuleRequestContext.empty() : request;
+            return canView(collection, record, safeRequest.query(), principal);
+        }
         default List<Map<String, Object>> recordsForRule(String collectionName) {
             return List.of();
         }
@@ -33,9 +47,22 @@ public final class RecordProcessor {
             Map<String, String> query,
             RequestPrincipal principal
     ) {
+        return process(ctx, collection, record, includeHidden, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    public static Map<String, Object> process(
+            StoreContext ctx,
+            CollectionSchema collection,
+            Map<String, Object> record,
+            boolean includeHidden,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         Map<String, Object> out = publicRecord(collection, record, includeHidden);
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
-        applyExpand(ctx, collection, record, out, expandPaths(safeQuery.get("expand")), safeQuery, principal, includeHidden, 0);
+        RuleRequestContext safeRequest = request == null ? RuleRequestContext.empty() : request;
+        Map<String, String> safeQuery = safeRequest.query();
+        applyAuthVisibility(ctx, collection, record, out, safeRequest, principal, includeHidden);
+        applyExpand(ctx, collection, record, out, expandPaths(safeQuery.get("expand")), safeRequest, principal, includeHidden, 0);
         return selectFields(out, safeQuery.get("fields"));
     }
 
@@ -48,6 +75,7 @@ public final class RecordProcessor {
         out.put("updated", record.get("updated"));
         for (FieldSchema field : collection.fields) {
             if ("password".equalsIgnoreCase(field.type)) continue;
+            if ("tokenKey".equals(field.name)) continue;
             if (field.hidden && !includeHidden) continue;
             if (record.containsKey(field.name)) {
                 out.put(field.name, record.get(field.name));
@@ -62,7 +90,7 @@ public final class RecordProcessor {
             Map<String, Object> source,
             Map<String, Object> output,
             List<List<String>> paths,
-            Map<String, String> query,
+            RuleRequestContext request,
             RequestPrincipal principal,
             boolean includeHidden,
             int depth
@@ -77,6 +105,7 @@ public final class RecordProcessor {
         }
 
         Map<String, Object> expanded = new LinkedHashMap<>();
+        RuleRequestContext expandRequest = request.withContext(RuleRequestContext.EXPAND);
         for (Map.Entry<String, List<List<String>>> entry : grouped.entrySet()) {
             FieldSchema field = relationField(collection, entry.getKey());
             if (field == null) continue;
@@ -105,9 +134,10 @@ public final class RecordProcessor {
             List<Map<String, Object>> related = new ArrayList<>();
             for (String id : relationIds(rawValue)) {
                 Map<String, Object> relatedRecord = ctx.getRecord(target, id);
-                if (relatedRecord == null || !ctx.canView(target, relatedRecord, query, principal)) continue;
+                if (relatedRecord == null || !ctx.canView(target, relatedRecord, expandRequest, principal)) continue;
                 Map<String, Object> relatedOutput = publicRecord(target, relatedRecord, includeHidden);
-                applyExpand(ctx, target, relatedRecord, relatedOutput, entry.getValue(), query, principal, includeHidden, depth + 1);
+                applyAuthVisibility(ctx, target, relatedRecord, relatedOutput, expandRequest, principal, includeHidden);
+                applyExpand(ctx, target, relatedRecord, relatedOutput, entry.getValue(), expandRequest, principal, includeHidden, depth + 1);
                 related.add(relatedOutput);
             }
 
@@ -120,6 +150,44 @@ public final class RecordProcessor {
         if (!expanded.isEmpty()) {
             output.put("expand", expanded);
         }
+    }
+
+    private static void applyAuthVisibility(
+            StoreContext ctx,
+            CollectionSchema collection,
+            Map<String, Object> record,
+            Map<String, Object> output,
+            RuleRequestContext request,
+            RequestPrincipal principal,
+            boolean includeHidden
+    ) {
+        if (!"auth".equals(collection.type) || !output.containsKey("email")) {
+            return;
+        }
+        boolean owner = principal != null
+                && String.valueOf(record.get("id")).equals(principal.id())
+                && (collection.id.equals(principal.collectionId()) || collection.name.equals(principal.collectionName()));
+        if (includeHidden || owner || truthy(record.get("emailVisibility"))) {
+            return;
+        }
+        boolean manager = AuthRecordMutationSupport.hasManageAccess(
+                collection,
+                record,
+                Map.of(),
+                request,
+                "GET",
+                principal,
+                ctx
+        );
+        if (!manager) {
+            output.remove("email");
+        }
+    }
+
+    private static boolean truthy(Object value) {
+        if (value instanceof Boolean bool) return bool;
+        if (value instanceof Number number) return number.intValue() != 0;
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static FieldSchema relationField(CollectionSchema collection, String name) {

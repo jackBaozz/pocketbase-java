@@ -11,6 +11,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.Map;
@@ -64,6 +65,14 @@ class AuthActionPersistenceTest {
         String token = authRequestToken("passwordReset", "reset@example.com");
         assertEquals(1, authRequestCount(token));
 
+        HttpResponse<String> rejected = rawRequest("POST", "/api/collections/reset_users/confirm-password-reset", null, Map.of(
+                "token", token,
+                "password", "newsecret123",
+                "passwordConfirm", "does-not-match"
+        ));
+        assertEquals(400, rejected.statusCode());
+        assertEquals(1, authRequestCount(token), "failed auth updates must roll back token consumption");
+
         request("POST", "/api/collections/reset_users/confirm-password-reset", null, Map.of(
                 "token", token,
                 "password", "newsecret123",
@@ -78,6 +87,42 @@ class AuthActionPersistenceTest {
         ));
         assertEquals(400, reused.statusCode());
         assertEquals("Invalid or expired token.", mapper.readTree(reused.body()).get("message").asText());
+    }
+
+    @Test
+    void relationalOtpRejectsAndDeletesExpiredCodes() throws Exception {
+        previousStorage = System.getProperty("storage");
+        System.setProperty("storage", "sqlite");
+        server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, dataDir, null, null, null));
+        bootstrapSuperuser();
+        String superuser = loginSuperuser();
+
+        request("POST", "/api/collections", superuser, Map.of(
+                "name", "otp_expiry_users",
+                "type", "auth",
+                "otp", Map.of("enabled", true, "duration", 60, "length", 6)
+        ));
+        request("POST", "/api/collections/otp_expiry_users/records", superuser, Map.of(
+                "email", "otp-expiry@example.com",
+                "password", "secret123",
+                "passwordConfirm", "secret123",
+                "verified", false
+        ));
+
+        JsonNode otp = request("POST", "/api/collections/otp_expiry_users/request-otp", null, Map.of(
+                "email", "otp-expiry@example.com"
+        ));
+        String otpId = otp.get("otpId").asText();
+        String password = otpRequestPassword("otp-expiry@example.com", otpId);
+        expireOtp(otpId);
+
+        HttpResponse<String> expired = rawRequest("POST", "/api/collections/otp_expiry_users/auth-with-otp", null, Map.of(
+                "otpId", otpId,
+                "password", password
+        ));
+        assertEquals(400, expired.statusCode());
+        assertEquals("Invalid or expired OTP.", mapper.readTree(expired.body()).get("message").asText());
+        assertEquals(0, otpCount(otpId));
     }
 
     private void bootstrapSuperuser() throws Exception {
@@ -113,6 +158,38 @@ class AuthActionPersistenceTest {
         try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dataDir.resolve("pocketbase.db").toAbsolutePath());
              var ps = conn.prepareStatement("SELECT COUNT(*) FROM _authRequests WHERE token = ?")) {
             ps.setString(1, token);
+            try (var rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        }
+    }
+
+    private String otpRequestPassword(String email, String otpId) throws Exception {
+        JsonNode requests = mapper.readTree(Files.readString(dataDir.resolve("auth_requests.json"), StandardCharsets.UTF_8));
+        for (int i = requests.size() - 1; i >= 0; i--) {
+            JsonNode request = requests.get(i);
+            if ("otp".equals(request.path("type").asText())
+                    && email.equalsIgnoreCase(request.path("email").asText())
+                    && otpId.equals(request.path("otpId").asText())) {
+                return request.path("password").asText();
+            }
+        }
+        throw new AssertionError("No OTP outbox entry found for " + email + " / " + otpId);
+    }
+
+    private void expireOtp(String otpId) throws Exception {
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dataDir.resolve("pocketbase.db").toAbsolutePath());
+             var ps = conn.prepareStatement("UPDATE _otps SET created = ? WHERE id = ?")) {
+            ps.setString(1, "1970-01-01T00:00:00Z");
+            ps.setString(2, otpId);
+            assertEquals(1, ps.executeUpdate());
+        }
+    }
+
+    private int otpCount(String otpId) throws Exception {
+        try (var conn = DriverManager.getConnection("jdbc:sqlite:" + dataDir.resolve("pocketbase.db").toAbsolutePath());
+             var ps = conn.prepareStatement("SELECT COUNT(*) FROM _otps WHERE id = ?")) {
+            ps.setString(1, otpId);
             try (var rs = ps.executeQuery()) {
                 return rs.next() ? rs.getInt(1) : 0;
             }

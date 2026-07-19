@@ -6,20 +6,28 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
+import io.github.jackbaozz.pocketbase.server.internal.AuthMailSupport;
+import io.github.jackbaozz.pocketbase.server.internal.AuthOriginContext;
 import io.github.jackbaozz.pocketbase.server.internal.AuthProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2ProviderManager;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2Support;
+import io.github.jackbaozz.pocketbase.server.internal.OAuth2FieldMappingSupport;
 import io.github.jackbaozz.pocketbase.server.internal.PasswordHasher;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
+import io.github.jackbaozz.pocketbase.server.internal.RecordFieldResolverSupport;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
+import io.github.jackbaozz.pocketbase.server.internal.RuleRequestContext;
 import io.github.jackbaozz.pocketbase.server.internal.SecuritySupport;
+import io.github.jackbaozz.pocketbase.server.internal.SystemCollections;
 import io.github.jackbaozz.pocketbase.server.internal.TokenService;
+import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -32,18 +40,28 @@ import java.util.stream.Collectors;
 
 public class AuthRepository extends BaseRepository {
 
-    private static final String SUPERUSERS = "_superusers";
+    private static final String SUPERUSERS = SystemCollections.SUPERUSERS;
 
     private final TokenService tokenService;
     private final RecordProcessor.StoreContext storeContext;
     private final RecordRepository recordRepository;
+    private final SettingsRepository settingsRepository;
     private final Path dataDir;
 
-    public AuthRepository(JooqDatabase database, ObjectMapper mapper, TokenService tokenService, RecordProcessor.StoreContext storeContext, RecordRepository recordRepository, Path dataDir) {
+    public AuthRepository(
+            JooqDatabase database,
+            ObjectMapper mapper,
+            TokenService tokenService,
+            RecordProcessor.StoreContext storeContext,
+            RecordRepository recordRepository,
+            SettingsRepository settingsRepository,
+            Path dataDir
+    ) {
         super(database, mapper);
         this.tokenService = tokenService;
         this.storeContext = storeContext;
         this.recordRepository = recordRepository;
+        this.settingsRepository = settingsRepository;
         this.dataDir = dataDir;
     }
 
@@ -55,27 +73,51 @@ public class AuthRepository extends BaseRepository {
             throw new ApiException(403, "Superuser already exists.");
         }
 
-        String id = "su_" + IdGenerator.id();
+        String id = IdGenerator.id();
         String passHash = PasswordHasher.hash(password);
-        String tokenKey = IdGenerator.id();
+        String tokenKey = IdGenerator.secret();
         String now = Instant.now().toString();
 
         database.dsl()
                 .insertInto(qt("_superusers"))
-                .columns(qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"), qfs("created"), qfs("updated"))
-                .values(id, email, passHash, tokenKey, now, now)
+                .columns(
+                        qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"),
+                        qfb("emailVisibility"), qfb("verified"), qfs("created"), qfs("updated")
+                )
+                .values(id, email, passHash, tokenKey, false, true, now, now)
                 .execute();
 
-        Map<String, Object> record = Map.of(
-                "id", id,
-                "email", email,
-                "created", now,
-                "updated", now
-        );
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("id", id);
+        record.put("email", email);
+        record.put("emailVisibility", false);
+        record.put("verified", true);
+        record.put("created", now);
+        record.put("updated", now);
         return Map.of("record", record);
     }
 
     public Map<String, Object> authWithPassword(String collection, JsonNode body, Map<String, String> query) {
+        return authWithPassword(collection, body, query, AuthOriginContext.empty());
+    }
+
+    public Map<String, Object> authWithPassword(
+            String collection,
+            JsonNode body,
+            Map<String, String> query,
+            AuthOriginContext origin
+    ) {
+        return authWithPassword(collection, body, RuleRequestContext.of(query, Map.of()), origin);
+    }
+
+    public Map<String, Object> authWithPassword(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.PASSWORD);
+        Map<String, String> query = request.query();
         String identity = body != null && body.has("identity") ? body.get("identity").asText() : "";
         String password = body != null && body.has("password") ? body.get("password").asText() : "";
         if (identity.isBlank()) {
@@ -85,10 +127,13 @@ public class AuthRepository extends BaseRepository {
             throw new ApiException(400, "Failed to authenticate.", ApiErrors.requiredField("password"));
         }
 
-        if (SUPERUSERS.equals(collection)) {
+        if (SystemCollections.isSuperuserIdentifier(collection)) {
             CollectionSchema superuserSchema = storeContext.getCollection(SUPERUSERS);
             var record = database.dsl()
-                    .select(qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"), qfs("created"), qfs("updated"))
+                    .select(
+                            qfs("id"), qfs("email"), qfs("passwordHash"), qfs("tokenKey"),
+                            qfb("emailVisibility"), qfb("verified"), qfs("created"), qfs("updated")
+                    )
                     .from(qt("_superusers"))
                     .where(qfs("email").eq(identity))
                     .fetchOne();
@@ -99,6 +144,8 @@ public class AuthRepository extends BaseRepository {
                     String tokenKey = record.getValue(qfs("tokenKey"));
                     String id = record.getValue(qfs("id"));
                     String email = record.getValue(qfs("email"));
+                    Boolean emailVisibility = record.getValue(qfb("emailVisibility"));
+                    Boolean verified = record.getValue(qfb("verified"));
                     String created = record.getValue(qfs("created"));
                     String updated = record.getValue(qfs("updated"));
 
@@ -106,7 +153,7 @@ public class AuthRepository extends BaseRepository {
                             "sub", id,
                             "email", email,
                             "type", "auth",
-                            "collectionId", "pbc_superusers",
+                            "collectionId", SystemCollections.SUPERUSERS_ID,
                             "collectionName", SUPERUSERS,
                             "tokenType", "auth",
                             "tokenKey", tokenKey
@@ -115,23 +162,26 @@ public class AuthRepository extends BaseRepository {
                         Map<String, Object> rec = new LinkedHashMap<>();
                         rec.put("id", id);
                         rec.put("email", email);
-                        rec.put("collectionId", "pbc_superusers");
+                        rec.put("collectionId", SystemCollections.SUPERUSERS_ID);
                         rec.put("collectionName", SUPERUSERS);
+                        rec.put("emailVisibility", Boolean.TRUE.equals(emailVisibility));
+                        rec.put("verified", !Boolean.FALSE.equals(verified));
                         rec.put("created", created);
                         rec.put("updated", updated);
                         rec.put("tokenKey", tokenKey);
-                        return handleAuthWithMfa(superuserSchema, rec, query, mfaId(body, query), "password", Map.of());
+                        return handleAuthWithMfa(superuserSchema, rec, request, mfaId(body, query), "password", Map.of(), origin, body, null);
                     }
                     Duration ttl = tokenDuration(superuserSchema == null ? null : superuserSchema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
                     String token = tokenService.create(claims, ttl, tokenSigningSecret(superuserSchema == null ? null : superuserSchema.authToken, tokenKey));
-                    Map<String, Object> rec = Map.of(
-                            "id", id,
-                            "email", email,
-                            "collectionId", "pbc_superusers",
-                            "collectionName", SUPERUSERS,
-                            "created", created,
-                            "updated", updated
-                    );
+                    Map<String, Object> rec = new LinkedHashMap<>();
+                    rec.put("id", id);
+                    rec.put("email", email);
+                    rec.put("emailVisibility", Boolean.TRUE.equals(emailVisibility));
+                    rec.put("verified", !Boolean.FALSE.equals(verified));
+                    rec.put("collectionId", SystemCollections.SUPERUSERS_ID);
+                    rec.put("collectionName", SUPERUSERS);
+                    rec.put("created", created);
+                    rec.put("updated", updated);
                     return Map.of("token", token, "record", rec);
                 }
             }
@@ -155,7 +205,7 @@ public class AuthRepository extends BaseRepository {
         }
         if (PasswordHasher.verifyOrDummy(password, passwordHash == null ? null : String.valueOf(passwordHash))) {
             if (record != null) {
-                return handleAuthWithMfa(colSchema, record, query, mfaId(body, query), "password", Map.of());
+                return handleAuthWithMfa(colSchema, record, request, mfaId(body, query), "password", Map.of(), origin, body, null);
             }
         }
         throw invalidAuthCredentials();
@@ -166,6 +216,34 @@ public class AuthRepository extends BaseRepository {
     }
 
     public Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal) {
+        return authWithOAuth2(collection, body, query, principal, AuthOriginContext.empty());
+    }
+
+    public Map<String, Object> authWithOAuth2(
+            String collection,
+            JsonNode body,
+            Map<String, String> query,
+            RequestPrincipal principal,
+            AuthOriginContext origin
+    ) {
+        return authWithOAuth2(
+                collection,
+                body,
+                RuleRequestContext.of(query, Map.of()),
+                principal,
+                origin
+        );
+    }
+
+    public Map<String, Object> authWithOAuth2(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            RequestPrincipal principal,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.OAUTH2);
+        Map<String, String> query = request.query();
         CollectionSchema colSchema = storeContext.getCollection(collection);
         if (colSchema == null || !"auth".equals(colSchema.type)) {
             throw new ApiException(400, "The collection is not an auth collection.");
@@ -203,20 +281,39 @@ public class AuthRepository extends BaseRepository {
             if (!payload.hasNonNull("email") && !oauthUser.email().isBlank()) {
                 payload.put("email", oauthUser.email());
             }
-            if (!payload.hasNonNull("verified")) {
-                payload.put("verified", !oauthUser.email().isBlank());
-            }
             if (!payload.hasNonNull("password")) {
-                payload.put("password", IdGenerator.prefixed("oauth2_") + IdGenerator.id());
+                String generatedPassword = IdGenerator.prefixed("oauth2_") + IdGenerator.id();
+                payload.put("password", generatedPassword);
+                payload.put("passwordConfirm", generatedPassword);
             }
-            if (!payload.hasNonNull("name") && collectionHasField(colSchema, "name") && !oauthUser.name().isBlank()) {
-                payload.put("name", oauthUser.name());
-            }
-            if (!payload.hasNonNull("username") && collectionHasField(colSchema, "username") && !oauthUser.username().isBlank()) {
-                payload.put("username", oauthUser.username());
-            }
-            Map<String, Object> created = recordRepository.createRecord(colSchema.name, payload, Map.of(), Map.of(), internalSuperuserPrincipal());
+            Map<String, List<UploadedFile>> mappedFiles = OAuth2FieldMappingSupport.apply(
+                    colSchema,
+                    payload,
+                    oauthUser,
+                    (field, value) -> recordRepository.getRawRecordByField(colSchema, field, value) == null
+            );
+            Map<String, Object> created = recordRepository.createRecord(
+                    colSchema.name,
+                    payload,
+                    mappedFiles,
+                    RuleRequestContext.of(
+                            Map.of(),
+                            request.headers(),
+                            RuleRequestContext.OAUTH2
+                    ),
+                    principal
+            );
             record = recordRepository.getRawRecord(colSchema, String.valueOf(created.get("id")));
+            if (!oauthUser.email().isBlank()
+                    && oauthUser.email().equalsIgnoreCase(String.valueOf(record.getOrDefault("email", "")))
+                    && !truthy(record.get("verified"))) {
+                Map<String, Object> updates = Map.of(
+                        "verified", true,
+                        "updated", Instant.now().toString()
+                );
+                recordRepository.updateFields(colSchema.name, String.valueOf(record.get("id")), updates);
+                record.putAll(updates);
+            }
             isNew = true;
         } else {
             Map<String, Object> updates = new LinkedHashMap<>();
@@ -224,12 +321,6 @@ public class AuthRepository extends BaseRepository {
                     && oauthUser.email().equalsIgnoreCase(String.valueOf(record.getOrDefault("email", "")))
                     && !truthy(record.get("verified"))) {
                 updates.put("verified", true);
-            }
-            if (collectionHasField(colSchema, "name") && textSetting(record.get("name")).isBlank() && !oauthUser.name().isBlank()) {
-                updates.put("name", oauthUser.name());
-            }
-            if (collectionHasField(colSchema, "username") && textSetting(record.get("username")).isBlank() && !oauthUser.username().isBlank()) {
-                updates.put("username", oauthUser.username());
             }
             if (!updates.isEmpty()) {
                 updates.put("updated", Instant.now().toString());
@@ -242,21 +333,33 @@ public class AuthRepository extends BaseRepository {
         upsertExternalAuth(colSchema, record, provider.name, oauthUser.providerId());
         Map<String, Object> meta = new LinkedHashMap<>(oauthUser.raw());
         meta.put("isNew", isNew);
-        return handleAuthWithMfa(colSchema, record, query, mfaId(body, query), "oauth2", meta);
+        return handleAuthWithMfa(colSchema, record, request, mfaId(body, query), "oauth2", meta, origin, body, principal);
     }
 
     public Map<String, Object> authRefresh(String collection, RequestPrincipal principal, Map<String, String> query) {
-        if (principal == null || !principal.collectionName().equals(collection)) {
+        if (principal == null
+                || !Objects.equals(principal.collectionName(), collection)
+                && !Objects.equals(
+                        SystemCollections.canonicalIdentifier(principal.collectionId()),
+                        SystemCollections.canonicalIdentifier(collection)
+                )) {
+            throw new ApiException(401, "Missing or invalid auth token.");
+        }
+        CollectionSchema requestedCollection = storeContext.getCollection(collection);
+        if (requestedCollection == null) {
             throw new ApiException(401, "Missing or invalid auth token.");
         }
         if (!"auth".equals(principal.claims().getOrDefault("tokenType", "auth"))) {
             throw new ApiException(401, "Missing or invalid auth token.");
         }
 
-        if (SUPERUSERS.equals(collection)) {
+        if (SUPERUSERS.equals(requestedCollection.name)) {
             CollectionSchema superuserSchema = storeContext.getCollection(SUPERUSERS);
             var record = database.dsl()
-                    .select(qfs("id"), qfs("email"), qfs("tokenKey"), qfs("created"), qfs("updated"))
+                    .select(
+                            qfs("id"), qfs("email"), qfs("tokenKey"),
+                            qfb("emailVisibility"), qfb("verified"), qfs("created"), qfs("updated")
+                    )
                     .from(qt("_superusers"))
                     .where(qfs("id").eq(principal.id()))
                     .fetchOne();
@@ -267,7 +370,7 @@ public class AuthRepository extends BaseRepository {
                     "sub", record.get(qfs("id")),
                     "email", record.get(qfs("email")),
                     "type", "auth",
-                    "collectionId", "pbc_superusers",
+                    "collectionId", SystemCollections.SUPERUSERS_ID,
                     "collectionName", SUPERUSERS,
                     "tokenType", "auth",
                     "tokenKey", record.get(qfs("tokenKey"))
@@ -276,18 +379,20 @@ public class AuthRepository extends BaseRepository {
             String token = tokenService.create(claims, ttl, tokenSigningSecret(superuserSchema == null ? null : superuserSchema.authToken, record.get(qfs("tokenKey"))));
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("token", token);
-            response.put("record", Map.of(
-                    "id", record.get(qfs("id")),
-                    "email", record.get(qfs("email")),
-                    "collectionId", "pbc_superusers",
-                    "collectionName", SUPERUSERS,
-                    "created", record.get(qfs("created")),
-                    "updated", record.get(qfs("updated"))
-            ));
+            Map<String, Object> responseRecord = new LinkedHashMap<>();
+            responseRecord.put("id", record.get(qfs("id")));
+            responseRecord.put("email", record.get(qfs("email")));
+            responseRecord.put("emailVisibility", Boolean.TRUE.equals(record.get(qfb("emailVisibility"))));
+            responseRecord.put("verified", !Boolean.FALSE.equals(record.get(qfb("verified"))));
+            responseRecord.put("collectionId", SystemCollections.SUPERUSERS_ID);
+            responseRecord.put("collectionName", SUPERUSERS);
+            responseRecord.put("created", record.get(qfs("created")));
+            responseRecord.put("updated", record.get(qfs("updated")));
+            response.put("record", responseRecord);
             return RecordProcessor.selectFields(response, query == null ? null : query.get("fields"));
         }
 
-        CollectionSchema colSchema = storeContext.getCollection(collection);
+        CollectionSchema colSchema = requestedCollection;
         if (colSchema == null || !"auth".equals(colSchema.type)) {
             throw new ApiException(401, "Auth collection not found.");
         }
@@ -307,13 +412,13 @@ public class AuthRepository extends BaseRepository {
             throw new ApiException(404, "Collection not found.");
         }
         if (!"auth".equals(colSchema.type)) {
-            throw new ApiException(400, "The collection is not an auth collection.");
+            throw new ApiException(404, "The requested resource wasn't found.");
         }
 
         boolean passwordEnabled = colSchema.passwordAuth != null && colSchema.passwordAuth.enabled;
-        List<String> identityFields = colSchema.passwordAuth != null && colSchema.passwordAuth.identityFields != null
+        List<String> identityFields = passwordEnabled && colSchema.passwordAuth.identityFields != null
                 ? new ArrayList<>(colSchema.passwordAuth.identityFields)
-                : new ArrayList<>(List.of("email"));
+                : new ArrayList<>();
         List<Map<String, Object>> providers = colSchema.oauth2 != null && colSchema.oauth2.enabled
                 ? colSchema.oauth2.providers.stream()
                 .map(config -> {
@@ -338,24 +443,38 @@ public class AuthRepository extends BaseRepository {
                 .collect(Collectors.toCollection(ArrayList::new))
                 : new ArrayList<>();
 
+        List<Map<String, Object>> legacyProviders = providers.stream()
+                .map(provider -> orderedMap(
+                        "name", provider.get("name"),
+                        "displayName", provider.get("displayName"),
+                        "logo", "",
+                        "state", provider.get("state"),
+                        "authURL", provider.get("authURL"),
+                        "authUrl", provider.get("authUrl"),
+                        "codeVerifier", provider.get("codeVerifier"),
+                        "codeChallenge", provider.get("codeChallenge"),
+                        "codeChallengeMethod", provider.get("codeChallengeMethod")
+                ))
+                .collect(Collectors.toCollection(ArrayList::new));
+
+        boolean oauthEnabled = colSchema.oauth2 != null && colSchema.oauth2.enabled;
         return Map.of(
                 "password", Map.of("enabled", passwordEnabled, "identityFields", identityFields),
                 "emailPassword", passwordEnabled && identityFields.contains("email"),
                 "usernamePassword", passwordEnabled && identityFields.contains("username"),
                 "otp", Map.of(
                         "enabled", colSchema.otp != null && colSchema.otp.enabled,
-                        "duration", colSchema.otp != null && colSchema.otp.enabled ? colSchema.otp.duration : 0,
-                        "length", colSchema.otp != null ? colSchema.otp.length : 6
+                        "duration", colSchema.otp != null && colSchema.otp.enabled ? colSchema.otp.duration : 0
                 ),
                 "mfa", Map.of(
                         "enabled", colSchema.mfa != null && colSchema.mfa.enabled,
                         "duration", colSchema.mfa != null && colSchema.mfa.enabled ? colSchema.mfa.duration : 0
                 ),
                 "oauth2", Map.of(
-                        "enabled", colSchema.oauth2 != null && colSchema.oauth2.enabled && !providers.isEmpty(),
+                        "enabled", oauthEnabled,
                         "providers", providers
                 ),
-                "authProviders", providers
+                "authProviders", oauthEnabled ? legacyProviders : List.of()
         );
     }
 
@@ -461,8 +580,8 @@ public class AuthRepository extends BaseRepository {
         try {
             database.dsl()
                     .insertInto(qt("_otps"))
-                    .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordId"),
-                            qfs("collectionId"), qfs("passwordHash"), qfs("sentTo"), qfi("failedAttempts"))
+                    .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordRef"),
+                            qfs("collectionRef"), qfs("password"), qfs("sentTo"), qfi("failedAttempts"))
                     .values(otpId, now, now, String.valueOf(record.get("id")),
                             colSchema.id, PasswordHasher.hash(code), email, 0)
                     .execute();
@@ -486,6 +605,26 @@ public class AuthRepository extends BaseRepository {
     }
 
     public Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query) {
+        return authWithOtp(collection, body, query, AuthOriginContext.empty());
+    }
+
+    public Map<String, Object> authWithOtp(
+            String collection,
+            JsonNode body,
+            Map<String, String> query,
+            AuthOriginContext origin
+    ) {
+        return authWithOtp(collection, body, RuleRequestContext.of(query, Map.of()), origin);
+    }
+
+    public Map<String, Object> authWithOtp(
+            String collection,
+            JsonNode body,
+            RuleRequestContext request,
+            AuthOriginContext origin
+    ) {
+        request = request.withContext(RuleRequestContext.OTP);
+        Map<String, String> query = request.query();
         CollectionSchema colSchema = storeContext.getCollection(collection);
         if (colSchema == null || !"auth".equals(colSchema.type)) {
             throw new ApiException(400, "The collection is not an auth collection.");
@@ -520,14 +659,24 @@ public class AuthRepository extends BaseRepository {
             throw invalidOtp();
         }
 
-        String recordId = otpRecord.getValue(qfs("recordId"), String.class);
-        String collectionId = otpRecord.getValue(qfs("collectionId"), String.class);
-        String passwordHash = otpRecord.getValue(qfs("passwordHash"), String.class);
+        String recordId = otpRecord.getValue(qfs("recordRef"), String.class);
+        String collectionId = otpRecord.getValue(qfs("collectionRef"), String.class);
+        String passwordHash = otpRecord.getValue(qfs("password"), String.class);
+        String created = otpRecord.getValue(qfs("created"), String.class);
         int failedAttempts = otpRecord.getValue(qfi("failedAttempts"), Integer.class) == null
                 ? 0
                 : otpRecord.getValue(qfi("failedAttempts"), Integer.class);
 
         if (!colSchema.id.equals(collectionId) && !colSchema.name.equals(collection)) {
+            throw invalidOtp();
+        }
+        if (otpExpired(created, colSchema)) {
+            database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(otpId)).execute();
+            throw invalidOtp();
+        }
+        Map<String, Object> record = storeContext.getRecord(colSchema, recordId);
+        if (record == null) {
+            database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(otpId)).execute();
             throw invalidOtp();
         }
         if (failedAttempts >= 5) {
@@ -544,14 +693,11 @@ public class AuthRepository extends BaseRepository {
             throw invalidOtp();
         }
 
-        // OTP verified - delete it (one-time use)
-        try {
-            database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(otpId)).execute();
-        } catch (Exception ignored) {}
-
-        // Get the auth record and issue a token
-        Map<String, Object> record = storeContext.getRecord(colSchema, recordId);
-        if (record == null) {
+        int consumed = database.dsl()
+                .deleteFrom(qt("_otps"))
+                .where(qfs("id").eq(otpId))
+                .execute();
+        if (consumed != 1) {
             throw invalidOtp();
         }
 
@@ -563,13 +709,26 @@ public class AuthRepository extends BaseRepository {
             updates.put("verified", true);
             if (colSchema.mfa == null || !colSchema.mfa.enabled) {
                 updates.put("password", PasswordHasher.hash(IdGenerator.prefixed("otp_") + IdGenerator.id()));
-                updates.put("tokenKey", IdGenerator.prefixed("tk_"));
+                updates.put("tokenKey", IdGenerator.secret());
             }
             recordRepository.updateFields(colSchema.name, recordId, updates);
             record.putAll(updates);
         }
 
-        return handleAuthWithMfa(colSchema, record, query, mfaId(body, query), "otp", Map.of());
+        return handleAuthWithMfa(colSchema, record, request, mfaId(body, query), "otp", Map.of(), origin, body, null);
+    }
+
+    private boolean otpExpired(String created, CollectionSchema collection) {
+        long durationSeconds = collection != null && collection.otp != null && collection.otp.duration > 0
+                ? collection.otp.duration
+                : 180L;
+        try {
+            return created == null
+                    || created.isBlank()
+                    || !Instant.parse(created).plusSeconds(durationSeconds).isAfter(Instant.now());
+        } catch (RuntimeException e) {
+            return true;
+        }
     }
 
     private ApiException invalidOtp() {
@@ -592,10 +751,10 @@ public class AuthRepository extends BaseRepository {
 
     public void pruneExpiredMfas() {
         List<String> expiredIds = database.dsl()
-                .select(qfs("id"), qfs("created"), qfs("collectionId"))
+                .select(qfs("id"), qfs("created"), qfs("collectionRef"))
                 .from(qt("_mfas"))
                 .fetch(record -> {
-                    String collectionId = record.get(qfs("collectionId"), String.class);
+                    String collectionId = record.get(qfs("collectionRef"), String.class);
                     CollectionSchema collection = collectionId == null ? null : storeContext.getCollection(collectionId);
                     if (collection == null || collection.mfa == null) {
                         return record.get(qfs("id"), String.class);
@@ -611,10 +770,10 @@ public class AuthRepository extends BaseRepository {
 
     public void pruneExpiredOtps() {
         List<String> expiredIds = database.dsl()
-                .select(qfs("id"), qfs("created"), qfs("collectionId"))
+                .select(qfs("id"), qfs("created"), qfs("collectionRef"))
                 .from(qt("_otps"))
                 .fetch(record -> {
-                    String collectionId = record.get(qfs("collectionId"), String.class);
+                    String collectionId = record.get(qfs("collectionRef"), String.class);
                     CollectionSchema collection = collectionId == null ? null : storeContext.getCollection(collectionId);
                     if (collection == null || collection.otp == null) {
                         return record.get(qfs("id"), String.class);
@@ -676,6 +835,24 @@ public class AuthRepository extends BaseRepository {
             String tokenType,
             Map<String, Object> meta
     ) {
+        return authResponse(
+                colSchema,
+                record,
+                RuleRequestContext.of(query, Map.of()),
+                ttl,
+                tokenType,
+                meta
+        );
+    }
+
+    private Map<String, Object> authResponse(
+            CollectionSchema colSchema,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            Duration ttl,
+            String tokenType,
+            Map<String, Object> meta
+    ) {
         Map<String, Object> claims = new LinkedHashMap<>();
         claims.put("sub", record.get("id"));
         claims.put("email", record.getOrDefault("email", ""));
@@ -690,12 +867,14 @@ public class AuthRepository extends BaseRepository {
                 ttl == null ? tokenDuration(colSchema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION) : ttl,
                 tokenSigningSecret(colSchema.authToken, record.get("tokenKey"))
         );
-        Map<String, String> safeQuery = query == null ? Map.of() : query;
+        RuleRequestContext safeRequest = request == null ? RuleRequestContext.empty() : request;
+        Map<String, String> safeQuery = safeRequest.query();
         Map<String, String> recordQuery = new LinkedHashMap<>(safeQuery);
         recordQuery.remove("fields");
+        RuleRequestContext recordRequest = RuleRequestContext.of(recordQuery, safeRequest.headers());
         RequestPrincipal authPrincipal = RequestPrincipal.fromClaims(claims);
         Map<String, Object> normalizedRecord = recordRepository.normalizeStoredRecord(colSchema, record);
-        Map<String, Object> processed = RecordProcessor.process(storeContext, colSchema, normalizedRecord, false, recordQuery, authPrincipal);
+        Map<String, Object> processed = RecordProcessor.process(storeContext, colSchema, normalizedRecord, false, recordRequest, authPrincipal);
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("token", token);
         response.put("record", processed);
@@ -713,15 +892,39 @@ public class AuthRepository extends BaseRepository {
             String method,
             Map<String, Object> meta
     ) {
+        return handleAuthWithMfa(
+                collection,
+                record,
+                RuleRequestContext.of(query, Map.of()),
+                mfaIdParam,
+                method,
+                meta,
+                AuthOriginContext.empty(),
+                null,
+                null
+        );
+    }
+
+    private Map<String, Object> handleAuthWithMfa(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            String mfaIdParam,
+            String method,
+            Map<String, Object> meta,
+            AuthOriginContext origin,
+            JsonNode body,
+            RequestPrincipal requestPrincipal
+    ) {
         if (collection.mfa == null || !collection.mfa.enabled) {
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
         if (mfaIdParam != null && !mfaIdParam.isBlank()) {
             var mfa = database.dsl()
                     .selectFrom(qt("_mfas"))
                     .where(qfs("id").eq(mfaIdParam))
-                    .and(qfs("recordId").eq(String.valueOf(record.get("id"))))
-                    .and(qfs("collectionId").eq(collection.id))
+                    .and(qfs("recordRef").eq(String.valueOf(record.get("id"))))
+                    .and(qfs("collectionRef").eq(collection.id))
                     .fetchOne();
             if (mfa == null || mfaExpired(collection, mfa.get(qfs("created"), String.class))) {
                 if (mfa != null) {
@@ -733,32 +936,172 @@ public class AuthRepository extends BaseRepository {
                 throw invalidMfaId("MFA requires a different auth method.");
             }
             database.dsl().deleteFrom(qt("_mfas")).where(qfs("id").eq(mfaIdParam)).execute();
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
-        boolean requireMfa = collection.mfa.rule != null
-                && !collection.mfa.rule.isBlank()
-                && io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator.matches(
+        boolean requireMfa = collection.mfa.rule == null
+                || collection.mfa.rule.isBlank()
+                || io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator.matches(
                 collection.mfa.rule,
-                io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator.context(
+                RecordFieldResolverSupport.context(
+                        storeContext,
+                        collection,
                         record,
                         null,
-                        query == null ? Map.of() : query,
+                        request,
                         "POST",
                         null,
-                        storeContext::recordsForRule
+                        true,
+                        false
                 )
         );
         if (!requireMfa) {
-            return authResponse(collection, record, query, tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION), "auth", meta);
+            return authenticatedResponse(collection, record, request, meta, origin, body, requestPrincipal);
         }
         String now = Instant.now().toString();
         String id = IdGenerator.id();
         database.dsl()
                 .insertInto(qt("_mfas"))
-                .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordId"), qfs("collectionId"), qfs("method"))
+                .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordRef"), qfs("collectionRef"), qfs("method"))
                 .values(id, now, now, String.valueOf(record.get("id")), collection.id, method)
                 .execute();
         throw new ApiException(401, "MFA required.", Map.of("mfaId", id));
+    }
+
+    private Map<String, Object> authenticatedResponse(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            Map<String, Object> meta,
+            AuthOriginContext origin,
+            JsonNode body,
+            RequestPrincipal requestPrincipal
+    ) {
+        requireAuthRule(collection, record, body, request, requestPrincipal);
+        Map<String, Object> response = authResponse(
+                collection,
+                record,
+                request,
+                tokenDuration(collection.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION),
+                "auth",
+                meta
+        );
+        recordAuthOrigin(collection, record, origin);
+        return response;
+    }
+
+    private void requireAuthRule(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            JsonNode body,
+            RuleRequestContext request,
+            RequestPrincipal requestPrincipal
+    ) {
+        Map<String, Object> requestBody = body == null || !body.isObject()
+                ? Map.of()
+                : mapper.convertValue(body, new TypeReference<Map<String, Object>>() {});
+        if (collection.authRule == null
+                || !collection.authRule.isBlank()
+                && !io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator.matches(
+                collection.authRule,
+                RecordFieldResolverSupport.context(
+                        storeContext,
+                        collection,
+                        record,
+                        requestBody,
+                        request,
+                        "POST",
+                        requestPrincipal,
+                        true,
+                        false
+                )
+        )) {
+            throw new ApiException(403, "The request doesn't satisfy the collection requirements to authenticate.");
+        }
+    }
+
+    private void recordAuthOrigin(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            AuthOriginContext origin
+    ) {
+        if (collection == null
+                || collection.authAlert == null
+                || !collection.authAlert.enabled
+                || record == null
+                || origin == null
+                || origin.ip().isBlank() && origin.userAgent().isBlank()) {
+            return;
+        }
+
+        String recordId = String.valueOf(record.getOrDefault("id", ""));
+        String fingerprint = origin.fingerprint();
+        var origins = database.dsl()
+                .selectFrom(qt("_authOrigins"))
+                .where(qfs("collectionRef").eq(collection.id))
+                .and(qfs("recordRef").eq(recordId))
+                .orderBy(qfs("updated").desc())
+                .fetch();
+        var current = origins.stream()
+                .filter(item -> fingerprint.equals(item.get(qfs("fingerprint"), String.class)))
+                .findFirst()
+                .orElse(null);
+        String timestamp = Instant.now().toString();
+        if (current != null) {
+            database.dsl().update(qt("_authOrigins"))
+                    .set(qfs("updated"), timestamp)
+                    .where(qfs("id").eq(current.get(qfs("id"), String.class)))
+                    .execute();
+            return;
+        }
+
+        if (!origins.isEmpty() && !textSetting(record.get("email")).isBlank()) {
+            Map<String, Object> request = new LinkedHashMap<>();
+            request.put("id", IdGenerator.id());
+            request.put("type", "authAlert");
+            request.put("collectionId", collection.id);
+            request.put("collectionName", collection.name);
+            request.put("recordId", recordId);
+            request.put("email", record.get("email"));
+            request.put("alertInfo", origin.alertInfo());
+            request.put("created", timestamp);
+            request.put("expires", Instant.now().plus(Duration.ofHours(2)).toString());
+            if (!AuthMailSupport.sendAsync(collection, record, request, settingsRepository.loadRawSettings(), null)) {
+                appendAuthOutboxRequest(request);
+            }
+        }
+
+        if (origins.size() >= 5) {
+            List<String> staleIds = origins.subList(4, origins.size()).stream()
+                    .map(item -> item.get(qfs("id"), String.class))
+                    .filter(Objects::nonNull)
+                    .toList();
+            if (!staleIds.isEmpty()) {
+                database.dsl().deleteFrom(qt("_authOrigins"))
+                        .where(qfs("id").in(staleIds))
+                        .execute();
+            }
+        }
+
+        try {
+            database.dsl().insertInto(qt("_authOrigins"))
+                    .columns(
+                            qfs("id"),
+                            qfs("created"),
+                            qfs("updated"),
+                            qfs("collectionRef"),
+                            qfs("recordRef"),
+                            qfs("fingerprint")
+                    )
+                    .values(IdGenerator.id(), timestamp, timestamp, collection.id, recordId, fingerprint)
+                    .execute();
+        } catch (org.jooq.exception.DataAccessException ignored) {
+            database.dsl().update(qt("_authOrigins"))
+                    .set(qfs("updated"), timestamp)
+                    .where(qfs("collectionRef").eq(collection.id))
+                    .and(qfs("recordRef").eq(recordId))
+                    .and(qfs("fingerprint").eq(fingerprint))
+                    .execute();
+        }
     }
 
     private ApiException invalidMfaId(String message) {
@@ -769,14 +1112,14 @@ public class AuthRepository extends BaseRepository {
         try {
             var externalAuth = database.dsl()
                     .selectFrom(qt("_externalAuths"))
-                    .where(qfs("collectionId").eq(collection.id))
+                    .where(qfs("collectionRef").eq(collection.id))
                     .and(qfs("provider").eq(provider))
                     .and(qfs("providerId").eq(providerId))
                     .fetchOne();
             if (externalAuth == null) {
                 return null;
             }
-            return recordRepository.getRawRecord(collection, externalAuth.get(qfs("recordId"), String.class));
+            return recordRepository.getRawRecord(collection, externalAuth.get(qfs("recordRef"), String.class));
         } catch (Exception e) {
             return null;
         }
@@ -786,14 +1129,14 @@ public class AuthRepository extends BaseRepository {
         String now = Instant.now().toString();
         var existing = database.dsl()
                 .selectFrom(qt("_externalAuths"))
-                .where(qfs("collectionId").eq(collection.id))
+                .where(qfs("collectionRef").eq(collection.id))
                 .and(qfs("provider").eq(provider))
                 .and(qfs("providerId").eq(providerId))
                 .fetchOne();
         if (existing == null) {
             database.dsl()
                     .insertInto(qt("_externalAuths"))
-                    .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordId"), qfs("collectionId"), qfs("provider"), qfs("providerId"))
+                    .columns(qfs("id"), qfs("created"), qfs("updated"), qfs("recordRef"), qfs("collectionRef"), qfs("provider"), qfs("providerId"))
                     .values(IdGenerator.id(), now, now, String.valueOf(record.get("id")), collection.id, provider, providerId)
                     .execute();
             return;
@@ -801,7 +1144,7 @@ public class AuthRepository extends BaseRepository {
         database.dsl()
                 .update(qt("_externalAuths"))
                 .set(qfs("updated"), now)
-                .set(qfs("recordId"), String.valueOf(record.get("id")))
+                .set(qfs("recordRef"), String.valueOf(record.get("id")))
                 .where(qfs("id").eq(existing.get(qfs("id"), String.class)))
                 .execute();
     }
@@ -810,7 +1153,7 @@ public class AuthRepository extends BaseRepository {
         if (!textSetting(record.get("tokenKey")).isBlank()) {
             return;
         }
-        String tokenKey = IdGenerator.prefixed("tk_");
+        String tokenKey = IdGenerator.secret();
         recordRepository.updateFields(collection.name, String.valueOf(record.get("id")), Map.of("tokenKey", tokenKey));
         record.put("tokenKey", tokenKey);
     }
@@ -892,7 +1235,7 @@ public class AuthRepository extends BaseRepository {
 
     private boolean mfaExpired(CollectionSchema collection, String created) {
         try {
-            long durationSeconds = collection.mfa.duration > 0 ? collection.mfa.duration : 1800;
+            long durationSeconds = collection.mfa.duration > 0 ? collection.mfa.duration : 600;
             Instant cutoff = Instant.now().minusSeconds(durationSeconds);
             return Instant.parse(created).isBefore(cutoff);
         } catch (Exception e) {
@@ -904,7 +1247,7 @@ public class AuthRepository extends BaseRepository {
         return RequestPrincipal.fromClaims(Map.of(
                 "sub", "internal_oauth2",
                 "type", "superuser",
-                "collectionId", "pbc_superusers",
+                "collectionId", SystemCollections.SUPERUSERS_ID,
                 "collectionName", SUPERUSERS
         ));
     }
@@ -957,6 +1300,54 @@ public class AuthRepository extends BaseRepository {
                         String.valueOf(request.get("expires"))
                 )
                 .execute();
+        CollectionSchema collection = storeContext.getCollection(String.valueOf(request.getOrDefault("collectionId", "")));
+        if (collection == null) {
+            collection = storeContext.getCollection(String.valueOf(request.getOrDefault("collectionName", "")));
+        }
+        Map<String, Object> record = collection == null
+                ? Map.of()
+                : Optional.ofNullable(storeContext.getRecord(collection, String.valueOf(request.getOrDefault("recordId", ""))))
+                .orElse(Map.of());
+        Runnable onFailure = "otp".equals(request.get("type"))
+                ? () -> database.dsl().deleteFrom(qt("_otps")).where(qfs("id").eq(String.valueOf(request.get("otpId")))).execute()
+                : null;
+        if (!AuthMailSupport.sendAsync(collection, record, request, settingsRepository.loadRawSettings(), onFailure)) {
+            appendAuthOutboxRequest(request);
+        }
+    }
+
+    private synchronized void appendAuthOutboxRequest(Map<String, Object> request) {
+        try {
+            Files.createDirectories(dataDir);
+            Path outbox = dataDir.resolve("auth_requests.json");
+            List<Map<String, Object>> requests = new ArrayList<>();
+            if (Files.exists(outbox)) {
+                requests = mapper.readValue(outbox.toFile(), new TypeReference<>() {
+                });
+            }
+            Instant now = Instant.now();
+            requests.removeIf(item -> expiredOutboxRequest(item, now));
+            requests.add(new LinkedHashMap<>(request));
+            Files.writeString(
+                    outbox,
+                    mapper.writerWithDefaultPrettyPrinter().writeValueAsString(requests),
+                    StandardCharsets.UTF_8
+            );
+        } catch (Exception ignored) {
+            // The database record remains authoritative if the development outbox cannot be written.
+        }
+    }
+
+    private boolean expiredOutboxRequest(Map<String, Object> request, Instant now) {
+        Object expires = request == null ? null : request.get("expires");
+        if (expires == null || String.valueOf(expires).isBlank()) {
+            return false;
+        }
+        try {
+            return Instant.parse(String.valueOf(expires)).isBefore(now);
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     private String actionToken(JsonNode body) {
@@ -968,34 +1359,19 @@ public class AuthRepository extends BaseRepository {
 
     private void consumeAuthRequestToken(String collection, String token, String type) {
         CollectionSchema schema = storeContext.getCollection(collection);
-        var request = database.dsl()
-                .select(qfs("id"), qfs("type"), qfs("collectionId"), qfs("collectionName"), qfs("expires"))
-                .from(qt("_authRequests"))
+        if (schema == null) {
+            throw invalidAuthRequestToken();
+        }
+        int consumed = database.dsl()
+                .deleteFrom(qt("_authRequests"))
                 .where(qfs("token").eq(token))
-                .fetchOne();
-        if (request == null) {
+                .and(qfs("type").eq(type))
+                .and(qfs("expires").gt(Instant.now().toString()))
+                .and(qfs("collectionId").eq(schema.id).or(qfs("collectionName").eq(schema.name)))
+                .execute();
+        if (consumed != 1) {
             throw invalidAuthRequestToken();
         }
-        if (!type.equals(request.get(qfs("type"), String.class))) {
-            throw invalidAuthRequestToken();
-        }
-        String collectionId = request.get(qfs("collectionId"), String.class);
-        String collectionName = request.get(qfs("collectionName"), String.class);
-        if (schema == null
-                || (!schema.id.equals(collectionId) && !schema.name.equals(collectionName))) {
-            throw invalidAuthRequestToken();
-        }
-        String expires = request.get(qfs("expires"), String.class);
-        try {
-            if (expires == null || Instant.parse(expires).isBefore(Instant.now())) {
-                throw invalidAuthRequestToken();
-            }
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw invalidAuthRequestToken();
-        }
-        database.dsl().deleteFrom(qt("_authRequests")).where(qfs("token").eq(token)).execute();
     }
 
     private ApiException invalidAuthRequestToken() {

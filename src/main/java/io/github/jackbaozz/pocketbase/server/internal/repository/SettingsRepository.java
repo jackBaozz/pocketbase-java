@@ -7,6 +7,7 @@ import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
+import io.github.jackbaozz.pocketbase.server.internal.HttpRateLimiter;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.S3Probe;
@@ -50,6 +51,7 @@ public class SettingsRepository extends BaseRepository {
             Map<String, Object> incoming = mapper.convertValue(body, new TypeReference<Map<String, Object>>() {});
             deepMerge(current, incoming);
             normalizeSettings(current);
+            HttpRateLimiter.validateSettings(current);
 
             String now = Instant.now().toString();
             String valueJson = mapper.writeValueAsString(current);
@@ -66,6 +68,8 @@ public class SettingsRepository extends BaseRepository {
                     .execute();
 
             return RecordProcessor.selectFields(redactedSettings(current), query == null ? null : query.get("fields"));
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new ApiException(400, "Failed to update settings.", e);
         }
@@ -153,7 +157,7 @@ public class SettingsRepository extends BaseRepository {
         return AppleClientSecretGenerator.generate(mapper, body);
     }
 
-    private Map<String, Object> loadRawSettings() {
+    Map<String, Object> loadRawSettings() {
         Map<String, Object> settings = defaultSettings();
         try {
             var result = database.dsl()
@@ -185,7 +189,7 @@ public class SettingsRepository extends BaseRepository {
             Map<String, Object> target = (Map<String, Object>) map;
             for (Map.Entry<String, Object> entry : new ArrayList<>(target.entrySet())) {
                 if (hiddenSettingKey(entry.getKey())) {
-                    target.put(entry.getKey(), REDACTED_SECRET);
+                    target.remove(entry.getKey());
                 } else {
                     hideSensitiveSettings(entry.getValue());
                 }

@@ -16,6 +16,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,12 +28,17 @@ class S3BackupRepositoryTest {
     private LocalPocketBase server;
     private HttpServer s3;
     private String previousStorage;
+    private volatile CountDownLatch putStarted;
+    private volatile CountDownLatch releasePut;
 
     @TempDir
     Path dataDir;
 
     @AfterEach
     void tearDown() {
+        if (releasePut != null) {
+            releasePut.countDown();
+        }
         if (server != null) {
             server.close();
         }
@@ -69,15 +76,38 @@ class S3BackupRepositoryTest {
                 )
         ));
 
-        JsonNode created = request("POST", "/api/backups", token, Map.of("name", "s3snap.zip"));
-        assertEquals("s3snap.zip", created.get("key").asText());
+        putStarted = new CountDownLatch(1);
+        releasePut = new CountDownLatch(1);
+        var create = http.sendAsync(
+                jsonRequest("POST", "/api/backups", token, Map.of("name", "s3snap.zip")),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+        );
+        assertTrue(putStarted.await(5, TimeUnit.SECONDS));
+
+        JsonNode activeHealth = request("GET", "/api/health", token, null);
+        assertFalse(activeHealth.get("data").get("canBackup").asBoolean());
+        assertEquals(400, rawRequest("POST", "/api/backups", token, Map.of("name", "second.zip")).statusCode());
+        assertEquals(400, rawRequest("DELETE", "/api/backups/s3snap.zip", token, null).statusCode());
+
+        releasePut.countDown();
+        HttpResponse<String> created = create.get(10, TimeUnit.SECONDS);
+        assertEquals(204, created.statusCode());
+        assertTrue(created.body().isBlank());
         assertTrue(objects.containsKey("s3snap.zip"));
+        assertTrue(request("GET", "/api/health", token, null).get("data").get("canBackup").asBoolean());
 
         JsonNode list = request("GET", "/api/backups", token, null);
-        assertEquals(1, list.get("totalItems").asInt());
-        assertEquals("s3snap.zip", list.get("items").get(0).get("key").asText());
+        assertTrue(list.isArray());
+        assertEquals(1, list.size());
+        assertEquals("s3snap.zip", list.get(0).get("key").asText());
+        assertTrue(list.get(0).get("modified").isTextual());
 
-        HttpResponse<byte[]> download = rawBytes("GET", "/api/backups/s3snap.zip", token);
+        String fileToken = request("POST", "/api/files/token", token, null).get("token").asText();
+        HttpResponse<byte[]> download = rawBytes(
+                "GET",
+                "/api/backups/s3snap.zip?token=" + fileToken,
+                null
+        );
         assertEquals(200, download.statusCode());
         assertTrue(download.body().length > 0);
 
@@ -93,6 +123,21 @@ class S3BackupRepositoryTest {
             String key = path.startsWith("/bucket/") ? path.substring("/bucket/".length()) : "";
             switch (exchange.getRequestMethod()) {
                 case "PUT" -> {
+                    CountDownLatch started = putStarted;
+                    CountDownLatch release = releasePut;
+                    if (started != null && release != null) {
+                        started.countDown();
+                        try {
+                            if (!release.await(10, TimeUnit.SECONDS)) {
+                                exchange.sendResponseHeaders(503, -1);
+                                break;
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            exchange.sendResponseHeaders(503, -1);
+                            break;
+                        }
+                    }
                     objects.put(key, exchange.getRequestBody().readAllBytes());
                     exchange.sendResponseHeaders(200, -1);
                 }
@@ -161,6 +206,10 @@ class S3BackupRepositoryTest {
     }
 
     private HttpResponse<String> rawRequest(String method, String path, String token, Object body) throws Exception {
+        return http.send(jsonRequest(method, path, token, body), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    private HttpRequest jsonRequest(String method, String path, String token, Object body) throws Exception {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
                 .header("Accept", "application/json");
         if (token != null) {
@@ -172,7 +221,7 @@ class S3BackupRepositoryTest {
             builder.header("Content-Type", "application/json");
             builder.method(method, HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8));
         }
-        return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        return builder.build();
     }
 
     private HttpResponse<byte[]> rawBytes(String method, String path, String token) throws Exception {

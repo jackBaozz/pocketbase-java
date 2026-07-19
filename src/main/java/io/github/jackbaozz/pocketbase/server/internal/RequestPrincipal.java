@@ -27,7 +27,7 @@ public record RequestPrincipal(
                 text(safeClaims.get("email")),
                 "superuser".equals(safeClaims.get("type"))
                         || "_superusers".equals(text(safeClaims.get("collectionName")))
-                        || "pbc_superusers".equals(text(safeClaims.get("collectionId"))),
+                        || SystemCollections.isSuperuserIdentifier(text(safeClaims.get("collectionId"))),
                 safeClaims
         );
     }

@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OAuth2FailuresTest {
@@ -44,7 +43,7 @@ class OAuth2FailuresTest {
     }
 
     @Test
-    void oidcProviderRequiresAuthAndTokenEndpoints() throws Exception {
+    void oidcProviderRequiresCredentialsButAllowsEmptyEndpointOverrides() throws Exception {
         String token = loginToken();
 
         HttpResponse<String> response = rawRequest("POST", "/api/collections", token, Map.of(
@@ -60,8 +59,26 @@ class OAuth2FailuresTest {
         ));
 
         assertEquals(400, response.statusCode());
-        assertFieldError(response, "OIDC requires authURL and tokenURL.", "authURL", "validation_required", "Cannot be blank.");
-        assertFieldError(response, "OIDC requires authURL and tokenURL.", "tokenURL", "validation_required", "Cannot be blank.");
+        JsonNode body = mapper.readTree(response.body());
+        assertEquals("Failed to create collection.", body.get("message").asText());
+        JsonNode clientSecretError = body.get("data").get("oauth2").get("providers")
+                .get("0").get("clientSecret");
+        assertEquals("validation_required", clientSecretError.get("code").asText());
+        assertEquals("Cannot be blank.", clientSecretError.get("message").asText());
+
+        JsonNode created = request("POST", "/api/collections", token, Map.of(
+                "name", "minimal_oidc_users",
+                "type", "auth",
+                "oauth2", Map.of(
+                        "enabled", true,
+                        "providers", List.of(Map.of(
+                                "name", "oidc",
+                                "clientId", "client-123",
+                                "clientSecret", "secret-456"
+                        ))
+                )
+        ));
+        assertEquals("oidc", created.get("oauth2").get("providers").get(0).get("name").asText());
     }
 
     @Test
@@ -126,19 +143,4 @@ class OAuth2FailuresTest {
         return http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
     }
 
-    private void assertFieldError(
-            HttpResponse<String> response,
-            String message,
-            String field,
-            String code,
-            String fieldMessage
-    ) throws Exception {
-        JsonNode body = mapper.readTree(response.body());
-        assertEquals(400, body.get("status").asInt());
-        assertFalse(body.has("code"));
-        assertEquals(message, body.get("message").asText());
-        JsonNode fieldError = body.get("data").get(field);
-        assertEquals(code, fieldError.get("code").asText());
-        assertEquals(fieldMessage, fieldError.get("message").asText());
-    }
 }

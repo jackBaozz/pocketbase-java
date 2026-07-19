@@ -79,12 +79,12 @@ public final class AuthProcessor {
                 "usernamePassword", passwordEnabled && identityFields.contains("username"),
                 "otp", Map.of(
                         "enabled", colSchema.otp != null && colSchema.otp.enabled,
-                        "duration", colSchema.otp != null ? colSchema.otp.duration : 300,
-                        "length", colSchema.otp != null ? colSchema.otp.length : 6
+                        "duration", colSchema.otp != null ? colSchema.otp.duration : 180,
+                        "length", colSchema.otp != null ? colSchema.otp.length : 8
                 ),
                 "mfa", Map.of(
                         "enabled", colSchema.mfa != null && colSchema.mfa.enabled,
-                        "duration", colSchema.mfa != null ? colSchema.mfa.duration : 1800
+                        "duration", colSchema.mfa != null ? colSchema.mfa.duration : 600
                 ),
                 "oauth2", Map.of("enabled", colSchema.oauth2 != null && colSchema.oauth2.enabled, "providers", providers),
                 "authProviders", providers
@@ -133,7 +133,7 @@ public final class AuthProcessor {
         ctx.updateRecordField(colSchema, recordId, Map.of(
                 passwordField, PasswordHasher.hash(password),
                 "verified", true,
-                "tokenKey", IdGenerator.prefixed("tk_")
+                "tokenKey", IdGenerator.secret()
         ));
     }
 
@@ -226,7 +226,7 @@ public final class AuthProcessor {
         ctx.updateRecordField(colSchema, recordId, Map.of(
                 "email", newEmail,
                 "verified", true,
-                "tokenKey", IdGenerator.prefixed("tk_")
+                "tokenKey", IdGenerator.secret()
         ));
     }
 
@@ -296,7 +296,7 @@ public final class AuthProcessor {
     private static void ensureTokenKey(RecordProcessor.StoreContext ctx, CollectionSchema collection, Map<String, Object> record) {
         Object tokenKey = record.get("tokenKey");
         if (tokenKey == null || String.valueOf(tokenKey).isBlank()) {
-            String newKey = IdGenerator.prefixed("tk_");
+            String newKey = IdGenerator.secret();
             ctx.updateRecordField(collection, String.valueOf(record.get("id")), Map.of("tokenKey", newKey));
             record.put("tokenKey", newKey);
         }

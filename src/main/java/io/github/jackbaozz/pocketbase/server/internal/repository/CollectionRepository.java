@@ -3,14 +3,30 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.NullNode;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
+import io.github.jackbaozz.pocketbase.server.internal.AuthCollectionConfigMerge;
+import io.github.jackbaozz.pocketbase.server.internal.AuthCollectionFields;
+import io.github.jackbaozz.pocketbase.server.internal.AuthCollectionConfigValidation;
+import io.github.jackbaozz.pocketbase.server.internal.AuthSystemCollections;
+import io.github.jackbaozz.pocketbase.server.internal.CollectionRuleSupport;
+import io.github.jackbaozz.pocketbase.server.internal.CollectionResponseSupport;
+import io.github.jackbaozz.pocketbase.server.internal.CollectionIndexSupport;
+import io.github.jackbaozz.pocketbase.server.internal.CollectionFieldProtection;
+import io.github.jackbaozz.pocketbase.server.internal.CollectionModelValidation;
 import io.github.jackbaozz.pocketbase.server.internal.FieldTypeMapping;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2ProviderManager;
+import io.github.jackbaozz.pocketbase.server.internal.OAuth2FieldMappingSupport;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.SchemaMigrationPlanner;
+import io.github.jackbaozz.pocketbase.server.internal.SchemaIdSupport;
+import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
+import io.github.jackbaozz.pocketbase.server.internal.SearchFieldValidationSupport;
+import io.github.jackbaozz.pocketbase.server.internal.SystemCollections;
+import io.github.jackbaozz.pocketbase.server.internal.ViewQuerySupport;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 import org.jooq.Condition;
@@ -25,12 +41,12 @@ import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -39,33 +55,31 @@ import java.util.stream.Collectors;
 public class CollectionRepository extends BaseRepository {
     private static final int MAX_VIEW_QUERY_LENGTH = 5000;
     private static final int MAX_VIEW_ROWS = 10;
-    private static final List<String> SQL_WRITE_PREFIXES = List.of(
-            "insert",
-            "update",
-            "delete",
-            "create",
-            "drop",
-            "alter",
-            "replace",
-            "truncate"
-    );
-
+    private final ThreadLocal<Map<String, CollectionSchema>> importRuleCollections = new ThreadLocal<>();
     public CollectionRepository(JooqDatabase database, ObjectMapper mapper) {
         super(database, mapper);
     }
 
     private Condition collectionCondition(String collection) {
+        collection = SystemCollections.canonicalIdentifier(collection);
         return qfs("name").eq(collection).or(qfs("id").eq(collection));
+    }
+
+    private boolean collectionIdExists(String id) {
+        return database.dsl().fetchExists(
+                database.dsl().selectOne().from(qt("_collections")).where(qfs("id").eq(id))
+        );
     }
 
     public Map<String, Object> listCollections(Map<String, String> query) {
         try {
             Map<String, String> safeQuery = query == null ? Map.of() : query;
-            int page = parsePositive(safeQuery.get("page"), 1);
-            int perPage = parsePositive(safeQuery.get("perPage"), 100);
+            SearchQuerySupport.Parameters search = SearchQuerySupport.parse(safeQuery);
+            SearchFieldValidationSupport.validateCollections(search);
             List<Map<String, Object>> items = database.dsl()
                     .select(
                             qfs("id"), qfs("name"), qfs("type"), qfs("schema"),
+                            qfs("indexes"), qfs("created"), qfs("updated"),
                             qfi("system"), qfs("createRule"), qfs("listRule"),
                             qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
                     )
@@ -73,23 +87,26 @@ public class CollectionRepository extends BaseRepository {
                     .fetch()
                     .map(this::collectionMap);
             items = items.stream()
-                    .filter(collection -> matchesCollectionFilter(collection, safeQuery.get("filter")))
+                    .filter(collection -> matchesCollectionFilter(collection, search.filter()))
                     .collect(Collectors.toCollection(ArrayList::new));
-            sortCollections(items, safeQuery.get("sort"));
+            SearchQuerySupport.sortMaps(items, search.sort(), null);
             int total = items.size();
-            int from = Math.min(total, (page - 1) * perPage);
-            int to = Math.min(total, from + perPage);
+            int from = search.fromIndex(total);
+            int to = Math.min(total, from + search.perPage());
             List<Map<String, Object>> pageItems = items.subList(from, to).stream()
                     .map(item -> RecordProcessor.selectFields(item, safeQuery.get("fields")))
                     .collect(Collectors.toCollection(ArrayList::new));
-            int totalPages = perPage <= 0 ? 0 : (int) Math.ceil((double) total / perPage);
-            return Map.of("items", pageItems, "page", page, "perPage", perPage, "totalItems", total, "totalPages", totalPages);
+            return SearchQuerySupport.result(search, total, pageItems);
         } catch (DataAccessException e) {
             throw new RuntimeException("failed to list collections", e);
         }
     }
 
     public CollectionSchema createCollection(JsonNode body) {
+        return database.transactional(() -> createCollectionInternal(body));
+    }
+
+    private CollectionSchema createCollectionInternal(JsonNode body) {
         if (body == null || !body.isObject()) {
             throw new ApiException(400, "Collection payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
@@ -106,11 +123,47 @@ public class CollectionRepository extends BaseRepository {
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
 
-        if (colSchema.id == null || colSchema.id.isBlank()) {
-            colSchema.id = "pbc_" + IdGenerator.id();
+        String collectionType = colSchema.type == null || colSchema.type.isBlank()
+                ? "base"
+                : colSchema.type.trim().toLowerCase(java.util.Locale.ROOT);
+        colSchema.type = collectionType;
+        if (body.has("fields") || body.has("schema")) {
+            colSchema.fields = SchemaIdSupport.canonicalizeSubmittedFields(colSchema.fields);
         }
-        normalizeCollectionSchema(colSchema, rawOptions);
-        validateSchemaIdentifiers(colSchema, "Failed to create collection.");
+        if (colSchema.id == null || colSchema.id.isBlank()) {
+            colSchema.id = SchemaIdSupport.nextCollectionId(
+                    collectionType,
+                    colSchema.name,
+                    this::collectionIdExists
+            );
+        }
+        String timestamp = Instant.now().toString();
+        colSchema.created = timestamp;
+        colSchema.updated = timestamp;
+        normalizeCollectionSchema(colSchema, rawOptions, true);
+        AuthCollectionConfigMerge.mergeSubmitted(mapper, colSchema, new CollectionSchema(), body);
+        if ("view".equals(colSchema.type)) {
+            prepareViewCollection(colSchema, "Failed to create collection.");
+        }
+        CollectionModelValidation.validate(
+                null,
+                colSchema,
+                body,
+                allCollectionSchemas(),
+                this::physicalTableExists,
+                "Failed to create collection."
+        );
+        CollectionRuleSupport.validate(
+                colSchema,
+                "Failed to create collection.",
+                identifier -> resolveRuleCollection(colSchema, identifier)
+        );
+        colSchema.indexes = CollectionIndexSupport.normalize(
+                colSchema,
+                collectionIndexNames(null),
+                "Failed to create collection."
+        );
+        AuthCollectionConfigValidation.validate(colSchema, "Failed to create collection.");
         if (!"base".equals(colSchema.type) && !"auth".equals(colSchema.type) && !"view".equals(colSchema.type)) {
             throw new ApiException(400, "Unsupported collection type.", Map.of("type", Map.of("code", "validation_invalid_value", "message", "Supported types are base, auth and view.")));
         }
@@ -120,36 +173,30 @@ public class CollectionRepository extends BaseRepository {
         try {
             conn = database.connection();
 
-            int count = database.dsl(conn)
-                    .selectCount()
-                    .from(qt("_collections"))
-                    .where(collectionCondition(colSchema.name))
-                    .fetchOne(0, int.class);
-            if (count > 0) {
-                throw new ApiException(400, "Failed to create collection.", ApiErrors.notUniqueField("name"));
-            }
-
             database.dsl(conn)
                     .insertInto(qt("_collections"))
                     .columns(
                             qfs("id"), qfs("name"), qfs("type"), qfs("schema"),
+                            qfs("indexes"),
                             qfi("system"), qfs("createRule"), qfs("listRule"),
-                            qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
+                            qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options"),
+                            qfs("created"), qfs("updated")
                     )
                     .values(
                             colSchema.id, colSchema.name, colSchema.type,
                             mapper.writeValueAsString(colSchema.fields),
+                            mapper.writeValueAsString(colSchema.indexes),
                             colSchema.system ? 1 : 0,
                             colSchema.createRule, colSchema.listRule, colSchema.viewRule,
                             colSchema.updateRule, colSchema.deleteRule,
-                            mapper.writeValueAsString(rawOptions)
+                            mapper.writeValueAsString(rawOptions),
+                            colSchema.created, colSchema.updated
                     )
                     .execute();
 
             if ("view".equals(colSchema.type)) {
-                String viewQuery = rawOptions.containsKey("query") ? rawOptions.get("query").toString() : "SELECT 1";
                 try (Statement stmt = conn.createStatement()) {
-                    stmt.execute("CREATE VIEW " + qi(colSchema.name) + " AS " + viewQuery);
+                    stmt.execute("CREATE VIEW " + qi(colSchema.name) + " AS " + normalizedViewSelect(colSchema));
                 }
             } else {
                 var createTable = database.dsl(conn)
@@ -158,14 +205,14 @@ public class CollectionRepository extends BaseRepository {
                         .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                         .column(DSL.name("updated"), SQLDataType.VARCHAR(64));
                 for (FieldSchema field : colSchema.fields) {
+                    if ("id".equals(field.name)) {
+                        continue;
+                    }
                     createTable = createTable.column(DSL.name(field.name), FieldTypeMapping.sqlType(field.type));
-                }
-                if (isAuthUserCollection(colSchema) && !hasField(colSchema, "tokenKey")) {
-                    createTable = createTable.column(DSL.name("tokenKey"), SQLDataType.VARCHAR(255));
                 }
                 createTable.constraints(DSL.constraint(DSL.name("pk_" + colSchema.name)).primaryKey(DSL.name("id")))
                         .execute();
-                rebuildIndexes(conn, colSchema, colSchema.name);
+                createIndexes(conn, colSchema.indexes, colSchema.name, "Failed to create collection.");
             }
         } catch (SQLException | IOException | DataAccessException e) {
             handleSqlConstraintException(e);
@@ -189,7 +236,11 @@ public class CollectionRepository extends BaseRepository {
     }
 
     public CollectionSchema updateCollection(String collection, JsonNode body) {
-        requireCollectionExists(collection);
+        return database.transactional(() -> updateCollectionInternal(collection, body));
+    }
+
+    private CollectionSchema updateCollectionInternal(String collection, JsonNode body) {
+        CollectionSchema currentSchema = getCollectionSchema(collection);
         if (body == null || !body.isObject()) {
             throw new ApiException(400, "Collection payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
@@ -205,8 +256,48 @@ public class CollectionRepository extends BaseRepository {
             throw new ApiException(400, "Collection payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
-        normalizeCollectionSchema(newSchema, rawOptions);
-        validateSchemaIdentifiers(newSchema, "Failed to update collection.");
+        mergeCollectionPatch(currentSchema, newSchema, body);
+        if (body.has("fields") || body.has("schema")) {
+            newSchema.fields = SchemaIdSupport.canonicalizeSubmittedFields(newSchema.fields);
+        }
+        SchemaIdSupport.assignMissingFieldIds(newSchema.fields, currentSchema.fields);
+        if (!"view".equals(currentSchema.type) && (body.has("fields") || body.has("schema"))) {
+            CollectionFieldProtection.validateSystemFieldUpdate(
+                    currentSchema.fields,
+                    newSchema.fields,
+                    "Failed to update collection."
+            );
+        }
+        CollectionResponseSupport.preserveOAuth2ClientSecrets(currentSchema.oauth2, newSchema.oauth2);
+        normalizeCollectionSchema(newSchema, rawOptions, true);
+        AuthCollectionConfigMerge.mergeSubmitted(mapper, newSchema, currentSchema, body);
+        if ("view".equals(newSchema.type)) {
+            prepareViewCollection(newSchema, "Failed to update collection.");
+        }
+        CollectionModelValidation.validate(
+                currentSchema,
+                newSchema,
+                body,
+                allCollectionSchemas(),
+                this::physicalTableExists,
+                "Failed to update collection."
+        );
+        CollectionRuleSupport.validate(
+                newSchema,
+                "Failed to update collection.",
+                identifier -> resolveRuleCollection(newSchema, identifier)
+        );
+        newSchema.updated = Instant.now().toString();
+        newSchema.indexes = CollectionIndexSupport.normalize(
+                newSchema,
+                collectionIndexNames(currentSchema.id),
+                "Failed to update collection."
+        );
+        AuthCollectionConfigValidation.validate(newSchema, "Failed to update collection.");
+        AuthSystemCollections.applySaveInvariants(newSchema);
+        if ("auth".equals(newSchema.type) && authRuleChanged(currentSchema.authRule, newSchema.authRule)) {
+            newSchema.authToken.secret = IdGenerator.secret();
+        }
         rawOptions = collectionOptions(newSchema, rawOptions);
 
         Connection conn = null;
@@ -228,10 +319,9 @@ public class CollectionRepository extends BaseRepository {
             if (physicalName == null) throw new ApiException(404, "Collection not found.");
 
             if ("view".equals(newSchema.type)) {
-                String viewQuery = rawOptions.containsKey("query") ? rawOptions.get("query").toString() : "SELECT 1";
                 try (Statement stmt = conn.createStatement()) {
                     stmt.execute("DROP VIEW IF EXISTS " + qi(physicalName));
-                    stmt.execute("CREATE VIEW " + qi(newSchema.name) + " AS " + viewQuery);
+                    stmt.execute("CREATE VIEW " + qi(newSchema.name) + " AS " + normalizedViewSelect(newSchema));
                 }
             } else {
                 List<FieldSchema> oldFields = new ArrayList<>();
@@ -241,31 +331,45 @@ public class CollectionRepository extends BaseRepository {
 
                 DSLContext dsl = database.dsl(conn);
                 if (!physicalName.equals(newSchema.name)) {
-                    dsl.alterTable(DSL.name(physicalName))
-                            .renameTo(DSL.name(newSchema.name))
-                            .execute();
+                    renameTable(dsl, physicalName, newSchema.name);
                     physicalName = newSchema.name;
                 }
+
+                dropRemovedIndexes(
+                        conn,
+                        currentSchema.indexes,
+                        newSchema.indexes,
+                        physicalName,
+                        "Failed to update collection."
+                );
 
                 List<String> oldNames = oldFields.stream().map(f -> f.name).toList();
                 List<String> newNames = newSchema.fields.stream().map(f -> f.name).toList();
 
                 for (FieldSchema nf : newSchema.fields) {
-                    if (!oldNames.contains(nf.name)) {
+                    if (!"id".equals(nf.name)
+                            && !oldNames.contains(nf.name)
+                            && !columnExists(dsl, physicalName, nf.name)) {
                         dsl.alterTable(DSL.name(physicalName))
                                 .add(DSL.name(nf.name), FieldTypeMapping.sqlType(nf.type))
                                 .execute();
                     }
                 }
                 for (FieldSchema of : oldFields) {
-                    if (!newNames.contains(of.name)) {
+                    if (!newNames.contains(of.name) && !isRequiredPhysicalColumn(of.name)) {
                         dsl.alterTable(DSL.name(physicalName))
                                 .drop(DSL.name(of.name))
                                 .execute();
                     }
                 }
 
-                rebuildIndexes(conn, newSchema, physicalName);
+                createAddedIndexes(
+                        conn,
+                        currentSchema.indexes,
+                        newSchema.indexes,
+                        physicalName,
+                        "Failed to update collection."
+                );
             }
 
             database.dsl(conn)
@@ -273,6 +377,7 @@ public class CollectionRepository extends BaseRepository {
                     .set(qfs("name"), newSchema.name)
                     .set(qfs("type"), newSchema.type)
                     .set(qfs("schema"), mapper.writeValueAsString(newSchema.fields))
+                    .set(qfs("indexes"), mapper.writeValueAsString(newSchema.indexes))
                     .set(qfi("system"), newSchema.system ? 1 : 0)
                     .set(qfs("createRule"), newSchema.createRule)
                     .set(qfs("listRule"), newSchema.listRule)
@@ -280,6 +385,7 @@ public class CollectionRepository extends BaseRepository {
                     .set(qfs("updateRule"), newSchema.updateRule)
                     .set(qfs("deleteRule"), newSchema.deleteRule)
                     .set(qfs("options"), mapper.writeValueAsString(rawOptions))
+                    .set(qfs("updated"), newSchema.updated)
                     .where(collectionCondition(collection))
                     .execute();
 
@@ -298,20 +404,42 @@ public class CollectionRepository extends BaseRepository {
         return newSchema;
     }
 
+    private boolean isRequiredPhysicalColumn(String name) {
+        return "id".equals(name) || "created".equals(name) || "updated".equals(name);
+    }
+
+    private void renameTable(DSLContext dsl, String currentName, String nextName) {
+        if (currentName.equalsIgnoreCase(nextName)) {
+            String temporaryName = "_temp_" + IdGenerator.suffix();
+            dsl.alterTable(DSL.name(currentName))
+                    .renameTo(DSL.name(temporaryName))
+                    .execute();
+            dsl.alterTable(DSL.name(temporaryName))
+                    .renameTo(DSL.name(nextName))
+                    .execute();
+            return;
+        }
+        dsl.alterTable(DSL.name(currentName))
+                .renameTo(DSL.name(nextName))
+                .execute();
+    }
+
     public void deleteCollection(String collection) {
         Connection conn = null;
         try {
             conn = database.connection();
             String physicalName = null;
+            String collectionId = null;
             String type = null;
             boolean system = false;
 
             Record rs = database.dsl(conn)
-                    .select(qfs("name"), qfs("type"), qfi("system"))
+                    .select(qfs("id"), qfs("name"), qfs("type"), qfi("system"))
                     .from(qt("_collections"))
                     .where(collectionCondition(collection))
                     .fetchOne();
             if (rs != null) {
+                collectionId = rs.get(qfs("id"));
                 physicalName = rs.get(qfs("name"));
                 type = rs.get(qfs("type"));
                 system = Objects.equals(rs.get(qfi("system")), 1);
@@ -328,6 +456,7 @@ public class CollectionRepository extends BaseRepository {
                     .deleteFrom(qt("_collections"))
                     .where(collectionCondition(collection))
                     .execute();
+            deleteAuthSupportRecords(database.dsl(conn), collectionId);
 
             if ("view".equals(type)) {
                 database.dsl(conn).dropViewIfExists(DSL.name(physicalName)).execute();
@@ -357,8 +486,19 @@ public class CollectionRepository extends BaseRepository {
             database.dsl()
                     .deleteFrom(qt(schema.name))
                     .execute();
+            if ("auth".equals(schema.type)) {
+                deleteAuthSupportRecords(database.dsl(), schema.id);
+            }
         } catch (DataAccessException e) {
             throw new ApiException(400, "Failed to truncate collection: " + e.getMessage());
+        }
+    }
+
+    private void deleteAuthSupportRecords(DSLContext dsl, String collectionId) {
+        for (String table : List.of("_authOrigins", "_externalAuths", "_mfas", "_otps")) {
+            dsl.deleteFrom(qt(table))
+                    .where(qfs("collectionRef").eq(collectionId))
+                    .execute();
         }
     }
 
@@ -373,28 +513,109 @@ public class CollectionRepository extends BaseRepository {
         }
 
         List<CollectionSchema> newOrUpdated = new ArrayList<>();
+        List<CollectionSchema> existing = allCollectionSchemas();
+        Set<String> reservedIds = new LinkedHashSet<>();
         for (JsonNode item : collectionsNode) {
             try {
                 CollectionSchema collection = mapper.treeToValue(item, CollectionSchema.class);
+                collection.fields = SchemaIdSupport.canonicalizeSubmittedFields(collection.fields);
+                CollectionSchema current = findExistingCollectionForImport(collection);
+                if (current != null) {
+                    if (collection.id == null || collection.id.isBlank()) {
+                        collection.id = current.id;
+                    }
+                    collection.created = current.created;
+                    collection.updated = current.updated;
+                    SchemaIdSupport.assignMissingFieldIds(collection.fields, current.fields);
+                    if (!"view".equals(current.type)) {
+                        CollectionFieldProtection.validateSystemFieldUpdate(
+                                current.fields,
+                                collection.fields,
+                                "Failed to import collections."
+                        );
+                    }
+                } else if (collection.id == null || collection.id.isBlank()) {
+                    String type = collection.type == null || collection.type.isBlank()
+                            ? "base"
+                            : collection.type.trim().toLowerCase(java.util.Locale.ROOT);
+                    collection.id = SchemaIdSupport.nextCollectionId(
+                            type,
+                            collection.name,
+                            candidate -> collectionIdExists(candidate) || reservedIds.contains(candidate)
+                    );
+                    collection.created = Instant.now().toString();
+                    collection.updated = collection.created;
+                }
                 normalizeCollectionSchema(collection, item.has("options")
                         ? mapper.convertValue(item.get("options"), new TypeReference<Map<String, Object>>() {})
-                        : Map.of());
+                        : Map.of(), true);
+                AuthCollectionConfigMerge.mergeSubmitted(
+                        mapper,
+                        collection,
+                        current == null ? new CollectionSchema() : current,
+                        item
+                );
+                if ("view".equals(collection.type)) {
+                    prepareViewCollection(collection, "Failed to import collections.");
+                }
+                List<CollectionSchema> validationScope = new ArrayList<>(existing);
+                validationScope.addAll(newOrUpdated);
+                CollectionModelValidation.validate(
+                        current,
+                        collection,
+                        item,
+                        validationScope,
+                        this::physicalTableExists,
+                        "Failed to import collections."
+                );
                 newOrUpdated.add(collection);
+                reservedIds.add(collection.id);
             } catch (IOException e) {
                 throw new ApiException(400, "Failed to import collections.",
                         ApiErrors.invalidField("collections", "Invalid collection payload."));
             }
         }
         boolean deleteMissing = body.path("deleteMissing").asBoolean(false);
-        List<CollectionSchema> existing = database.dsl()
-                .select(
-                        qfs("id"), qfs("name"), qfs("schema"), qfs("type"),
-                        qfi("system"), qfs("createRule"), qfs("listRule"),
-                        qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
-                )
-                .from(qt("_collections"))
-                .fetch()
-                .map(record -> getCollectionSchema(record.get(qfs("id"))));
+        Map<String, CollectionSchema> availableCollections = new LinkedHashMap<>();
+        existing.stream()
+                .filter(collection -> !deleteMissing || collection.system)
+                .forEach(collection -> {
+                    availableCollections.put(collection.id, collection);
+                    availableCollections.put(collection.name, collection);
+                });
+        for (CollectionSchema imported : newOrUpdated) {
+            availableCollections.put(imported.id, imported);
+            availableCollections.put(imported.name, imported);
+        }
+        for (CollectionSchema imported : newOrUpdated) {
+            CollectionRuleSupport.validate(
+                    imported,
+                    "Failed to import collections.",
+                    availableCollections::get
+            );
+        }
+        Set<String> importedIndexNames = new LinkedHashSet<>();
+        for (CollectionSchema imported : newOrUpdated) {
+            CollectionSchema current = existing.stream()
+                    .filter(item -> Objects.equals(item.id, imported.id) || Objects.equals(item.name, imported.name))
+                    .findFirst()
+                    .orElse(null);
+            Set<String> externalNames = collectionIndexNames(current == null ? null : current.id);
+            externalNames.addAll(importedIndexNames);
+            imported.indexes = CollectionIndexSupport.normalize(
+                    imported,
+                    externalNames,
+                    "Failed to import collections."
+            );
+            AuthCollectionConfigValidation.validate(imported, "Failed to import collections.");
+            AuthSystemCollections.applySaveInvariants(imported);
+            for (String index : imported.indexes) {
+                String name = CollectionIndexSupport.indexName(index);
+                if (!name.isBlank()) {
+                    importedIndexNames.add(name);
+                }
+            }
+        }
         Set<String> desiredIds = newOrUpdated.stream()
                 .map(item -> item.id == null ? "" : item.id)
                 .filter(id -> !id.isBlank())
@@ -420,25 +641,39 @@ public class CollectionRepository extends BaseRepository {
             );
         }
 
-        return database.transactional(() -> {
-            for (CollectionSchema c : newOrUpdated) {
-                try {
-                    getCollection(c.id != null ? c.id : c.name, Map.of());
-                    updateCollection(c.id != null ? c.id : c.name, mapper.valueToTree(c));
-                } catch (ApiException e) {
-                    createCollection(mapper.valueToTree(c));
-                }
-            }
-            if (deleteMissing) {
-                for (CollectionSchema item : existing) {
-                    if (item.system || desiredIds.contains(item.id) || desiredNames.contains(item.name)) {
-                        continue;
+        importRuleCollections.set(availableCollections);
+        try {
+            return database.transactional(() -> {
+                for (CollectionSchema c : newOrUpdated) {
+                    boolean exists;
+                    try {
+                        getCollection(c.id != null ? c.id : c.name, Map.of());
+                        exists = true;
+                    } catch (ApiException e) {
+                        if (e.status() != 404) {
+                            throw e;
+                        }
+                        exists = false;
                     }
-                    deleteCollection(item.id != null && !item.id.isBlank() ? item.id : item.name);
+                    if (exists) {
+                        updateCollection(c.id != null ? c.id : c.name, mapper.valueToTree(c));
+                    } else {
+                        createCollection(mapper.valueToTree(c));
+                    }
                 }
-            }
-            return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
-        });
+                if (deleteMissing) {
+                    for (CollectionSchema item : existing) {
+                        if (item.system || desiredIds.contains(item.id) || desiredNames.contains(item.name)) {
+                            continue;
+                        }
+                        deleteCollection(item.id != null && !item.id.isBlank() ? item.id : item.name);
+                    }
+                }
+                return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
+            });
+        } finally {
+            importRuleCollections.remove();
+        }
     }
 
     private List<Map<String, Object>> migrationPlan(List<CollectionSchema> existing, List<CollectionSchema> desired, List<String> deleted) {
@@ -448,22 +683,37 @@ public class CollectionRepository extends BaseRepository {
                     .filter(item -> Objects.equals(item.id, next.id) || Objects.equals(item.name, next.name))
                     .findFirst()
                     .orElse(null);
-            plan.addAll(SchemaMigrationPlanner.plan(current, next, database::quoteIdentifier));
+            plan.addAll(SchemaMigrationPlanner.plan(current, next, database::quoteIdentifier, database.engine()));
         }
         for (String deletedName : deleted) {
             CollectionSchema current = existing.stream()
                     .filter(item -> Objects.equals(item.name, deletedName))
                     .findFirst()
                     .orElse(null);
-            plan.addAll(SchemaMigrationPlanner.plan(current, null, database::quoteIdentifier));
+            plan.addAll(SchemaMigrationPlanner.plan(current, null, database::quoteIdentifier, database.engine()));
         }
         return plan;
     }
 
+    private CollectionSchema findExistingCollectionForImport(CollectionSchema imported) {
+        String identifier = imported.id != null && !imported.id.isBlank() ? imported.id : imported.name;
+        if (identifier == null || identifier.isBlank()) {
+            return null;
+        }
+        try {
+            return getCollectionSchema(identifier);
+        } catch (ApiException e) {
+            if (e.status() == 404) {
+                return null;
+            }
+            throw e;
+        }
+    }
+
     public Map<String, Object> collectionScaffolds() {
-        Map<String, Object> base = mapper.convertValue(scaffoldCollection("base"), new TypeReference<Map<String, Object>>() {});
-        Map<String, Object> auth = mapper.convertValue(scaffoldCollection("auth"), new TypeReference<Map<String, Object>>() {});
-        Map<String, Object> view = mapper.convertValue(scaffoldCollection("view"), new TypeReference<Map<String, Object>>() {});
+        Map<String, Object> base = collectionMap(scaffoldCollection("base"));
+        Map<String, Object> auth = collectionMap(scaffoldCollection("auth"));
+        Map<String, Object> view = collectionMap(scaffoldCollection("view"));
         view.put("viewQuery", "");
         return orderedMap(
                 "base", base,
@@ -495,54 +745,35 @@ public class CollectionRepository extends BaseRepository {
         }
 
         try {
-            List<String> statements = splitSqlStatements(query).stream()
-                    .map(String::trim)
-                    .filter(statement -> !statement.isBlank())
-                    .collect(Collectors.toCollection(ArrayList::new));
-            if (statements.isEmpty()) {
-                throw new IllegalArgumentException("empty query");
-            }
-            if (statements.stream().anyMatch(this::isWriteStatement)) {
-                throw new IllegalArgumentException("write statements are not allowed");
-            }
-
-            List<Map<String, Object>> columns = List.of();
-            List<List<Object>> rows = List.of();
-            for (String statement : statements) {
-                var result = database.dsl().fetch(statement);
-                columns = new ArrayList<>();
-                for (var field : result.fields()) {
-                    Map<String, Object> column = new LinkedHashMap<>();
-                    column.put("name", field.getName());
-                    column.put("type", "");
-                    column.put("nullable", true);
-                    columns.add(column);
-                }
-                rows = new ArrayList<>();
-                int limit = Math.min(MAX_VIEW_ROWS, result.size());
-                for (int rowIndex = 0; rowIndex < limit; rowIndex++) {
-                    org.jooq.Record rowRecord = result.get(rowIndex);
-                    List<Object> row = new ArrayList<>();
-                    for (int fieldIndex = 0; fieldIndex < result.fields().length; fieldIndex++) {
-                        row.add(rowRecord.get(fieldIndex));
-                    }
-                    rows.add(row);
-                }
-            }
-
-            return orderedMap(
-                    "columns", columns,
-                    "rows", rows
-            );
+            return previewViewQuery(query, MAX_VIEW_ROWS);
         } catch (RuntimeException e) {
-            String message = "Invalid view query. Raw error:\n"
+            String message = "Invalid view query. Raw error: \n"
                     + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-            throw new ApiException(
-                    400,
-                    message,
-                    ApiErrors.invalidField("query", message)
-            );
+            throw new ApiException(400, message, Map.of());
         }
+    }
+
+    private Map<String, Object> previewViewQuery(String query, int sampleSize) {
+        String statement = ViewQuerySupport.normalizeSingleSelect(query);
+        var result = database.dsl().fetch(
+                "SELECT * FROM (" + statement + ") AS pb_dry_run LIMIT " + sampleSize
+        );
+        List<ViewQuerySupport.Column> columns = new ArrayList<>();
+        for (var field : result.fields()) {
+            columns.add(new ViewQuerySupport.Column(
+                    field.getName(),
+                    ViewQuerySupport.typeForJavaClass(field.getName(), field.getType())
+            ));
+        }
+        List<List<Object>> rows = new ArrayList<>();
+        for (org.jooq.Record rowRecord : result) {
+            List<Object> row = new ArrayList<>();
+            for (int fieldIndex = 0; fieldIndex < result.fields().length; fieldIndex++) {
+                row.add(rowRecord.get(fieldIndex));
+            }
+            rows.add(row);
+        }
+        return ViewQuerySupport.result(columns, rows);
     }
 
     public List<Map<String, Object>> oauth2ProviderMetadata() {
@@ -575,6 +806,7 @@ public class CollectionRepository extends BaseRepository {
             Record rs = database.dsl()
                     .select(
                             qfs("id"), qfs("name"), qfs("schema"), qfs("type"),
+                            qfs("indexes"), qfs("created"), qfs("updated"),
                             qfi("system"), qfs("createRule"), qfs("listRule"),
                             qfs("viewRule"), qfs("updateRule"), qfs("deleteRule"), qfs("options")
                     )
@@ -592,16 +824,22 @@ public class CollectionRepository extends BaseRepository {
                 col.viewRule = rs.get(qfs("viewRule"));
                 col.updateRule = rs.get(qfs("updateRule"));
                 col.deleteRule = rs.get(qfs("deleteRule"));
+                col.created = rs.get(qfs("created"));
+                col.updated = rs.get(qfs("updated"));
                 String schemaJson = rs.get(qfs("schema"));
                 if (schemaJson != null && !schemaJson.isBlank()) {
                     col.fields = mapper.readValue(schemaJson, new TypeReference<List<FieldSchema>>() {});
+                }
+                String indexesJson = rs.get(qfs("indexes"));
+                if (indexesJson != null && !indexesJson.isBlank()) {
+                    col.indexes = mapper.readValue(indexesJson, new TypeReference<List<String>>() {});
                 }
                 String optionsJson = rs.get(qfs("options"));
                 Map<String, Object> rawOptions = Map.of();
                 if (optionsJson != null && !optionsJson.isBlank()) {
                     rawOptions = mapper.readValue(optionsJson, new TypeReference<Map<String, Object>>() {});
                 }
-                normalizeCollectionSchema(col, rawOptions);
+                normalizeCollectionSchema(col, rawOptions, false);
                 if (col.system && "_superusers".equals(col.name) && (col.fields == null || col.fields.isEmpty())) {
                     col.fields = new ArrayList<>();
                     col.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
@@ -616,46 +854,142 @@ public class CollectionRepository extends BaseRepository {
         throw new ApiException(404, "Collection not found.");
     }
 
-    private void validateSchemaIdentifiers(CollectionSchema schema, String message) {
-        validateCollectionIdentifier(schema.name, "name", message);
-        if (schema.fields != null) {
-            for (FieldSchema field : schema.fields) {
-                validateCollectionIdentifier(field.name, field.name == null || field.name.isBlank() ? "schema" : field.name, message);
+    private CollectionSchema resolveRuleCollection(CollectionSchema candidate, String nameOrId) {
+        if (candidate != null && (Objects.equals(candidate.id, nameOrId) || Objects.equals(candidate.name, nameOrId))) {
+            return candidate;
+        }
+        Map<String, CollectionSchema> scoped = importRuleCollections.get();
+        if (scoped != null) {
+            CollectionSchema collection = scoped.get(nameOrId);
+            if (collection != null) {
+                return collection;
             }
         }
-    }
-
-    private void validateCollectionIdentifier(String value, String field, String message) {
-        if (value == null || value.isBlank()) {
-            throw new ApiException(400, message, ApiErrors.requiredField(field));
-        }
-        if (!IDENTIFIER_PATTERN.matcher(value).matches()) {
-            throw new ApiException(400, message, ApiErrors.fieldError(
-                    field,
-                    "validation_invalid_format",
-                    "Use letters, numbers and underscore."
-            ));
+        try {
+            return getCollectionSchema(nameOrId);
+        } catch (ApiException e) {
+            if (e.status() == 404) {
+                return null;
+            }
+            throw e;
         }
     }
 
-    private void rebuildIndexes(Connection conn, CollectionSchema schema, String physicalName) throws SQLException {
-        if (schema.indexes != null) {
-            try (Statement stmt = conn.createStatement()) {
-                for (String q : schema.indexes) {
-                    if (q.toUpperCase().startsWith("CREATE ")) {
-                        try {
-                            stmt.execute(q);
-                        } catch (SQLException ignored) {
-                        }
-                    } else if (q.toUpperCase().startsWith("DROP ")) {
-                        try {
-                            stmt.execute(q);
-                        } catch (SQLException ignored) {
-                        }
+    private List<CollectionSchema> allCollectionSchemas() {
+        return database.dsl()
+                .select(qfs("id"))
+                .from(qt("_collections"))
+                .fetch(qfs("id"), String.class)
+                .stream()
+                .map(this::getCollectionSchema)
+                .toList();
+    }
+
+    private boolean physicalTableExists(String name) {
+        return name != null && database.dsl().meta().getTables().stream()
+                .anyMatch(table -> table.getName().equalsIgnoreCase(name));
+    }
+
+    private Set<String> collectionIndexNames(String excludedCollectionId) {
+        Set<String> names = new LinkedHashSet<>();
+        var rows = database.dsl()
+                .select(qfs("id"), qfs("indexes"))
+                .from(qt("_collections"))
+                .fetch();
+        for (Record row : rows) {
+            if (Objects.equals(row.get(qfs("id")), excludedCollectionId)) {
+                continue;
+            }
+            String rawIndexes = row.get(qfs("indexes"));
+            if (rawIndexes == null || rawIndexes.isBlank()) {
+                continue;
+            }
+            try {
+                for (String index : mapper.readValue(rawIndexes, new TypeReference<List<String>>() {})) {
+                    String name = CollectionIndexSupport.indexName(index);
+                    if (!name.isBlank()) {
+                        names.add(name);
                     }
                 }
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to read collection index metadata", e);
             }
         }
+        return names;
+    }
+
+    private void createIndexes(Connection conn, List<String> indexes, String table, String message) {
+        List<String> safeIndexes = indexes == null ? List.of() : indexes;
+        for (int i = 0; i < safeIndexes.size(); i++) {
+            executeIndexSql(
+                    conn,
+                    CollectionIndexSupport.createSql(safeIndexes.get(i), table, database::quoteIdentifier),
+                    message,
+                    i
+            );
+        }
+    }
+
+    private void dropRemovedIndexes(
+            Connection conn,
+            List<String> current,
+            List<String> desired,
+            String table,
+            String message
+    ) {
+        List<String> desiredIndexes = desired == null ? List.of() : desired;
+        List<String> currentIndexes = current == null ? List.of() : current;
+        for (int i = 0; i < currentIndexes.size(); i++) {
+            String index = currentIndexes.get(i);
+            if (!desiredIndexes.contains(index)) {
+                executeIndexSql(
+                        conn,
+                        CollectionIndexSupport.dropSql(index, table, database.engine(), database::quoteIdentifier),
+                        message,
+                        i
+                );
+            }
+        }
+    }
+
+    private void createAddedIndexes(
+            Connection conn,
+            List<String> current,
+            List<String> desired,
+            String table,
+            String message
+    ) {
+        List<String> currentIndexes = current == null ? List.of() : current;
+        List<String> desiredIndexes = desired == null ? List.of() : desired;
+        for (int i = 0; i < desiredIndexes.size(); i++) {
+            String index = desiredIndexes.get(i);
+            if (!currentIndexes.contains(index)) {
+                executeIndexSql(
+                        conn,
+                        CollectionIndexSupport.createSql(index, table, database::quoteIdentifier),
+                        message,
+                        i
+                );
+            }
+        }
+    }
+
+    private void executeIndexSql(Connection conn, String sql, String message, int index) {
+        if (sql == null || sql.isBlank()) {
+            throw indexApiException(message, index, "Invalid CREATE INDEX expression.");
+        }
+        try (Statement statement = conn.createStatement()) {
+            statement.execute(sql);
+        } catch (SQLException e) {
+            throw indexApiException(message, index, e.getMessage() == null ? "Invalid CREATE INDEX expression." : e.getMessage());
+        }
+    }
+
+    private ApiException indexApiException(String message, int index, String error) {
+        return new ApiException(400, message, Map.of(
+                "indexes",
+                Map.of(String.valueOf(index), ApiErrors.validationError("validation_invalid_index_expression", error))
+        ));
     }
 
     private Map<String, Object> collectionMap(Record rs) {
@@ -677,6 +1011,18 @@ public class CollectionRepository extends BaseRepository {
             col.put("fields", List.of());
             col.put("schema", List.of());
         }
+        String indexesJson = rs.get(qfs("indexes"));
+        if (indexesJson != null && !indexesJson.isBlank()) {
+            try {
+                col.put("indexes", mapper.readValue(indexesJson, List.class));
+            } catch (IOException e) {
+                col.put("indexes", List.of());
+            }
+        } else {
+            col.put("indexes", List.of());
+        }
+        col.put("created", rs.get(qfs("created")));
+        col.put("updated", rs.get(qfs("updated")));
         col.put("system", rs.get(qfi("system")) == 1);
         col.put("createRule", rs.get(qfs("createRule")));
         col.put("listRule", rs.get(qfs("listRule")));
@@ -694,19 +1040,31 @@ public class CollectionRepository extends BaseRepository {
         } else {
             options = Map.of();
         }
-        col.put("options", options);
+        Map<String, Object> responseOptions = new LinkedHashMap<>();
+        options.forEach((key, value) -> responseOptions.put(String.valueOf(key), nullableJsonValue(value)));
+        col.put("options", responseOptions);
         if ("auth".equals(col.get("type"))) {
-            copyOption(col, options, "passwordAuth");
-            copyOption(col, options, "otp");
-            copyOption(col, options, "mfa");
-            copyOption(col, options, "oauth2");
-            copyOption(col, options, "authToken");
-            copyOption(col, options, "passwordResetToken");
-            copyOption(col, options, "verificationToken");
-            copyOption(col, options, "emailChangeToken");
-            copyOption(col, options, "fileToken");
+            copyOption(col, responseOptions, "passwordAuth");
+            copyOption(col, responseOptions, "otp");
+            copyOption(col, responseOptions, "mfa");
+            copyOption(col, responseOptions, "oauth2");
+            copyOption(col, responseOptions, "authToken");
+            copyOption(col, responseOptions, "passwordResetToken");
+            copyOption(col, responseOptions, "verificationToken");
+            copyOption(col, responseOptions, "emailChangeToken");
+            copyOption(col, responseOptions, "fileToken");
+            copyOption(col, responseOptions, "authAlert");
+            copyOption(col, responseOptions, "verificationTemplate");
+            copyOption(col, responseOptions, "resetPasswordTemplate");
+            copyOption(col, responseOptions, "confirmEmailChangeTemplate");
+            copyOption(col, responseOptions, "authRule");
+            copyOption(col, responseOptions, "manageRule");
         }
-        return col;
+        if ("view".equals(col.get("type"))) {
+            Object viewQuery = options.containsKey("viewQuery") ? options.get("viewQuery") : options.get("query");
+            col.put("viewQuery", viewQuery == null ? "" : String.valueOf(viewQuery));
+        }
+        return CollectionResponseSupport.redactSecrets(col);
     }
 
     private void copyOption(Map<String, Object> collection, Map<?, ?> options, String key) {
@@ -716,7 +1074,16 @@ public class CollectionRepository extends BaseRepository {
     }
 
     private Map<String, Object> collectionMap(CollectionSchema collection) {
-        return mapper.convertValue(collection, new TypeReference<Map<String, Object>>() {});
+        Map<String, Object> result = mapper.convertValue(collection, new TypeReference<Map<String, Object>>() {});
+        if ("auth".equals(collection.type)) {
+            result.put("authRule", nullableJsonValue(collection.authRule));
+            result.put("manageRule", nullableJsonValue(collection.manageRule));
+        }
+        return CollectionResponseSupport.redactSecrets(result);
+    }
+
+    private Object nullableJsonValue(Object value) {
+        return value == null ? NullNode.instance : value;
     }
 
     private boolean matchesCollectionFilter(Map<String, Object> collection, String filter) {
@@ -729,50 +1096,101 @@ public class CollectionRepository extends BaseRepository {
         );
     }
 
-    private void sortCollections(List<Map<String, Object>> items, String sort) {
-        if (sort == null || sort.isBlank()) {
-            return;
+    private void mergeCollectionPatch(CollectionSchema current, CollectionSchema patch, JsonNode body) {
+        patch.id = current.id;
+        patch.system = current.system;
+        patch.created = current.created;
+        patch.updated = current.updated;
+        if (!body.has("name")) patch.name = current.name;
+        if (!body.has("type")) patch.type = current.type;
+        if (!body.has("fields") && !body.has("schema")) patch.fields = current.fields;
+        if (!body.has("indexes")) patch.indexes = current.indexes;
+        if (!body.has("listRule")) patch.listRule = current.listRule;
+        if (!body.has("viewRule")) patch.viewRule = current.viewRule;
+        if (!body.has("createRule")) patch.createRule = current.createRule;
+        if (!body.has("updateRule")) patch.updateRule = current.updateRule;
+        if (!body.has("deleteRule")) patch.deleteRule = current.deleteRule;
+        if (!body.has("viewQuery") && !hasOption(body, "viewQuery") && !hasOption(body, "query")) {
+            patch.viewQuery = current.viewQuery;
         }
-        List<String> parts = List.of(sort.split(","));
-        items.sort((left, right) -> {
-            for (String part : parts) {
-                String trimmed = part.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                boolean desc = trimmed.startsWith("-");
-                String key = desc ? trimmed.substring(1) : trimmed;
-                String leftValue = String.valueOf(left.getOrDefault(key, ""));
-                String rightValue = String.valueOf(right.getOrDefault(key, ""));
-                int compare = leftValue.compareTo(rightValue);
-                if (compare != 0) {
-                    return desc ? -compare : compare;
-                }
-            }
-            return 0;
-        });
+        if (!body.has("passwordAuth") && !hasOption(body, "passwordAuth")) patch.passwordAuth = current.passwordAuth;
+        if (!body.has("otp") && !hasOption(body, "otp")) patch.otp = current.otp;
+        if (!body.has("mfa") && !hasOption(body, "mfa")) patch.mfa = current.mfa;
+        if (!body.has("oauth2") && !hasOption(body, "oauth2")) patch.oauth2 = current.oauth2;
+        if (!body.has("authToken") && !hasOption(body, "authToken")) patch.authToken = current.authToken;
+        if (!body.has("passwordResetToken") && !hasOption(body, "passwordResetToken")) patch.passwordResetToken = current.passwordResetToken;
+        if (!body.has("verificationToken") && !hasOption(body, "verificationToken")) patch.verificationToken = current.verificationToken;
+        if (!body.has("emailChangeToken") && !hasOption(body, "emailChangeToken")) patch.emailChangeToken = current.emailChangeToken;
+        if (!body.has("fileToken") && !hasOption(body, "fileToken")) patch.fileToken = current.fileToken;
+        if (!body.has("authAlert") && !hasOption(body, "authAlert")) patch.authAlert = current.authAlert;
+        if (!body.has("verificationTemplate") && !hasOption(body, "verificationTemplate")) patch.verificationTemplate = current.verificationTemplate;
+        if (!body.has("resetPasswordTemplate") && !hasOption(body, "resetPasswordTemplate")) patch.resetPasswordTemplate = current.resetPasswordTemplate;
+        if (!body.has("confirmEmailChangeTemplate") && !hasOption(body, "confirmEmailChangeTemplate")) patch.confirmEmailChangeTemplate = current.confirmEmailChangeTemplate;
+        if (!body.has("authRule") && !hasOption(body, "authRule")) patch.authRule = current.authRule;
+        if (!body.has("manageRule") && !hasOption(body, "manageRule")) patch.manageRule = current.manageRule;
     }
 
-    private int parsePositive(String value, int fallback) {
-        if (value == null || value.isBlank()) {
-            return fallback;
+    private boolean hasOption(JsonNode body, String name) {
+        return body.has("options") && body.path("options").isObject() && body.path("options").has(name);
+    }
+
+    private void prepareViewCollection(CollectionSchema schema, String message) {
+        schema.fields = new ArrayList<>();
+        if (schema.viewQuery == null || schema.viewQuery.isBlank()) {
+            throw new ApiException(400, message, ApiErrors.requiredField("viewQuery"));
         }
         try {
-            return Math.max(1, Integer.parseInt(value));
-        } catch (NumberFormatException e) {
-            return fallback;
+            Map<String, Object> preview = previewViewQuery(schema.viewQuery, MAX_VIEW_ROWS);
+            schema.fields = mapper.convertValue(preview.get("fields"), new TypeReference<>() {
+            });
+            for (FieldSchema field : schema.fields) {
+                field.type = field.type == null || field.type.isBlank()
+                        ? "text"
+                        : field.type.trim().toLowerCase(java.util.Locale.ROOT);
+            }
+            SchemaIdSupport.assignMissingFieldIds(schema.fields, List.of());
+        } catch (RuntimeException e) {
+            String rawError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            if (rawError.length() > 500) {
+                rawError = rawError.substring(0, 500);
+            }
+            throw new ApiException(
+                    400,
+                    message,
+                    ApiErrors.fieldError("viewQuery", "validation_invalid_view_query", "Invalid query - " + rawError)
+            );
         }
+    }
+
+    private String normalizedViewSelect(CollectionSchema schema) {
+        return ViewQuerySupport.normalizeSingleSelect(schema.viewQuery);
     }
 
     @SuppressWarnings("unchecked")
-    private void normalizeCollectionSchema(CollectionSchema schema, Map<String, Object> rawOptions) {
+    private void normalizeCollectionSchema(CollectionSchema schema, Map<String, Object> rawOptions, boolean ensureSecrets) {
         if (schema.type == null || schema.type.isBlank()) {
             schema.type = "base";
         }
         if (schema.fields == null) {
             schema.fields = new ArrayList<>();
         }
+        for (FieldSchema field : schema.fields) {
+            if (field != null) {
+                field.type = field.type == null || field.type.isBlank()
+                        ? "text"
+                        : field.type.trim().toLowerCase(java.util.Locale.ROOT);
+            }
+        }
+        if (schema.indexes == null) {
+            schema.indexes = new ArrayList<>();
+        }
         if (rawOptions != null) {
+            if ((schema.viewQuery == null || schema.viewQuery.isBlank()) && rawOptions.containsKey("viewQuery")) {
+                schema.viewQuery = String.valueOf(rawOptions.get("viewQuery"));
+            }
+            if ((schema.viewQuery == null || schema.viewQuery.isBlank()) && rawOptions.containsKey("query")) {
+                schema.viewQuery = String.valueOf(rawOptions.get("query"));
+            }
             if (rawOptions.containsKey("passwordAuth")) {
                 schema.passwordAuth = mapper.convertValue(rawOptions.get("passwordAuth"), CollectionSchema.PasswordAuthConfig.class);
             }
@@ -800,6 +1218,24 @@ public class CollectionRepository extends BaseRepository {
             if (rawOptions.containsKey("fileToken")) {
                 schema.fileToken = mapper.convertValue(rawOptions.get("fileToken"), CollectionSchema.TokenConfig.class);
             }
+            if (rawOptions.containsKey("authAlert")) {
+                schema.authAlert = mapper.convertValue(rawOptions.get("authAlert"), CollectionSchema.AuthAlertConfig.class);
+            }
+            if (rawOptions.containsKey("verificationTemplate")) {
+                schema.verificationTemplate = mapper.convertValue(rawOptions.get("verificationTemplate"), CollectionSchema.EmailTemplate.class);
+            }
+            if (rawOptions.containsKey("resetPasswordTemplate")) {
+                schema.resetPasswordTemplate = mapper.convertValue(rawOptions.get("resetPasswordTemplate"), CollectionSchema.EmailTemplate.class);
+            }
+            if (rawOptions.containsKey("confirmEmailChangeTemplate")) {
+                schema.confirmEmailChangeTemplate = mapper.convertValue(rawOptions.get("confirmEmailChangeTemplate"), CollectionSchema.EmailTemplate.class);
+            }
+            if (rawOptions.containsKey("authRule")) {
+                schema.authRule = rawOptions.get("authRule") == null ? null : String.valueOf(rawOptions.get("authRule"));
+            }
+            if (rawOptions.containsKey("manageRule")) {
+                schema.manageRule = rawOptions.get("manageRule") == null ? null : String.valueOf(rawOptions.get("manageRule"));
+            }
         }
         if (schema.passwordAuth == null) {
             schema.passwordAuth = new CollectionSchema.PasswordAuthConfig();
@@ -808,26 +1244,33 @@ public class CollectionRepository extends BaseRepository {
         if (schema.otp == null) {
             schema.otp = new CollectionSchema.OtpConfig();
         }
-        schema.otp.duration = Math.max(60L, schema.otp.duration <= 0 ? 300L : schema.otp.duration);
-        schema.otp.length = Math.max(4, Math.min(12, schema.otp.length <= 0 ? 6 : schema.otp.length));
+        schema.otp.emailTemplate = normalizeEmailTemplate(schema.otp.emailTemplate, CollectionSchema.EmailTemplate.otp());
         if (schema.mfa == null) {
             schema.mfa = new CollectionSchema.MfaConfig();
         }
-        schema.mfa.duration = Math.max(60L, schema.mfa.duration <= 0 ? 1800L : schema.mfa.duration);
+        if (schema.authAlert == null) {
+            schema.authAlert = new CollectionSchema.AuthAlertConfig();
+        }
+        schema.authAlert.emailTemplate = normalizeEmailTemplate(schema.authAlert.emailTemplate, CollectionSchema.EmailTemplate.authAlert());
+        schema.verificationTemplate = normalizeEmailTemplate(schema.verificationTemplate, CollectionSchema.EmailTemplate.verification());
+        schema.resetPasswordTemplate = normalizeEmailTemplate(schema.resetPasswordTemplate, CollectionSchema.EmailTemplate.passwordReset());
+        schema.confirmEmailChangeTemplate = normalizeEmailTemplate(schema.confirmEmailChangeTemplate, CollectionSchema.EmailTemplate.emailChange());
         if (schema.oauth2 == null) {
             schema.oauth2 = new CollectionSchema.OAuth2Config();
         }
         normalizeOAuth2Config(schema.oauth2);
-        schema.authToken = normalizeTokenConfig(schema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
-        schema.passwordResetToken = normalizeTokenConfig(schema.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION);
-        schema.verificationToken = normalizeTokenConfig(schema.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION);
-        schema.emailChangeToken = normalizeTokenConfig(schema.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION);
-        schema.fileToken = normalizeTokenConfig(schema.fileToken, CollectionSchema.DEFAULT_FILE_TOKEN_DURATION);
-        if (isAuthUserCollection(schema)) {
-            ensureAuthField(schema, new FieldSchema("field_email", "email", "email", true, true, false));
-            ensureAuthField(schema, new FieldSchema("field_password", "password", "password", true, false, true));
-            ensureAuthField(schema, new FieldSchema("field_verified", "verified", "bool", false, false, false));
+        schema.authToken = normalizeTokenConfig(schema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION, ensureSecrets);
+        schema.passwordResetToken = normalizeTokenConfig(schema.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION, ensureSecrets);
+        schema.verificationToken = normalizeTokenConfig(schema.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION, ensureSecrets);
+        schema.emailChangeToken = normalizeTokenConfig(schema.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION, ensureSecrets);
+        schema.fileToken = normalizeTokenConfig(schema.fileToken, CollectionSchema.DEFAULT_FILE_TOKEN_DURATION, ensureSecrets);
+        if ("base".equals(schema.type)) {
+            SchemaIdSupport.ensureBaseIdField(schema.fields);
+        } else if ("auth".equals(schema.type)) {
+            AuthCollectionFields.normalize(schema);
         }
+        OAuth2FieldMappingSupport.normalize(schema);
+        SchemaIdSupport.assignMissingFieldIds(schema.fields, List.of());
     }
 
     private Map<String, Object> collectionOptions(CollectionSchema schema, Map<String, Object> rawOptions) {
@@ -842,45 +1285,57 @@ public class CollectionRepository extends BaseRepository {
             options.put("verificationToken", mapper.convertValue(schema.verificationToken, Map.class));
             options.put("emailChangeToken", mapper.convertValue(schema.emailChangeToken, Map.class));
             options.put("fileToken", mapper.convertValue(schema.fileToken, Map.class));
+            options.put("authAlert", mapper.convertValue(schema.authAlert, Map.class));
+            options.put("verificationTemplate", mapper.convertValue(schema.verificationTemplate, Map.class));
+            options.put("resetPasswordTemplate", mapper.convertValue(schema.resetPasswordTemplate, Map.class));
+            options.put("confirmEmailChangeTemplate", mapper.convertValue(schema.confirmEmailChangeTemplate, Map.class));
+            options.put("authRule", schema.authRule == null ? NullNode.instance : schema.authRule);
+            options.put("manageRule", schema.manageRule == null ? NullNode.instance : schema.manageRule);
+        }
+        if ("view".equals(schema.type)) {
+            options.put("viewQuery", schema.viewQuery);
+            options.put("query", schema.viewQuery);
         }
         return options;
     }
 
-    private void ensureAuthField(CollectionSchema schema, FieldSchema field) {
-        if (!hasField(schema, field.name)) {
-            field.system = true;
-            schema.fields.add(field);
+    private CollectionSchema.EmailTemplate normalizeEmailTemplate(
+            CollectionSchema.EmailTemplate template,
+            CollectionSchema.EmailTemplate fallback
+    ) {
+        CollectionSchema.EmailTemplate normalized = template == null ? new CollectionSchema.EmailTemplate() : template;
+        if (normalized.subject == null || normalized.subject.isBlank()) {
+            normalized.subject = fallback.subject;
         }
+        if (normalized.body == null || normalized.body.isBlank()) {
+            normalized.body = fallback.body;
+        }
+        return normalized;
     }
 
-    private boolean hasField(CollectionSchema schema, String name) {
-        if (schema.fields == null) return false;
-        for (FieldSchema field : schema.fields) {
-            if (name.equals(field.name)) {
-                return true;
-            }
+    private boolean columnExists(DSLContext dsl, String table, String column) {
+        try {
+            dsl.select(DSL.field(DSL.name(column)))
+                    .from(DSL.table(DSL.name(table)))
+                    .where(DSL.falseCondition())
+                    .fetch();
+            return true;
+        } catch (DataAccessException ignored) {
+            return false;
         }
-        return false;
-    }
-
-    private boolean isAuthUserCollection(CollectionSchema schema) {
-        return schema != null && "auth".equals(schema.type) && !"_superusers".equals(schema.name);
     }
 
     private void normalizePasswordAuthConfig(CollectionSchema.PasswordAuthConfig config) {
-        if (config.identityFields == null || config.identityFields.isEmpty()) {
+        if (config.identityFields == null) {
             config.identityFields = new ArrayList<>(List.of("email"));
             return;
         }
         LinkedHashSet<String> identities = new LinkedHashSet<>();
         for (String field : config.identityFields) {
             String value = field == null ? "" : field.trim();
-            if ("email".equals(value) || "username".equals(value)) {
+            if (!value.isBlank()) {
                 identities.add(value);
             }
-        }
-        if (identities.isEmpty()) {
-            identities.add("email");
         }
         config.identityFields = new ArrayList<>(identities);
     }
@@ -890,23 +1345,21 @@ public class CollectionRepository extends BaseRepository {
             config.providers = new ArrayList<>();
             return;
         }
-        LinkedHashSet<String> names = new LinkedHashSet<>();
         List<CollectionSchema.OAuth2ProviderConfig> normalizedProviders = new ArrayList<>();
         for (CollectionSchema.OAuth2ProviderConfig provider : config.providers) {
-            if (provider == null || provider.name == null || provider.name.isBlank()) {
+            if (provider == null) {
+                normalizedProviders.add(null);
                 continue;
             }
             OAuth2ProviderManager.ProviderMetadata metadata = OAuth2ProviderManager.providerMetadata(provider.name);
-            if (metadata == null || !names.add(metadata.name())) {
-                continue;
-            }
             CollectionSchema.OAuth2ProviderConfig normalized = new CollectionSchema.OAuth2ProviderConfig();
-            normalized.name = metadata.name();
+            normalized.name = metadata == null ? provider.name : metadata.name();
             normalized.clientId = textSetting(provider.clientId);
             normalized.clientSecret = textSetting(provider.clientSecret);
             normalized.authURL = textSetting(provider.authURL);
             normalized.tokenURL = textSetting(provider.tokenURL);
             normalized.userInfoURL = textSetting(provider.userInfoURL);
+            normalized.displayName = textSetting(provider.displayName);
             normalized.pkce = provider.pkce;
             normalized.scopes = provider.scopes == null
                     ? new ArrayList<>()
@@ -915,7 +1368,9 @@ public class CollectionRepository extends BaseRepository {
                     .map(String::trim)
                     .filter(scope -> !scope.isBlank())
                     .collect(Collectors.toCollection(ArrayList::new));
-            OAuth2ProviderManager.validateConfig(normalized);
+            normalized.extra = provider.extra == null
+                    ? new LinkedHashMap<>()
+                    : new LinkedHashMap<>(provider.extra);
             normalizedProviders.add(normalized);
         }
         config.providers = normalizedProviders;
@@ -928,10 +1383,10 @@ public class CollectionRepository extends BaseRepository {
         collection.type = type;
         collection.system = false;
         collection.fields = new ArrayList<>();
-        if ("auth".equals(type)) {
-            collection.fields.add(new FieldSchema("field_email", "email", "email", true, true, false));
-            collection.fields.add(new FieldSchema("field_password", "password", "password", true, false, true));
-            collection.fields.add(new FieldSchema("field_verified", "verified", "bool", false, false, false));
+        if ("base".equals(type)) {
+            SchemaIdSupport.ensureBaseIdField(collection.fields);
+        } else if ("auth".equals(type)) {
+            AuthCollectionFields.normalize(collection);
         }
         return collection;
     }
@@ -948,74 +1403,162 @@ public class CollectionRepository extends BaseRepository {
         return value == null ? "" : value.trim();
     }
 
-    private CollectionSchema.TokenConfig normalizeTokenConfig(CollectionSchema.TokenConfig config, long fallbackDuration) {
+    private CollectionSchema.TokenConfig normalizeTokenConfig(
+            CollectionSchema.TokenConfig config,
+            long fallbackDuration,
+            boolean ensureSecret
+    ) {
         CollectionSchema.TokenConfig normalized = config == null ? new CollectionSchema.TokenConfig() : config;
         normalized.duration = normalized.duration > 0 ? normalized.duration : fallbackDuration;
-        if (normalized.secret == null) {
+        if (ensureSecret && (normalized.secret == null || normalized.secret.isBlank())) {
+            normalized.secret = IdGenerator.secret();
+        } else if (normalized.secret == null) {
             normalized.secret = "";
         }
         return normalized;
     }
 
-    private List<String> splitSqlStatements(String sql) {
-        return splitOn(sql, ';');
-    }
-
-    private List<String> splitOn(String text, char delimiter) {
-        List<String> parts = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        char quote = 0;
-        int parens = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char ch = text.charAt(i);
-            if (quote != 0) {
-                current.append(ch);
-                if (ch == quote) {
-                    if (i + 1 < text.length() && text.charAt(i + 1) == quote) {
-                        current.append(text.charAt(++i));
-                    } else {
-                        quote = 0;
-                    }
+    public void ensureAuthTokenSecrets() {
+        var rows = database.dsl()
+                .select(qfs("id"), qfs("options"))
+                .from(qt("_collections"))
+                .where(qfs("type").eq("auth"))
+                .fetch();
+        for (Record row : rows) {
+            String id = row.get(qfs("id"));
+            Map<String, Object> options = new LinkedHashMap<>();
+            String raw = row.get(qfs("options"));
+            if (raw != null && !raw.isBlank()) {
+                try {
+                    options.putAll(mapper.readValue(raw, new TypeReference<Map<String, Object>>() {}));
+                } catch (IOException ignored) {
                 }
-                continue;
             }
-            if (ch == '\'' || ch == '"' || ch == '`') {
-                quote = ch;
-                current.append(ch);
-                continue;
-            }
-            if (ch == '(') {
-                parens++;
-            } else if (ch == ')' && parens > 0) {
-                parens--;
-            }
-            if (ch == delimiter && parens == 0) {
-                parts.add(current.toString());
-                current.setLength(0);
-            } else {
-                current.append(ch);
+            boolean changed = ensureTokenOption(options, "authToken", CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION);
+            changed |= ensureTokenOption(options, "passwordResetToken", CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION);
+            changed |= ensureTokenOption(options, "verificationToken", CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION);
+            changed |= ensureTokenOption(options, "emailChangeToken", CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION);
+            changed |= ensureTokenOption(options, "fileToken", CollectionSchema.DEFAULT_FILE_TOKEN_DURATION);
+            if (changed) {
+                try {
+                    database.dsl()
+                            .update(qt("_collections"))
+                            .set(qfs("options"), mapper.writeValueAsString(options))
+                            .where(qfs("id").eq(id))
+                            .execute();
+                } catch (IOException e) {
+                    throw new IllegalStateException("failed to persist auth token secrets", e);
+                }
             }
         }
-        parts.add(current.toString());
-        return parts;
     }
 
-    private boolean isWriteStatement(String statement) {
-        return SQL_WRITE_PREFIXES.stream().anyMatch(prefix -> startsWithKeyword(statement, prefix));
-    }
+    public void ensureAuthCollectionFields() {
+        DSLContext dsl = database.dsl();
+        var rows = dsl.select(qfs("id"), qfs("name"), qfs("schema"), qfs("indexes"))
+                .from(qt("_collections"))
+                .where(qfs("type").eq("auth"))
+                .fetch();
+        for (Record row : rows) {
+            String id = row.get(qfs("id"));
+            String name = row.get(qfs("name"));
+            String rawSchema = row.get(qfs("schema"));
+            String rawIndexes = row.get(qfs("indexes"));
+            List<FieldSchema> previous = new ArrayList<>();
+            List<String> previousIndexes = new ArrayList<>();
+            if (rawSchema != null && !rawSchema.isBlank()) {
+                try {
+                    previous = mapper.readValue(rawSchema, new TypeReference<List<FieldSchema>>() {});
+                } catch (IOException e) {
+                    throw new IllegalStateException("failed to read auth collection fields for " + name, e);
+                }
+            }
+            if (rawIndexes != null && !rawIndexes.isBlank()) {
+                try {
+                    previousIndexes = mapper.readValue(rawIndexes, new TypeReference<List<String>>() {});
+                } catch (IOException e) {
+                    throw new IllegalStateException("failed to read auth collection indexes for " + name, e);
+                }
+            }
 
-    private boolean startsWithKeyword(String text, String keyword) {
-        String trimmed = text == null ? "" : text.trim();
-        if (trimmed.length() < keyword.length()) {
-            return false;
+            CollectionSchema collection = new CollectionSchema();
+            collection.id = id;
+            collection.name = name;
+            collection.type = "auth";
+            collection.fields = new ArrayList<>(previous);
+            collection.indexes = new ArrayList<>(previousIndexes);
+            AuthCollectionFields.normalize(collection);
+
+            for (FieldSchema field : collection.fields) {
+                if (!AuthCollectionFields.isSystemField(field.name)
+                        || "id".equals(field.name)
+                        || ("_superusers".equals(name) && "password".equals(field.name))) {
+                    continue;
+                }
+                if (!columnExists(dsl, name, field.name)) {
+                    dsl.alterTable(DSL.name(name))
+                            .add(DSL.name(field.name), FieldTypeMapping.sqlType(field.type))
+                            .execute();
+                }
+                if ("emailVisibility".equals(field.name) || "verified".equals(field.name)) {
+                    boolean defaultValue = "_superusers".equals(name) && "verified".equals(field.name);
+                    org.jooq.Field<Boolean> boolField = DSL.field(DSL.name(field.name), Boolean.class);
+                    dsl.update(DSL.table(DSL.name(name)))
+                            .set(boolField, defaultValue)
+                            .where(boolField.isNull())
+                            .execute();
+                }
+            }
+
+            for (String index : collection.indexes) {
+                if (previousIndexes.contains(index)) {
+                    continue;
+                }
+                String sql = CollectionIndexSupport.createSql(index, name, database::quoteIdentifier);
+                try {
+                    dsl.execute(sql);
+                } catch (DataAccessException e) {
+                    throw new IllegalStateException("failed to create auth collection index for " + name, e);
+                }
+            }
+
+            if (!mapper.valueToTree(previous).equals(mapper.valueToTree(collection.fields))
+                    || !mapper.valueToTree(previousIndexes).equals(mapper.valueToTree(collection.indexes))) {
+                try {
+                    dsl.update(qt("_collections"))
+                            .set(qfs("schema"), mapper.writeValueAsString(collection.fields))
+                            .set(qfs("indexes"), mapper.writeValueAsString(collection.indexes))
+                            .where(qfs("id").eq(id))
+                            .execute();
+                } catch (IOException e) {
+                    throw new IllegalStateException("failed to persist auth collection fields for " + name, e);
+                }
+            }
         }
-        if (!trimmed.regionMatches(true, 0, keyword, 0, keyword.length())) {
-            return false;
-        }
-        return trimmed.length() == keyword.length() || !isIdentifierChar(trimmed.charAt(keyword.length()));
     }
 
-    private boolean isIdentifierChar(char ch) {
-        return Character.isLetterOrDigit(ch) || ch == '_' || ch == '$';
+    private boolean ensureTokenOption(Map<String, Object> options, String name, long duration) {
+        Map<String, Object> token = options.get(name) instanceof Map<?, ?> existing
+                ? new LinkedHashMap<>((Map<String, Object>) existing)
+                : new LinkedHashMap<>();
+        boolean changed = false;
+        Object rawDuration = token.get("duration");
+        if (!(rawDuration instanceof Number number) || number.longValue() <= 0) {
+            token.put("duration", duration);
+            changed = true;
+        }
+        Object rawSecret = token.get("secret");
+        if (rawSecret == null || String.valueOf(rawSecret).isBlank()) {
+            token.put("secret", IdGenerator.secret());
+            changed = true;
+        }
+        options.put(name, token);
+        return changed;
     }
+
+    private boolean authRuleChanged(String previous, String next) {
+        return !Objects.equals(previous, next)
+                && !Objects.equals(previous == null ? "" : previous, next == null ? "" : next);
+    }
+
 }

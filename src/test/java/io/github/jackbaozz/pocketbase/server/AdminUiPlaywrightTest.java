@@ -48,7 +48,8 @@ public class AdminUiPlaywrightTest {
     @BeforeAll
     static void initAll() {
         TestDatabaseFactory.init();
-        playwright = Playwright.create();
+        playwright = Playwright.create(new Playwright.CreateOptions()
+                .setEnv(Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")));
         browser = launchBrowser();
     }
 
@@ -206,7 +207,11 @@ public class AdminUiPlaywrightTest {
                   const record = await fetch(`/api/collections/${encodeURIComponent(name)}/records`, {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ email: 'oauth-ui@example.com', password: 'password123456' })
+                    body: JSON.stringify({
+                      email: 'oauth-ui@example.com',
+                      password: 'password123456',
+                      passwordConfirm: 'password123456'
+                    })
                   });
                   if (!record.ok) {
                     throw new Error(await record.text());
@@ -231,6 +236,7 @@ public class AdminUiPlaywrightTest {
                     body: JSON.stringify({
                       name,
                       type: 'auth',
+                      createRule: "@request.context = 'oauth2'",
                       fields: [],
                       oauth2: {
                         enabled: true,

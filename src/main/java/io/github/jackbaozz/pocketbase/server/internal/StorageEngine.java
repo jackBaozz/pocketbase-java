@@ -17,7 +17,9 @@ public interface StorageEngine {
 
     ObjectMapper mapper();
 
-    Map<String, Object> health();
+    boolean canBackup();
+
+    boolean hasSuperusers();
 
     Map<String, Object> runSql(JsonNode body);
 
@@ -43,7 +45,7 @@ public interface StorageEngine {
 
     Map<String, Object> fileToken(RequestPrincipal principal);
 
-    Map<String, Object> listBackups(int page, int perPage);
+    List<Map<String, Object>> listBackups();
 
     void deleteBackup(String key);
 
@@ -55,9 +57,17 @@ public interface StorageEngine {
 
     Map<String, Object> bootstrapSuperuser(JsonNode body);
 
-    Map<String, Object> authWithPassword(String collection, JsonNode body, Map<String, String> query);
+    default Map<String, Object> authWithPassword(String collection, JsonNode body, Map<String, String> query, AuthOriginContext origin) {
+        return authWithPassword(collection, body, RuleRequestContext.of(query, Map.of()), origin);
+    }
 
-    Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal);
+    Map<String, Object> authWithPassword(String collection, JsonNode body, RuleRequestContext request, AuthOriginContext origin);
+
+    default Map<String, Object> authWithOAuth2(String collection, JsonNode body, Map<String, String> query, RequestPrincipal principal, AuthOriginContext origin) {
+        return authWithOAuth2(collection, body, RuleRequestContext.of(query, Map.of()), principal, origin);
+    }
+
+    Map<String, Object> authWithOAuth2(String collection, JsonNode body, RuleRequestContext request, RequestPrincipal principal, AuthOriginContext origin);
 
     Map<String, Object> authRefresh(String collection, RequestPrincipal principal, Map<String, String> query);
 
@@ -99,23 +109,61 @@ public interface StorageEngine {
 
     Map<String, Object> requestOtp(String collection, JsonNode body);
 
-    Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query);
+    default Map<String, Object> authWithOtp(String collection, JsonNode body, Map<String, String> query, AuthOriginContext origin) {
+        return authWithOtp(collection, body, RuleRequestContext.of(query, Map.of()), origin);
+    }
 
-    Map<String, Object> listRecords(String collection, Map<String, String> query, RequestPrincipal principal);
+    Map<String, Object> authWithOtp(String collection, JsonNode body, RuleRequestContext request, AuthOriginContext origin);
 
-    Map<String, Object> getRecord(String collection, String id, Map<String, String> query, RequestPrincipal principal);
+    default Map<String, Object> listRecords(String collection, Map<String, String> query, RequestPrincipal principal) {
+        return listRecords(collection, RuleRequestContext.of(query, Map.of()), principal);
+    }
 
-    Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal);
+    Map<String, Object> listRecords(String collection, RuleRequestContext request, RequestPrincipal principal);
 
-    Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal);
+    default Map<String, Object> getRecord(String collection, String id, Map<String, String> query, RequestPrincipal principal) {
+        return getRecord(collection, id, RuleRequestContext.of(query, Map.of()), principal);
+    }
 
-    Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal);
+    Map<String, Object> getRecord(String collection, String id, RuleRequestContext request, RequestPrincipal principal);
 
-    void deleteRecord(String collection, String id, RequestPrincipal principal);
+    default Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
+        return createRecord(collection, body, files, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal);
+
+    default Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
+        return updateRecord(collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal);
+
+    default Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
+        return upsertRecord(collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+    }
+
+    Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, RuleRequestContext request, RequestPrincipal principal);
+
+    default void deleteRecord(String collection, String id, RequestPrincipal principal) {
+        deleteRecord(collection, id, RuleRequestContext.empty(), principal);
+    }
+
+    void deleteRecord(String collection, String id, RuleRequestContext request, RequestPrincipal principal);
 
     Optional<RequestPrincipal> verifyFileToken(String token);
 
     Path filePath(String collection, String recordId, String filename, RequestPrincipal principal);
+
+    default Path filePath(
+            String collection,
+            String recordId,
+            String filename,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        return filePath(collection, recordId, filename, principal);
+    }
 
     boolean fileThumbAllowed(String collection, String recordId, String filename, String thumb);
 

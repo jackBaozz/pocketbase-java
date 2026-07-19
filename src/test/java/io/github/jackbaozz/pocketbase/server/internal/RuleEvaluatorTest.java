@@ -3,6 +3,7 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -107,6 +108,39 @@ class RuleEvaluatorTest {
     }
 
     @Test
+    void requestHeadersAreCaseInsensitiveAndSupportIsset() {
+        var ctx = RuleEvaluator.context(
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of("X-Rule-Token", "allow", "X-Empty", ""),
+                "GET",
+                null,
+                ignored -> List.of(),
+                null
+        );
+
+        assertTrue(RuleEvaluator.matches("@request.headers.x-rule-token = 'allow'", ctx));
+        assertTrue(RuleEvaluator.matches("@request.headers.X-RULE-TOKEN = 'allow'", ctx));
+        assertTrue(RuleEvaluator.matches("@request.headers.x-empty:isset = true", ctx));
+        assertTrue(RuleEvaluator.matches("@request.headers.missing:isset = false", ctx));
+        assertTrue(RuleEvaluator.matches("@request.context = 'default'", ctx));
+
+        var batchCtx = RuleEvaluator.context(
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                Map.of(),
+                RuleRequestContext.BATCH,
+                "POST",
+                null,
+                ignored -> List.of(),
+                null
+        );
+        assertTrue(RuleEvaluator.matches("@request.context = 'batch'", batchCtx));
+    }
+
+    @Test
     void collectionRelations() {
         var ctx = RuleEvaluator.context(
                 Map.of("authorId", "auth1"),
@@ -125,6 +159,7 @@ class RuleEvaluatorTest {
         // Any relation matches
         assertTrue(RuleEvaluator.matches("@collection.users.role ?= 'admin'", ctx));
         assertFalse(RuleEvaluator.matches("@collection.users.role ?= 'manager'", ctx));
+        assertFalse(RuleEvaluator.matches("@collection.users.role = 'admin'", ctx));
         
         // Array contents
         assertTrue(RuleEvaluator.matches("@collection.users.tags ?~ 'writer'", ctx));
@@ -136,6 +171,130 @@ class RuleEvaluatorTest {
         );
         assertTrue(RuleEvaluator.matches("items != null", emptyArrayCtx)); // Array exists but is empty
     }
+
+    @Test
+    void distinguishesMultiMatchAllAndAnyOperators() {
+        var ctx = RuleEvaluator.context(
+                Map.of(),
+                null,
+                null,
+                null,
+                null,
+                ignored -> List.of(),
+                identifier -> "reviewers.name".equals(identifier)
+                        ? RuleEvaluator.Resolution.resolved(RuleEvaluator.multiMatch(List.of("Ada", "Grace")))
+                        : RuleEvaluator.Resolution.unresolved()
+        );
+
+        assertFalse(RuleEvaluator.matches("reviewers.name = 'Ada'", ctx));
+        assertTrue(RuleEvaluator.matches("reviewers.name ?= 'Ada'", ctx));
+        assertTrue(RuleEvaluator.matches("reviewers.name != 'Linus'", ctx));
+        assertFalse(RuleEvaluator.matches("reviewers.name ?= 'Linus'", ctx));
+    }
+
+    @Test
+    void supportsOfficialFieldModifiers() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "new");
+        body.put("same", "value");
+        body.put("nullable", null);
+        var ctx = RuleEvaluator.context(
+                Map.of(
+                        "title", "Bravo",
+                        "tags", List.of("red", "green"),
+                        "status", "old",
+                        "same", "value"
+                ),
+                body,
+                Map.of("flag", ""),
+                "PATCH",
+                null
+        );
+
+        assertTrue(RuleEvaluator.matches("title:lower = 'bravo'", ctx));
+        assertTrue(RuleEvaluator.matches("tags:length = 2", ctx));
+        assertTrue(RuleEvaluator.matches("tags:each = 'green'", ctx));
+        assertTrue(RuleEvaluator.matches("@request.query.flag:isset = true", ctx));
+        assertTrue(RuleEvaluator.matches("@request.body.nullable:isset = true", ctx));
+        assertTrue(RuleEvaluator.matches("@request.body.missing:isset = false", ctx));
+        assertTrue(RuleEvaluator.matches("@request.body.status:changed = true", ctx));
+        assertTrue(RuleEvaluator.matches("@request.body.same:changed = false", ctx));
+
+        ApiException error = assertThrows(
+                ApiException.class,
+                () -> RuleEvaluator.matches("title:unknown = 'bravo'", ctx)
+        );
+        assertEquals(400, error.status());
+        assertEquals("Invalid filter.", error.getMessage());
+    }
+
+    @Test
+    void supportsOfficialFilterTokenFunctions() {
+        var ctx = RuleEvaluator.context(
+                Map.of(
+                        "created", "2026-07-18T10:30:45.123Z",
+                        "location", Map.of("lon", 0.1, "lat", 0)
+                ),
+                null,
+                null,
+                "GET",
+                null
+        );
+
+        assertTrue(RuleEvaluator.matches("strftime('%Y-%m', created) = '2026-07'", ctx));
+        assertTrue(RuleEvaluator.matches(
+                "strftime('%F', created, 'start of month', '+1 month') = '2026-08-01'",
+                ctx
+        ));
+        assertTrue(RuleEvaluator.matches("strftime('%s', 0, 'unixepoch') = '0'", ctx));
+        assertTrue(RuleEvaluator.matches(
+                "strftime('%F', '2024-02-29', '+1 year') = '2025-03-01'",
+                ctx
+        ));
+        assertTrue(RuleEvaluator.matches(
+                "strftime('%F', '2024-02-29', '+1 year', 'floor') = '2025-02-28'",
+                ctx
+        ));
+        assertTrue(RuleEvaluator.matches("geoDistance(location.lon, location.lat, 0, 0) < 20", ctx));
+        assertEquals(
+                List.of("created", "location.lon", "location.lat"),
+                RuleEvaluator.identifiers(
+                        "strftime('%Y', created) = '2026' && geoDistance(location.lon, location.lat, 0, 0) < 20"
+                )
+        );
+
+        var multiCtx = RuleEvaluator.context(
+                Map.of(),
+                null,
+                null,
+                "GET",
+                null,
+                ignored -> List.of(),
+                identifier -> switch (identifier) {
+                    case "events.created" -> RuleEvaluator.Resolution.resolved(RuleEvaluator.multiMatch(List.of(
+                            "2026-07-01T00:00:00Z",
+                            "2026-08-01T00:00:00Z"
+                    )));
+                    case "offices.lon" -> RuleEvaluator.Resolution.resolved(RuleEvaluator.multiMatch(List.of(50, 0.1)));
+                    case "offices.lat" -> RuleEvaluator.Resolution.resolved(RuleEvaluator.multiMatch(List.of(0, 0)));
+                    default -> RuleEvaluator.Resolution.unresolved();
+                }
+        );
+        assertFalse(RuleEvaluator.matches("strftime('%Y-%m', events.created) = '2026-07'", multiCtx));
+        assertTrue(RuleEvaluator.matches("strftime('%Y-%m', events.created) ?= '2026-07'", multiCtx));
+        assertTrue(RuleEvaluator.matches("geoDistance(offices.lon, offices.lat, 0, 0) < 20", multiCtx));
+
+        ApiException invalid = assertThrows(
+                ApiException.class,
+                () -> RuleEvaluator.matches("geoDistance(location.lon, 0) < 20", ctx)
+        );
+        assertEquals("Invalid filter.", invalid.getMessage());
+        assertThrows(
+                ApiException.class,
+                () -> RuleEvaluator.matches("unknownFunction(created) = 'x'", ctx)
+        );
+    }
+
     void matchesDateComparison() {
         var ctx = RuleEvaluator.context(Map.of("created", "2026-06-28 10:30:00.000Z"), null, null, null, null);
         assertTrue(RuleEvaluator.matches("created >= '2026-06-28 10:00:00.000Z'", ctx));

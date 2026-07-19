@@ -2,10 +2,10 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
-import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
+import io.github.jackbaozz.pocketbase.server.internal.RuleRequestContext;
 import io.github.jackbaozz.pocketbase.server.internal.TokenService;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
@@ -47,12 +47,28 @@ public class FileRepository extends BaseRepository {
     }
 
     public Path filePath(String collectionIdOrName, String recordId, String filename, RequestPrincipal principal) {
+        return filePath(
+                collectionIdOrName,
+                recordId,
+                filename,
+                RuleRequestContext.empty().withContext(RuleRequestContext.PROTECTED_FILE),
+                principal
+        );
+    }
+
+    public Path filePath(
+            String collectionIdOrName,
+            String recordId,
+            String filename,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
         FileLookup lookup = lookupFile(collectionIdOrName, recordId, filename);
         if (lookup == null) {
             return null;
         }
         if (lookup.fields().stream().allMatch(this::protectedFileField)) {
-            requireProtectedFileAccess(lookup.collection(), lookup.record(), principal);
+            requireProtectedFileAccess(lookup.collection(), lookup.record(), request, principal);
         }
         Path recordDir = dataDir.resolve("storage").resolve(lookup.collection().id).resolve(recordId).normalize();
         Path file = recordDir.resolve(filename).normalize();
@@ -161,13 +177,16 @@ public class FileRepository extends BaseRepository {
         return value != null && value.asBoolean(false);
     }
 
-    private void requireProtectedFileAccess(CollectionSchema collection, Map<String, Object> record, RequestPrincipal principal) {
-        if (principal == null) {
-            throw new ApiException(403, "Protected file token required.", ApiErrors.requiredField("token"));
-        }
-        if (!storeContext.canView(collection, record, Map.of(), principal)) {
-            throw new ApiException(403, "Protected file is not accessible.",
-                    ApiErrors.invalidField("token", "Protected file is not accessible."));
+    private void requireProtectedFileAccess(
+            CollectionSchema collection,
+            Map<String, Object> record,
+            RuleRequestContext request,
+            RequestPrincipal principal
+    ) {
+        RuleRequestContext protectedRequest = (request == null ? RuleRequestContext.empty() : request)
+                .withContext(RuleRequestContext.PROTECTED_FILE);
+        if (!storeContext.canView(collection, record, protectedRequest, principal)) {
+            throw new ApiException(404, "The requested resource wasn't found.");
         }
     }
 

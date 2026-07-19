@@ -50,10 +50,14 @@ import { LanguageSelector } from "./components/LanguageSelector";
 
 type HealthResponse = {
   data: {
-    canBackup: boolean;
-    dataDir: string;
-    superuserReady: boolean;
+    canBackup?: boolean;
+    realIP?: string;
+    possibleProxyHeader?: string;
   };
+};
+
+type BootstrapStatus = {
+  required: boolean;
 };
 
 type ListResponse<T> = {
@@ -113,13 +117,23 @@ type OAuth2ProviderConfig = {
   authURL?: string;
   tokenURL?: string;
   userInfoURL?: string;
+  displayName?: string;
   scopes?: string[];
   pkce?: boolean;
+  extra?: Record<string, unknown>;
 };
 
 type OAuth2Config = {
   enabled?: boolean;
   providers?: OAuth2ProviderConfig[];
+  mappedFields?: OAuth2MappedFields;
+};
+
+type OAuth2MappedFields = {
+  id?: string;
+  name?: string;
+  username?: string;
+  avatarURL?: string;
 };
 
 type CollectionSchema = {
@@ -195,7 +209,6 @@ type AuthResponse = {
 
 type BackupInfo = {
   key: string;
-  name: string;
   size: number;
   modified: string;
 };
@@ -359,6 +372,7 @@ function App() {
 
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
+  const [setupRequired, setSetupRequired] = useState(true);
   const [collections, setCollections] = useState<CollectionSchema[]>([]);
   const [selectedName, setSelectedName] = useState<string>("");
   const [records, setRecords] = useState<RecordItem[]>([]);
@@ -405,7 +419,6 @@ function App() {
   const [testS3Target, setTestS3Target] = useState("storage");
   const backupUploadRef = useRef<HTMLInputElement>(null);
 
-  const setupRequired = health ? !health.superuserReady : false;
   const authenticated = Boolean(token) && !setupRequired;
   const collectionView = view === "records" || view === "schema";
   const settingsView = isSettingsView(view);
@@ -466,10 +479,16 @@ function App() {
     [token]
   );
 
-  const refreshHealth = useCallback(async () => {
-    const data = await apiRequest<HealthResponse>("/api/health", "");
+  const refreshHealth = useCallback(async (authToken = token) => {
+    const data = await apiRequest<HealthResponse>("/api/health", authToken);
     setHealth(data.data);
     return data.data;
+  }, [token]);
+
+  const refreshBootstrapStatus = useCallback(async () => {
+    const status = await apiRequest<BootstrapStatus>("/api/bootstrap/superuser", "");
+    setSetupRequired(status.required);
+    return status;
   }, []);
 
   const refreshCollections = useCallback(async () => {
@@ -519,8 +538,8 @@ function App() {
     if (!token) return;
     setLoading(true);
     try {
-      const data = await apiRequest<ListResponse<BackupInfo>>("/api/backups?perPage=200", token);
-      setBackups(data.items);
+      const data = await apiRequest<BackupInfo[]>("/api/backups", token);
+      setBackups(data);
     } finally {
       setLoading(false);
     }
@@ -596,15 +615,15 @@ function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const status = await refreshHealth();
-      if (token && status.superuserReady) {
+      const [, bootstrap] = await Promise.all([refreshHealth(), refreshBootstrapStatus()]);
+      if (token && !bootstrap.required) {
         await refreshCollections();
         await refreshOauthProviders();
       }
     } catch (error) {
       notify(errorMessage(error), "error");
     }
-  }, [notify, refreshCollections, refreshHealth, refreshOauthProviders, token]);
+  }, [notify, refreshBootstrapStatus, refreshCollections, refreshHealth, refreshOauthProviders, token]);
 
   useEffect(() => {
     refreshAll();
@@ -700,8 +719,8 @@ function App() {
       setAuthToken(auth.token);
       setAuthEmail("");
       setAuthPassword("");
-      const status = await refreshHealth();
-      if (status.superuserReady) {
+      const [, bootstrap] = await Promise.all([refreshHealth(auth.token), refreshBootstrapStatus()]);
+      if (!bootstrap.required) {
         await refreshCollectionsWithToken(auth.token);
       }
     } catch (error) {
@@ -791,7 +810,7 @@ function App() {
     }
     const redirectURL = `${window.location.origin}/api/oauth2-redirect`;
     const popup = window.open(
-      provider.authURL + encodeURIComponent(redirectURL),
+      "about:blank",
       `pbj-oauth-${provider.name}`,
       "popup,width=720,height=820"
     );
@@ -801,8 +820,23 @@ function App() {
     }
 
     setOauthTestingProvider(provider.name);
+    let realtime: EventSource | null = null;
     try {
-      const payload = await waitForOAuthResult(provider.state, popup, {
+      realtime = new EventSource("/api/realtime");
+      const clientId = await waitForRealtimeClient(realtime, t("errors.oauth_popup_timed_out", "OAuth2 popup timed out."));
+      await api("/api/realtime", {
+        method: "POST",
+        body: {
+          clientId,
+          subscriptions: ["@oauth2"]
+        }
+      });
+      const authURL = new URL(provider.authURL);
+      authURL.searchParams.set("state", clientId);
+      authURL.searchParams.set("redirect_uri", redirectURL);
+      popup.location.replace(authURL.toString());
+
+      const payload = await waitForOAuthResult(clientId, realtime, popup, {
         closed: t("errors.oauth_popup_closed", "OAuth2 popup was closed before authentication completed."),
         timeout: t("errors.oauth_popup_timed_out", "OAuth2 popup timed out.")
       });
@@ -827,6 +861,8 @@ function App() {
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
+      realtime?.close();
+      if (!popup.closed) popup.close();
       setOauthTestingProvider("");
     }
   }
@@ -984,7 +1020,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = backup.name || backup.key;
+      anchor.download = backup.key;
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
@@ -1212,7 +1248,6 @@ function App() {
               email={authEmail}
               password={authPassword}
               loading={loading}
-              dataDir={health?.dataDir}
               onEmail={setAuthEmail}
               onPassword={setAuthPassword}
               onSubmit={handleAuth}
@@ -1424,7 +1459,6 @@ type AuthPanelProps = {
   email: string;
   password: string;
   loading: boolean;
-  dataDir?: string;
   onEmail: (value: string) => void;
   onPassword: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
@@ -1437,12 +1471,6 @@ function AuthPanel(props: AuthPanelProps) {
       <div className="auth-copy">
         <p className="eyebrow">{props.setupRequired ? t("auth.bootstrap", "Bootstrap") : t("auth.superuser", "Superuser")}</p>
         <h2>{props.setupRequired ? t("auth.create_first_superuser", "Create the first superuser") : t("auth.sign_in_manage", "Sign in to manage data")}</h2>
-        <dl>
-          <div>
-            <dt>{t("collections.runtime")}</dt>
-            <dd>{props.dataDir ?? "pb_data"}</dd>
-          </div>
-        </dl>
       </div>
       <form className="auth-form" onSubmit={props.onSubmit}>
         <label>
@@ -2270,10 +2298,10 @@ function BackupView(props: BackupViewProps) {
               <article className="backup-list-item" key={backup.key}>
                 <FileArchive size={21} />
                 <div className="backup-item-content">
-                  <strong title={backup.key}>{backup.name || backup.key}</strong>
+                  <strong title={backup.key}>{backup.key}</strong>
                   <span>{formatBytes(backup.size)} · {formatDate(backup.modified)}</span>
                 </div>
-                <nav className="backup-row-actions" aria-label={t("common.item_actions", { name: backup.name || backup.key, defaultValue: "{{name}} actions" })}>
+                <nav className="backup-row-actions" aria-label={t("common.item_actions", { name: backup.key, defaultValue: "{{name}} actions" })}>
                   <button className="icon-button" onClick={() => props.onDownload(backup)} title={t("actions.download", "Download")} aria-label={t("actions.download", "Download")}>
                     <Download size={16} />
                   </button>
@@ -3849,6 +3877,9 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
     const entries = collection?.oauth2?.providers ?? [];
     return Object.fromEntries(entries.map((provider) => [provider.name, provider]));
   });
+  const [oauthMappedFields, setOauthMappedFields] = useState<OAuth2MappedFields>(
+    collection?.oauth2?.mappedFields ?? { id: "", name: "", username: "", avatarURL: "" }
+  );
   const [rules, setRules] = useState({
     listRule: collection?.listRule ?? "",
     viewRule: collection?.viewRule ?? "",
@@ -3898,6 +3929,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               },
               oauth2: {
                 enabled: oauthEnabled,
+                mappedFields: oauthMappedFields,
                 providers: oauthProviderNames.map((provider) => ({
                   name: provider,
                   clientId: oauthProviderConfigs[provider]?.clientId?.trim() ?? "",
@@ -3905,8 +3937,10 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                   authURL: oauthProviderConfigs[provider]?.authURL?.trim() ?? "",
                   tokenURL: oauthProviderConfigs[provider]?.tokenURL?.trim() ?? "",
                   userInfoURL: oauthProviderConfigs[provider]?.userInfoURL?.trim() ?? "",
+                  displayName: oauthProviderConfigs[provider]?.displayName?.trim() ?? "",
                   scopes: splitScopes(oauthProviderConfigs[provider]?.scopes),
-                  pkce: oauthProviderConfigs[provider]?.pkce ?? true
+                  pkce: oauthProviderConfigs[provider]?.pkce,
+                  extra: oauthProviderConfigs[provider]?.extra ?? {}
                 }))
               }
             }
@@ -3942,8 +3976,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         authURL: "",
         tokenURL: "",
         userInfoURL: "",
-        scopes: [],
-        pkce: true
+        scopes: []
       }
     }));
   }
@@ -3958,7 +3991,6 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         tokenURL: "",
         userInfoURL: "",
         scopes: [],
-        pkce: true,
         ...current[name],
         ...patch
       }
@@ -4218,6 +4250,27 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                 <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} />
                 {t("common.enabled", "Enabled")}
               </label>
+              <div className="two-col oauth-provider-fields">
+                {([
+                  ["id", t("collections.oauth_provider_id_field", "Provider ID field")],
+                  ["name", t("collections.oauth_name_field", "Name field")],
+                  ["username", t("collections.oauth_username_field", "Username field")],
+                  ["avatarURL", t("collections.oauth_avatar_field", "Avatar field")]
+                ] as const).map(([mapping, label]) => (
+                  <label key={mapping}>
+                    {label}
+                    <select
+                      value={oauthMappedFields[mapping] ?? ""}
+                      onChange={(event) => setOauthMappedFields((current) => ({ ...current, [mapping]: event.target.value }))}
+                    >
+                      <option value="">{t("common.none", "None")}</option>
+                      {fieldsPreview.fields.map((field) => (
+                        <option value={field.name} key={`${mapping}-${field.name}`}>{field.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
               <div className="provider-option-grid">
                 {oauthProviders.map((provider) => (
                   <label className="check-row" key={provider.name}>
@@ -4240,8 +4293,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                       authURL: "",
                       tokenURL: "",
                       userInfoURL: "",
-                      scopes: [],
-                      pkce: true
+                      scopes: []
                     };
                     return (
                       <article className="oauth-provider-config-card" key={providerName}>
@@ -4299,7 +4351,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                           <label className="check-row oauth-pkce-toggle">
                             <input
                               type="checkbox"
-                              checked={config.pkce ?? true}
+                              checked={config.pkce ?? defaultProviderPkce(providerName)}
                               onChange={(event) => updateOauthProviderConfig(providerName, { pkce: event.target.checked })}
                             />
                             PKCE
@@ -4881,20 +4933,24 @@ function splitScopes(value: string | string[] | undefined) {
   return items.map((item) => item.trim()).filter(Boolean);
 }
 
+function defaultProviderPkce(name: string) {
+  return !["bitbucket", "linear", "vk"].includes(name);
+}
+
 function waitForOAuthResult(
   expectedState: string,
+  realtime: EventSource,
   popup: Window,
   messages: { closed: string; timeout: string },
   timeoutMs = 120000
 ) {
-  sessionStorage.removeItem("pbj-oauth2-result");
   return new Promise<{ state: string; code: string; error: string }>((resolve, reject) => {
     let settled = false;
     let intervalId = 0;
     let timeoutId = 0;
 
     const cleanup = () => {
-      window.removeEventListener("message", onMessage);
+      realtime.removeEventListener("@oauth2", onMessage);
       window.clearInterval(intervalId);
       window.clearTimeout(timeoutId);
     };
@@ -4908,7 +4964,6 @@ function waitForOAuthResult(
 
     const handlePayload = (payload: unknown) => {
       if (!isPlainObject(payload)) return;
-      if (payload.source !== "pocketbase-java-oauth2") return;
       if (String(payload.state ?? "") !== expectedState) return;
       finish(() =>
         resolve({
@@ -4919,29 +4974,56 @@ function waitForOAuthResult(
       );
     };
 
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      handlePayload(event.data);
+    const onMessage = (event: Event) => {
+      const message = event as MessageEvent<string>;
+      try {
+        handlePayload(JSON.parse(message.data));
+      } catch {
+        // ignore invalid realtime payloads
+      }
     };
 
-    window.addEventListener("message", onMessage);
+    realtime.addEventListener("@oauth2", onMessage);
     intervalId = window.setInterval(() => {
-      try {
-        const raw = sessionStorage.getItem("pbj-oauth2-result");
-        if (raw) {
-          sessionStorage.removeItem("pbj-oauth2-result");
-          handlePayload(JSON.parse(raw));
-          return;
-        }
-      } catch {
-        // ignore invalid storage payloads
-      }
       if (popup.closed) {
         finish(() => reject(new Error(messages.closed)));
       }
     }, 250);
     timeoutId = window.setTimeout(() => {
       finish(() => reject(new Error(messages.timeout)));
+    }, timeoutMs);
+  });
+}
+
+function waitForRealtimeClient(realtime: EventSource, timeoutMessage: string, timeoutMs = 15000) {
+  return new Promise<string>((resolve, reject) => {
+    let timeoutId = 0;
+    const cleanup = () => {
+      realtime.removeEventListener("PB_CONNECT", onConnect);
+      realtime.removeEventListener("error", onError);
+      window.clearTimeout(timeoutId);
+    };
+    const onConnect = (event: Event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data);
+        const clientId = String(payload.clientId ?? "");
+        if (!clientId) return;
+        cleanup();
+        resolve(clientId);
+      } catch {
+        // keep waiting for a valid PB_CONNECT event
+      }
+    };
+    const onError = () => {
+      if (realtime.readyState !== EventSource.CLOSED) return;
+      cleanup();
+      reject(new Error(timeoutMessage));
+    };
+    realtime.addEventListener("PB_CONNECT", onConnect);
+    realtime.addEventListener("error", onError);
+    timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(timeoutMessage));
     }, timeoutMs);
   });
 }

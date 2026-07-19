@@ -16,8 +16,8 @@ import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
 public abstract class BaseRepository {
-    protected static final Pattern SQL_IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
-    protected static final Pattern IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,62}$");
+    protected static final Pattern SQL_IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z0-9_]+$");
+    protected static final Pattern IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z0-9_]+$");
     private static final Pattern SQLITE_UNIQUE_FIELD = Pattern.compile("([A-Za-z0-9_]+)\\.([A-Za-z0-9_]+)");
     private static final Pattern POSTGRES_UNIQUE_DETAIL = Pattern.compile("Key \\(([^)]+)\\)=\\(([^)]*)\\) already exists", Pattern.CASE_INSENSITIVE);
     private static final Pattern MYSQL_DUPLICATE_KEY = Pattern.compile("Duplicate entry .* for key ['`]?([^'`]+)['`]?", Pattern.CASE_INSENSITIVE);
@@ -182,5 +182,10 @@ public abstract class BaseRepository {
     protected Field<Integer> qfi(String identifier) {
         validateSqlIdentifier(identifier);
         return DSL.field(DSL.name(identifier), Integer.class);
+    }
+
+    protected Field<Boolean> qfb(String identifier) {
+        validateSqlIdentifier(identifier);
+        return DSL.field(DSL.name(identifier), Boolean.class);
     }
 }

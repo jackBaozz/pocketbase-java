@@ -1,7 +1,12 @@
 package io.github.jackbaozz.pocketbase.server.internal;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema.OAuth2ProviderConfig;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,41 +15,24 @@ import java.util.Map;
  * Handles provider-specific OAuth2 nuances required by SDP-013.
  */
 public final class OAuth2ProviderManager {
-    public record ProviderMetadata(String name, String displayName, String logo) {
+    private static final TypeReference<List<ProviderMetadata>> PROVIDER_LIST = new TypeReference<>() {
+    };
+
+    public record ProviderMetadata(
+            String name,
+            String displayName,
+            String logo,
+            String authURL,
+            String tokenURL,
+            String userInfoURL,
+            List<String> scopes,
+            boolean pkce,
+            int order,
+            Map<String, Object> extra
+    ) {
     }
 
-    private static final List<ProviderMetadata> PROVIDERS = List.of(
-            new ProviderMetadata("apple", "Apple", ""),
-            new ProviderMetadata("bitbucket", "Bitbucket", ""),
-            new ProviderMetadata("box", "Box", ""),
-            new ProviderMetadata("discord", "Discord", ""),
-            new ProviderMetadata("facebook", "Facebook", ""),
-            new ProviderMetadata("gitea", "Gitea", ""),
-            new ProviderMetadata("gitee", "Gitee", ""),
-            new ProviderMetadata("github", "GitHub", ""),
-            new ProviderMetadata("gitlab", "GitLab", ""),
-            new ProviderMetadata("google", "Google", ""),
-            new ProviderMetadata("instagram", "Instagram", ""),
-            new ProviderMetadata("kakao", "Kakao", ""),
-            new ProviderMetadata("lark", "Lark", ""),
-            new ProviderMetadata("linear", "Linear", ""),
-            new ProviderMetadata("livechat", "LiveChat", ""),
-            new ProviderMetadata("mailcow", "mailcow", ""),
-            new ProviderMetadata("microsoft", "Microsoft", ""),
-            new ProviderMetadata("monday", "monday.com", ""),
-            new ProviderMetadata("notion", "Notion", ""),
-            new ProviderMetadata("oidc", "OIDC", ""),
-            new ProviderMetadata("patreon", "Patreon", ""),
-            new ProviderMetadata("planningcenter", "Planning Center", ""),
-            new ProviderMetadata("spotify", "Spotify", ""),
-            new ProviderMetadata("strava", "Strava", ""),
-            new ProviderMetadata("trakt", "Trakt", ""),
-            new ProviderMetadata("twitch", "Twitch", ""),
-            new ProviderMetadata("twitter", "Twitter", ""),
-            new ProviderMetadata("vk", "VK", ""),
-            new ProviderMetadata("wakatime", "WakaTime", ""),
-            new ProviderMetadata("yandex", "Yandex", "")
-    );
+    private static final List<ProviderMetadata> PROVIDERS = loadProviders();
 
     private OAuth2ProviderManager() {
     }
@@ -58,26 +46,44 @@ public final class OAuth2ProviderManager {
             return null;
         }
         return PROVIDERS.stream()
-                .filter(provider -> provider.name().equalsIgnoreCase(name))
+                .filter(provider -> provider.name().equals(name))
                 .findFirst()
                 .orElse(null);
     }
 
-    public static void validateConfig(OAuth2ProviderConfig config) {
-        if (config == null || config.name == null || config.name.isBlank()) {
-            throw new ApiException(400, "OAuth2 provider name is required.",
-                    ApiErrors.requiredField("name"));
+    public static OAuth2ProviderConfig initialize(OAuth2ProviderConfig config) {
+        if (config == null) {
+            return null;
         }
-        if ("oidc".equalsIgnoreCase(config.name) && (isBlank(config.authURL) || isBlank(config.tokenURL))) {
-            Map<String, Object> errors = new LinkedHashMap<>();
-            if (isBlank(config.authURL)) {
-                errors.putAll(ApiErrors.requiredField("authURL"));
-            }
-            if (isBlank(config.tokenURL)) {
-                errors.putAll(ApiErrors.requiredField("tokenURL"));
-            }
-            throw new ApiException(400, "OIDC requires authURL and tokenURL.", errors);
+        ProviderMetadata metadata = providerMetadata(config.name);
+        if (metadata == null) {
+            throw new ApiException(400, "Invalid or missing OAuth2 provider.",
+                    ApiErrors.invalidField("name", "Invalid or missing provider with name " + text(config.name) + "."));
         }
+
+        OAuth2ProviderConfig initialized = new OAuth2ProviderConfig();
+        initialized.name = metadata.name();
+        initialized.clientId = text(config.clientId);
+        initialized.clientSecret = text(config.clientSecret);
+        initialized.authURL = firstNonBlank(config.authURL, metadata.authURL());
+        initialized.tokenURL = firstNonBlank(config.tokenURL, metadata.tokenURL());
+        initialized.userInfoURL = firstNonBlank(config.userInfoURL, metadata.userInfoURL());
+        initialized.displayName = firstNonBlank(config.displayName, metadata.displayName());
+        initialized.scopes = config.scopes == null || config.scopes.isEmpty()
+                ? new ArrayList<>(metadata.scopes() == null ? List.of() : metadata.scopes())
+                : config.scopes.stream()
+                .filter(scope -> scope != null && !scope.isBlank())
+                .map(String::trim)
+                .toList();
+        initialized.pkce = config.pkce == null ? metadata.pkce() : config.pkce;
+        initialized.extra = new LinkedHashMap<>();
+        if (metadata.extra() != null) {
+            initialized.extra.putAll(metadata.extra());
+        }
+        if (config.extra != null) {
+            initialized.extra.putAll(config.extra);
+        }
+        return initialized;
     }
 
     public static Map<String, String> authUrlParameters(OAuth2ProviderConfig config) {
@@ -98,5 +104,24 @@ public final class OAuth2ProviderManager {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isBlank();
+    }
+
+    private static String firstNonBlank(String preferred, String fallback) {
+        return isBlank(preferred) ? text(fallback) : preferred.trim();
+    }
+
+    private static String text(String value) {
+        return value == null ? "" : value;
+    }
+
+    private static List<ProviderMetadata> loadProviders() {
+        try (InputStream input = OAuth2ProviderManager.class.getResourceAsStream("/pocketbase-oauth2-providers.json")) {
+            if (input == null) {
+                throw new IllegalStateException("missing PocketBase OAuth2 provider metadata resource");
+            }
+            return List.copyOf(new ObjectMapper().readValue(input, PROVIDER_LIST));
+        } catch (IOException e) {
+            throw new ExceptionInInitializerError(e);
+        }
     }
 }
