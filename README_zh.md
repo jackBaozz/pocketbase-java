@@ -2,6 +2,8 @@
 
 PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java SDK**，以及一个低依赖的 **嵌入式服务器 (Embedded Server)**：使用 JDK `HttpServer` 提供 PocketBase 风格的 API，内置 Admin UI，采用 JSON 文件持久化，特别面向 GraalVM Native Image 约束而设计。
 
+**官方 PocketBase 基准版本:** v0.39.7
+
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
         <img src="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml/badge.svg" alt="CI Status" />
@@ -21,7 +23,7 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 ## 核心特性
 
 - **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，核心运行时依赖极少，保持极小的体积与资源占用，且便于 Native Image 编译。
-- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范，包括 `/api/collections/{collection}/records`、`auth-with-password`、OTP、MFA 以及 OAuth2 认证流程。
+- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.7**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
 - **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
 - **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能；前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
 - **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用零依赖的本地 JSONL 格式存储记录，并且可以通过 `-Dstorage=sqlite` (或 `mysql`/`postgresql`) 一键启用基于 jOOQ 与 HikariCP 的关系型数据库存储引擎，支持自动 schema 迁移与 DDL 事务。
@@ -59,7 +61,7 @@ mvn -gs settings.xml -s settings.xml test
 编译打包项目并启动服务：
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
 启动后可打开：
@@ -70,7 +72,7 @@ java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve
+java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve
 ```
 
 ### 2. 作为 Java 库嵌入使用 (Embedded Server inside Java)
@@ -198,7 +200,7 @@ pocketbase-java/
 | 分类 | 支持的 API 路径与 HTTP 方法 |
 | --- | --- |
 | **系统** | `GET /api/health` |
-| **超级管理员** | `POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password`<br>`POST /api/collections/_superusers/auth-with-password` |
+| **超级管理员** | `GET/POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password` *(历史兼容)*<br>`POST /api/collections/_superusers/auth-with-password` |
 | **集合管理** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers`<br>`POST /api/collections/meta/dry-run-view` |
 | **记录 CRUD** | `GET/POST /api/collections/{collection}/records`<br>`GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
 | **文件接口** | `GET /api/files/{collection}/{recordId}/{filename}`<br>`POST /api/files/token` |

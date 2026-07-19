@@ -2,7 +2,7 @@
 
 PocketBase Java implementation. This project contains a lightweight **PocketBase Java SDK** and a low-dependency **Embedded Server**: using JDK `HttpServer` to serve PocketBase-like APIs, featuring a built-in Admin UI, JSON file persistence, and designed for GraalVM Native Image constraints.
 
-**Official PocketBase Baseline:** v0.22.x
+**Official PocketBase Baseline:** v0.39.7
 
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
@@ -23,7 +23,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 ## Key Features
 
 - **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The core runtime has extremely minimal dependencies, keeping the resource footprint small and native compilation trivial.
-- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (e.g. `/api/collections/{collection}/records`, `auth-with-password`, OTP, MFA, and OAuth2 provider flows).
+- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.39.7**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
 - **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
 - **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
 - **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. Run with zero-dependency default local file storage (using JSON Lines `.jsonl` for records and `.json` for metadata) or opt into relational database storage (SQLite, MySQL, or PostgreSQL) via `-Dstorage` flag, powered by jOOQ and HikariCP.
@@ -61,7 +61,7 @@ mvn -gs settings.xml -s settings.xml test
 Compile the project and start the server:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
 Once started, open:
@@ -72,7 +72,7 @@ You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.1.0-SNAPSHOT-all.jar serve
+java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve
 ```
 
 ### 2. Embed Programmatically in Java
@@ -200,7 +200,7 @@ pocketbase-java/
 | Domain | Supported API Endpoint & HTTP Methods |
 | --- | --- |
 | **System** | `GET /api/health` |
-| **Superusers** | `POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password`<br>`POST /api/collections/_superusers/auth-with-password` |
+| **Superusers** | `GET/POST /api/bootstrap/superuser`<br>`POST /api/admins/auth-with-password` *(Legacy Compatibility)*<br>`POST /api/collections/_superusers/auth-with-password` |
 | **Collections** | `GET/POST /api/collections`<br>`GET/PATCH/DELETE /api/collections/{idOrName}`<br>`PUT /api/collections/import`<br>`DELETE /api/collections/{idOrName}/truncate`<br>`GET /api/collections/meta/scaffolds`<br>`GET /api/collections/meta/oauth2-providers`<br>`POST /api/collections/meta/dry-run-view` |
 | **Records CRUD** | `GET/POST /api/collections/{collection}/records`<br>`GET/PATCH/DELETE /api/collections/{collection}/records/{id}` |
 | **Files** | `GET /api/files/{collection}/{recordId}/{filename}`<br>`POST /api/files/token` |
