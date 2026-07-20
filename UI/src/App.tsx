@@ -630,6 +630,14 @@ function App() {
   }, [refreshAll]);
 
   useEffect(() => {
+    const handleUnauthorized = () => {
+      logout();
+    };
+    window.addEventListener("pbj_unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("pbj_unauthorized", handleUnauthorized);
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(PINNED_COLLECTIONS_KEY, JSON.stringify(pinnedCollectionNames));
   }, [pinnedCollectionNames]);
 
@@ -4853,6 +4861,12 @@ async function apiRequest<T>(path: string, token: string, options: ApiOptions = 
   const text = await response.text();
   const parsed = text ? parseJson(text) : null;
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem("pbj_token");
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("pbj_unauthorized"));
+      }
+    }
     const apiError = isPlainObject(parsed) ? (parsed as ApiError) : {};
     throw new Error(apiError.message || text || `${response.status} ${response.statusText}`);
   }

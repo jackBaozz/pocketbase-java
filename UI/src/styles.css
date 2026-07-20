@@ -1035,14 +1035,17 @@ h2 {
 }
 
 .app-header .status.ready {
+  background: #153d2d;
   color: #89ddb7;
 }
 
 .app-header .status.busy {
+  background: #442b1b;
   color: #ffbd82;
 }
 
 .app-header .status.offline {
+  background: #4b1e2a;
   color: #ff9aaa;
 }
 
