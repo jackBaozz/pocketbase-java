@@ -6750,6 +6750,32 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void dartSdkMultipartJsonPayloadIsMergedWithUploadedFiles() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+
+        request("POST", "/api/collections", token, Map.of(
+                "name", "dart_multipart_assets",
+                "listRule", "",
+                "viewRule", "",
+                "fields", List.of(
+                        Map.of("name", "title", "type", "text", "required", true),
+                        Map.of("name", "attachment", "type", "file", "required", true)
+                )
+        ));
+
+        JsonNode created = multipartRequest("POST", "/api/collections/dart_multipart_assets/records", token, Map.of(
+                "@jsonPayload", "[\"{\\\"title\\\":\\\"Dart upload\\\"}\"]"
+        ), Map.of(
+                "attachment", new MultipartFile("dart upload.txt", "text/plain", "hello from dart".getBytes(StandardCharsets.UTF_8))
+        ));
+
+        assertEquals("Dart upload", created.get("title").asText());
+        assertTrue(created.get("attachment").asText().startsWith("dart_upload_"));
+    }
+
+    @Test
     void imageFileThumbsAreGeneratedOnlyForConfiguredSizes() throws Exception {
         start();
         bootstrapSuperuser();

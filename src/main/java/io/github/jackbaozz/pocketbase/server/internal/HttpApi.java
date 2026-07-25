@@ -2,6 +2,7 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
@@ -1199,12 +1200,43 @@ public final class HttpApi implements HttpHandler {
         byte[] bytes = readRequestBytes(exchange);
         if (isMultipart(contentType)) {
             MultipartFormData multipart = MultipartFormData.parse(contentType, bytes, store.mapper());
-            return new RecordInput(multipart.fields(), multipart.files());
+            JsonNode payload = multipart.fields().get("@jsonPayload");
+            if (payload == null || payload.isNull()) {
+                return new RecordInput(multipart.fields(), multipart.files());
+            }
+
+            JsonNode decoded;
+            try {
+                decoded = decodeMultipartJsonPayload(payload);
+            } catch (JsonProcessingException e) {
+                throw new ApiException(400, "Failed to read request body.",
+                        ApiErrors.invalidField("@jsonPayload", "Invalid JSON payload."));
+            }
+            if (decoded == null || !decoded.isObject()) {
+                throw new ApiException(400, "Failed to read request body.",
+                        ApiErrors.invalidField("@jsonPayload", "Invalid JSON payload."));
+            }
+
+            ObjectNode fields = ((ObjectNode) decoded).deepCopy();
+            multipart.fields().fields().forEachRemaining(entry -> {
+                if (!"@jsonPayload".equals(entry.getKey())) {
+                    fields.set(entry.getKey(), entry.getValue());
+                }
+            });
+            return new RecordInput(fields, multipart.files());
         }
         if (bytes.length == 0) {
             return new RecordInput(store.mapper().createObjectNode(), Map.of());
         }
         return new RecordInput(readJsonBytes(bytes), Map.of());
+    }
+
+    private JsonNode decodeMultipartJsonPayload(JsonNode payload) throws JsonProcessingException {
+        JsonNode value = payload;
+        if (value.isArray() && value.size() == 1 && value.get(0).isTextual()) {
+            value = value.get(0);
+        }
+        return value.isTextual() ? store.mapper().readTree(value.asText()) : value;
     }
 
     private JsonNode readJson(HttpExchange exchange) throws IOException {
