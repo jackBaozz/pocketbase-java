@@ -18,6 +18,8 @@ import org.jooq.impl.DSL;
 import org.jooq.impl.SQLDataType;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -857,7 +859,13 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         systemCollections.addAll(AuthSystemCollections.defaults());
         for (CollectionSchema collection : systemCollections) {
             for (String index : collection.indexes) {
-                String sql = CollectionIndexSupport.createSql(index, collection.name, database::quoteIdentifier);
+                String sql = CollectionIndexSupport.createSql(
+                        index,
+                        collection.name,
+                        database::quoteIdentifier,
+                        database.engine(),
+                        collection.fields
+                );
                 if (sql.isBlank()) {
                     continue;
                 }
@@ -1250,17 +1258,30 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
             throw new IllegalArgumentException("Unsupported SQL statement.");
         }
         org.jooq.Result<?> result;
+        List<org.jooq.Field<?>> parsedSelectFields;
         try {
             // Parse using jOOQ AST to reject malformed/dangerous SELECT constructs
             var query = database.dsl().parser().parseSelect(sql);
+            parsedSelectFields = query.getSelect();
+            // Keep the historical text execution path so JDBC value types stay
+            // stable on SQLite. PostgreSQL's `?column?` label is reconciled with
+            // the parser field below when building the response columns.
             result = database.dsl().fetch(query.toString());
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid SQL SELECT statement: " + e.getMessage(), e);
         }
         List<Map<String, Object>> columns = new ArrayList<>();
-        for (var field : result.fields()) {
+        for (int index = 0; index < result.fields().length; index++) {
+            var field = result.fields()[index];
             Map<String, Object> column = new LinkedHashMap<>();
-            column.put("name", field.getName());
+            String fieldName = field.getName();
+            if ("?column?".equals(fieldName) && index < parsedSelectFields.size()) {
+                String parsedName = parsedSelectFields.get(index).getName();
+                if (parsedName != null && !parsedName.isBlank()) {
+                    fieldName = parsedName;
+                }
+            }
+            column.put("name", fieldName);
 
             // Format column types to match PocketBase dialects
             String typeName = field.getDataType().getTypeName();
@@ -1292,11 +1313,53 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         for (var record : result) {
             List<Object> row = new ArrayList<>();
             for (int i = 0; i < result.fields().length; i++) {
-                row.add(record.get(i));
+                row.add(normalizeSqlResultValue(record.get(i)));
             }
             rows.add(row);
         }
         return new SqlResult(0, columns, rows);
+    }
+
+    /**
+     * JDBC drivers disagree on the Java representation of integral SQL values.
+     * In particular MySQL can expose an INT as Double/BigDecimal with a trailing
+     * scale. Normalize exact integers before Jackson serializes the SQL response
+     * so the API remains storage-engine independent.
+     */
+    private Object normalizeSqlResultValue(Object value) {
+        if (value instanceof BigDecimal decimal) {
+            try {
+                BigDecimal stripped = decimal.stripTrailingZeros();
+                if (stripped.scale() <= 0) {
+                    return stripped.longValueExact();
+                }
+            } catch (ArithmeticException ignored) {
+                return decimal;
+            }
+            return decimal;
+        }
+        if (value instanceof BigInteger integer) {
+            try {
+                return integer.longValueExact();
+            } catch (ArithmeticException ignored) {
+                return integer;
+            }
+        }
+        if (value instanceof Double number) {
+            if (Double.isFinite(number) && Math.rint(number) == number
+                    && number >= Long.MIN_VALUE && number <= Long.MAX_VALUE) {
+                return number.longValue();
+            }
+            return number;
+        }
+        if (value instanceof Float number) {
+            if (Float.isFinite(number) && Math.rint(number) == number
+                    && number >= Long.MIN_VALUE && number <= Long.MAX_VALUE) {
+                return number.longValue();
+            }
+            return number;
+        }
+        return value;
     }
 
     private long executeSqlCreate(String sql) {
@@ -1354,7 +1417,13 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 field.put("unique", true);
             }
         }
-        collectionRepository.createCollection(payload);
+        CollectionSchema created = collectionRepository.createCollection(payload);
+        // MySQL commits DDL implicitly, so the surrounding SQL API transaction
+        // cannot undo a CREATE TABLE through JDBC rollback alone. Register an
+        // explicit compensating delete to preserve the /api/sql batch contract.
+        if (database.engine() == JooqDatabase.Engine.MYSQL) {
+            database.onRollback(() -> collectionRepository.deleteCollection(created.name));
+        }
         return 0;
     }
 

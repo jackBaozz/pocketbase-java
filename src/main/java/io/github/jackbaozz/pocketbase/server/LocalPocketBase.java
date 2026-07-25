@@ -32,6 +32,9 @@ public final class LocalPocketBase implements AutoCloseable {
     public static LocalPocketBase start(ServerConfig config) throws IOException {
         StorageEngine store;
         String storageType = System.getProperty("storage");
+        if (storageType == null || storageType.isBlank()) {
+            storageType = System.getenv("PB_STORAGE");
+        }
         if ("sqlite".equalsIgnoreCase(storageType)
                 || "mysql".equalsIgnoreCase(storageType)
                 || "mariadb".equalsIgnoreCase(storageType)

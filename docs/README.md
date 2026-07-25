@@ -1,3 +1,3 @@
 # PocketBase Java Docs
 
-Baseline tracked: PocketBase v0.22.x
+Baseline tracked: PocketBase v0.39.7

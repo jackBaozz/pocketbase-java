@@ -15,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DartSdkSmokeTest {
+    private static final String REQUIRE_DART_SMOKE_PROPERTY = "requireDartSdkSmoke";
+
     private LocalPocketBase server;
 
     @TempDir
@@ -23,7 +25,7 @@ class DartSdkSmokeTest {
     @BeforeEach
     void setUp() throws Exception {
         TestDatabaseFactory.init();
-        server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, dataDir, null, null, null));
+        server = TestDatabaseFactory.start(new ServerConfig("127.0.0.1", 0, dataDir, null, null, null));
     }
 
     @AfterEach
@@ -39,10 +41,11 @@ class DartSdkSmokeTest {
         dartCheck.redirectErrorStream(true);
         try {
             Process check = dartCheck.start();
-            Assumptions.assumeTrue(check.waitFor(5, TimeUnit.SECONDS), "dart --version timed out");
-            Assumptions.assumeTrue(check.exitValue() == 0, "Dart SDK not available on PATH");
+            requireDart(check.waitFor(5, TimeUnit.SECONDS), "dart --version timed out");
+            requireDart(check.exitValue() == 0, "Dart SDK not available on PATH");
         } catch (Exception e) {
-            Assumptions.assumeTrue(false, "Dart SDK not available on PATH");
+            requireDart(false, "Dart SDK not available on PATH");
+            return;
         }
 
         File dartDir = new File("src/test/resources/dart-sdk-smoke");
@@ -63,5 +66,13 @@ class DartSdkSmokeTest {
         String text = new String(output, StandardCharsets.UTF_8);
         assertEquals(0, smoke.exitValue(), "Dart SDK smoke failed:\n" + text);
         assertTrue(text.contains("Dart SDK Smoke Test Passed!"), "Success message should be present");
+    }
+
+    private static void requireDart(boolean available, String message) {
+        if (Boolean.getBoolean(REQUIRE_DART_SMOKE_PROPERTY)) {
+            assertTrue(available, message);
+        } else {
+            Assumptions.assumeTrue(available, message);
+        }
     }
 }

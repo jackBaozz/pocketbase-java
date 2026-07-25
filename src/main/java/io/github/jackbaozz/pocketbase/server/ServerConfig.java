@@ -134,6 +134,7 @@ public record ServerConfig(
                   PB_SUPERUSER_EMAIL        optional first superuser email
                   PB_SUPERUSER_PASSWORD     optional first superuser password
                   PB_ENCRYPTION_KEY         optional encryption key
+                  PB_STORAGE                optional storage engine (sqlite, mysql, postgresql)
                 """;
     }
 

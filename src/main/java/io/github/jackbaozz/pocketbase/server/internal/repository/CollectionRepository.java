@@ -20,6 +20,7 @@ import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2ProviderManager;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2FieldMappingSupport;
+import io.github.jackbaozz.pocketbase.server.internal.PhysicalTableNames;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.SchemaMigrationPlanner;
 import io.github.jackbaozz.pocketbase.server.internal.SchemaIdSupport;
@@ -39,6 +40,7 @@ import org.jooq.impl.SQLDataType;
 
 import java.io.IOException;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
@@ -63,6 +65,15 @@ public class CollectionRepository extends BaseRepository {
     private Condition collectionCondition(String collection) {
         collection = SystemCollections.canonicalIdentifier(collection);
         return qfs("name").eq(collection).or(qfs("id").eq(collection));
+    }
+
+    /**
+     * API collection names can be longer than the external database identifier
+     * limit. Keep the logical name in _collections and use a deterministic
+     * physical identifier for DDL and record access.
+     */
+    public String physicalTableName(CollectionSchema collection) {
+        return collection == null ? null : PhysicalTableNames.tableName(database, collection.name);
     }
 
     private boolean collectionIdExists(String id) {
@@ -172,6 +183,7 @@ public class CollectionRepository extends BaseRepository {
         Connection conn = null;
         try {
             conn = database.connection();
+            String physicalName = physicalTableName(colSchema);
 
             database.dsl(conn)
                     .insertInto(qt("_collections"))
@@ -196,11 +208,11 @@ public class CollectionRepository extends BaseRepository {
 
             if ("view".equals(colSchema.type)) {
                 try (Statement stmt = conn.createStatement()) {
-                    stmt.execute("CREATE VIEW " + qi(colSchema.name) + " AS " + normalizedViewSelect(colSchema));
+                    stmt.execute("CREATE VIEW " + qi(physicalName) + " AS " + normalizedViewSelect(colSchema));
                 }
             } else {
                 var createTable = database.dsl(conn)
-                        .createTable(DSL.name(colSchema.name))
+                        .createTable(DSL.name(physicalName))
                         .column(DSL.name("id"), SQLDataType.VARCHAR(255).nullable(false))
                         .column(DSL.name("created"), SQLDataType.VARCHAR(64))
                         .column(DSL.name("updated"), SQLDataType.VARCHAR(64));
@@ -208,11 +220,11 @@ public class CollectionRepository extends BaseRepository {
                     if ("id".equals(field.name)) {
                         continue;
                     }
-                    createTable = createTable.column(DSL.name(field.name), FieldTypeMapping.sqlType(field.type));
+                    createTable = createTable.column(DSL.name(field.name), FieldTypeMapping.sqlTypeForField(field));
                 }
-                createTable.constraints(DSL.constraint(DSL.name("pk_" + colSchema.name)).primaryKey(DSL.name("id")))
+                createTable.constraints(DSL.constraint(DSL.name(PhysicalTableNames.primaryKeyName(database, physicalName))).primaryKey(DSL.name("id")))
                         .execute();
-                createIndexes(conn, colSchema.indexes, colSchema.name, "Failed to create collection.");
+                createIndexes(conn, colSchema.indexes, physicalName, colSchema.fields, "Failed to create collection.");
             }
         } catch (SQLException | IOException | DataAccessException e) {
             handleSqlConstraintException(e);
@@ -304,7 +316,7 @@ public class CollectionRepository extends BaseRepository {
         try {
             conn = database.connection();
             String oldSchemaJson = null;
-            String physicalName = null;
+            String storedName = null;
 
             Record rs = database.dsl(conn)
                     .select(qfs("name"), qfs("schema"))
@@ -312,16 +324,18 @@ public class CollectionRepository extends BaseRepository {
                     .where(collectionCondition(collection))
                     .fetchOne();
             if (rs != null) {
-                physicalName = rs.get(qfs("name"));
+                storedName = rs.get(qfs("name"));
                 oldSchemaJson = rs.get(qfs("schema"));
             }
 
-            if (physicalName == null) throw new ApiException(404, "Collection not found.");
+            if (storedName == null) throw new ApiException(404, "Collection not found.");
+            String physicalName = PhysicalTableNames.tableName(database, storedName);
+            String nextPhysicalName = physicalTableName(newSchema);
 
             if ("view".equals(newSchema.type)) {
                 try (Statement stmt = conn.createStatement()) {
                     stmt.execute("DROP VIEW IF EXISTS " + qi(physicalName));
-                    stmt.execute("CREATE VIEW " + qi(newSchema.name) + " AS " + normalizedViewSelect(newSchema));
+                    stmt.execute("CREATE VIEW " + qi(nextPhysicalName) + " AS " + normalizedViewSelect(newSchema));
                 }
             } else {
                 List<FieldSchema> oldFields = new ArrayList<>();
@@ -330,9 +344,9 @@ public class CollectionRepository extends BaseRepository {
                 }
 
                 DSLContext dsl = database.dsl(conn);
-                if (!physicalName.equals(newSchema.name)) {
-                    renameTable(dsl, physicalName, newSchema.name);
-                    physicalName = newSchema.name;
+                if (!physicalName.equals(nextPhysicalName)) {
+                    renameTable(dsl, physicalName, nextPhysicalName);
+                    physicalName = nextPhysicalName;
                 }
 
                 dropRemovedIndexes(
@@ -351,7 +365,7 @@ public class CollectionRepository extends BaseRepository {
                             && !oldNames.contains(nf.name)
                             && !columnExists(dsl, physicalName, nf.name)) {
                         dsl.alterTable(DSL.name(physicalName))
-                                .add(DSL.name(nf.name), FieldTypeMapping.sqlType(nf.type))
+                                .add(DSL.name(nf.name), FieldTypeMapping.sqlTypeForField(nf))
                                 .execute();
                     }
                 }
@@ -368,6 +382,7 @@ public class CollectionRepository extends BaseRepository {
                         currentSchema.indexes,
                         newSchema.indexes,
                         physicalName,
+                        newSchema.fields,
                         "Failed to update collection."
                 );
             }
@@ -428,7 +443,7 @@ public class CollectionRepository extends BaseRepository {
         Connection conn = null;
         try {
             conn = database.connection();
-            String physicalName = null;
+            String logicalName = null;
             String collectionId = null;
             String type = null;
             boolean system = false;
@@ -440,14 +455,15 @@ public class CollectionRepository extends BaseRepository {
                     .fetchOne();
             if (rs != null) {
                 collectionId = rs.get(qfs("id"));
-                physicalName = rs.get(qfs("name"));
+                logicalName = rs.get(qfs("name"));
                 type = rs.get(qfs("type"));
                 system = Objects.equals(rs.get(qfi("system")), 1);
             }
 
-            if (physicalName == null) {
+            if (logicalName == null) {
                 throw new ApiException(404, "Collection not found.");
             }
+            String physicalName = PhysicalTableNames.tableName(database, logicalName);
             if (system) {
                 throw new ApiException(400, "System collections cannot be deleted.");
             }
@@ -484,7 +500,7 @@ public class CollectionRepository extends BaseRepository {
         }
         try {
             database.dsl()
-                    .deleteFrom(qt(schema.name))
+                    .deleteFrom(qt(physicalTableName(schema)))
                     .execute();
             if ("auth".equals(schema.type)) {
                 deleteAuthSupportRecords(database.dsl(), schema.id);
@@ -886,8 +902,9 @@ public class CollectionRepository extends BaseRepository {
     }
 
     private boolean physicalTableExists(String name) {
+        String physicalName = PhysicalTableNames.tableName(database, name);
         return name != null && database.dsl().meta().getTables().stream()
-                .anyMatch(table -> table.getName().equalsIgnoreCase(name));
+                .anyMatch(table -> table.getName().equalsIgnoreCase(physicalName));
     }
 
     private Set<String> collectionIndexNames(String excludedCollectionId) {
@@ -918,12 +935,24 @@ public class CollectionRepository extends BaseRepository {
         return names;
     }
 
-    private void createIndexes(Connection conn, List<String> indexes, String table, String message) {
+    private void createIndexes(
+            Connection conn,
+            List<String> indexes,
+            String table,
+            List<FieldSchema> fields,
+            String message
+    ) {
         List<String> safeIndexes = indexes == null ? List.of() : indexes;
         for (int i = 0; i < safeIndexes.size(); i++) {
             executeIndexSql(
                     conn,
-                    CollectionIndexSupport.createSql(safeIndexes.get(i), table, database::quoteIdentifier),
+                    CollectionIndexSupport.createSql(
+                            safeIndexes.get(i),
+                            table,
+                            database::quoteIdentifier,
+                            database.engine(),
+                            fields
+                    ),
                     message,
                     i
             );
@@ -957,6 +986,7 @@ public class CollectionRepository extends BaseRepository {
             List<String> current,
             List<String> desired,
             String table,
+            List<FieldSchema> fields,
             String message
     ) {
         List<String> currentIndexes = current == null ? List.of() : current;
@@ -966,7 +996,13 @@ public class CollectionRepository extends BaseRepository {
             if (!currentIndexes.contains(index)) {
                 executeIndexSql(
                         conn,
-                        CollectionIndexSupport.createSql(index, table, database::quoteIdentifier),
+                        CollectionIndexSupport.createSql(
+                                index,
+                                table,
+                                database::quoteIdentifier,
+                                database.engine(),
+                                fields
+                        ),
                         message,
                         i
                 );
@@ -1314,15 +1350,22 @@ public class CollectionRepository extends BaseRepository {
     }
 
     private boolean columnExists(DSLContext dsl, String table, String column) {
-        try {
-            dsl.select(DSL.field(DSL.name(column)))
-                    .from(DSL.table(DSL.name(table)))
-                    .where(DSL.falseCondition())
-                    .fetch();
-            return true;
-        } catch (DataAccessException ignored) {
-            return false;
-        }
+        // Do not probe a column by selecting it. On PostgreSQL an unknown
+        // column aborts the surrounding transaction, so the following ALTER
+        // TABLE then fails even though adding that column is valid. JDBC
+        // metadata provides the same answer without issuing an erroring SQL
+        // statement and works inside the current transaction connection.
+        return dsl.connectionResult(connection -> {
+            String catalog = database.engine() == JooqDatabase.Engine.MYSQL
+                    ? connection.getCatalog()
+                    : null;
+            String schema = database.engine() == JooqDatabase.Engine.POSTGRES
+                    ? connection.getSchema()
+                    : null;
+            try (ResultSet columns = connection.getMetaData().getColumns(catalog, schema, table, column)) {
+                return columns.next();
+            }
+        });
     }
 
     private void normalizePasswordAuthConfig(CollectionSchema.PasswordAuthConfig config) {
@@ -1488,6 +1531,7 @@ public class CollectionRepository extends BaseRepository {
             collection.fields = new ArrayList<>(previous);
             collection.indexes = new ArrayList<>(previousIndexes);
             AuthCollectionFields.normalize(collection);
+            String physicalName = physicalTableName(collection);
 
             for (FieldSchema field : collection.fields) {
                 if (!AuthCollectionFields.isSystemField(field.name)
@@ -1495,15 +1539,15 @@ public class CollectionRepository extends BaseRepository {
                         || ("_superusers".equals(name) && "password".equals(field.name))) {
                     continue;
                 }
-                if (!columnExists(dsl, name, field.name)) {
-                    dsl.alterTable(DSL.name(name))
-                            .add(DSL.name(field.name), FieldTypeMapping.sqlType(field.type))
+                if (!columnExists(dsl, physicalName, field.name)) {
+                    dsl.alterTable(DSL.name(physicalName))
+                            .add(DSL.name(field.name), FieldTypeMapping.sqlTypeForField(field))
                             .execute();
                 }
                 if ("emailVisibility".equals(field.name) || "verified".equals(field.name)) {
                     boolean defaultValue = "_superusers".equals(name) && "verified".equals(field.name);
                     org.jooq.Field<Boolean> boolField = DSL.field(DSL.name(field.name), Boolean.class);
-                    dsl.update(DSL.table(DSL.name(name)))
+                    dsl.update(DSL.table(DSL.name(physicalName)))
                             .set(boolField, defaultValue)
                             .where(boolField.isNull())
                             .execute();
@@ -1514,7 +1558,13 @@ public class CollectionRepository extends BaseRepository {
                 if (previousIndexes.contains(index)) {
                     continue;
                 }
-                String sql = CollectionIndexSupport.createSql(index, name, database::quoteIdentifier);
+                String sql = CollectionIndexSupport.createSql(
+                        index,
+                        physicalName,
+                        database::quoteIdentifier,
+                        database.engine(),
+                        collection.fields
+                );
                 try {
                     dsl.execute(sql);
                 } catch (DataAccessException e) {

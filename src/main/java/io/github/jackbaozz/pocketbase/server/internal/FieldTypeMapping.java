@@ -2,6 +2,7 @@ package io.github.jackbaozz.pocketbase.server.internal;
 
 import org.jooq.DataType;
 import org.jooq.impl.SQLDataType;
+import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 
 /**
  * Maps PocketBase field types to appropriate SQL column types.
@@ -37,6 +38,24 @@ public final class FieldTypeMapping {
             case "geopoint" -> SQLDataType.CLOB;      // JSON object as text
             default -> SQLDataType.CLOB;              // fallback: store as text
         };
+    }
+
+    /**
+     * Resolves a physical type from the full field schema when a system field
+     * has a tighter storage contract than its public PocketBase field type.
+     */
+    public static DataType<?> sqlTypeForField(FieldSchema field) {
+        if (field != null
+                && field.system
+                && "tokenKey".equals(field.name)
+                && "text".equalsIgnoreCase(field.type)) {
+            // MySQL utf8mb4 indexes cannot cover a VARCHAR(2000). Auth token
+            // keys are generated opaque identifiers, so a 255-character
+            // column remains comfortably above their supported size while
+            // allowing the required unique index on every dialect.
+            return SQLDataType.VARCHAR(255);
+        }
+        return sqlType(field == null ? null : field.type);
     }
 
     /**

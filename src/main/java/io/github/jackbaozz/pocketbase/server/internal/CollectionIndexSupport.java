@@ -5,7 +5,9 @@ import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -113,6 +115,21 @@ public final class CollectionIndexSupport {
         return parsed == null ? "" : build(parsed, table, quoteIdentifier);
     }
 
+    /**
+     * Produces executable DDL for a specific relational engine while retaining
+     * the unmodified PocketBase index definition in collection metadata.
+     */
+    public static String createSql(
+            String raw,
+            String table,
+            Function<String, String> quoteIdentifier,
+            JooqDatabase.Engine engine,
+            List<FieldSchema> fields
+    ) {
+        ParsedIndex parsed = parse(raw);
+        return parsed == null ? "" : build(parsed, table, quoteIdentifier, engine, fields);
+    }
+
     public static String normalizeDefinition(String raw, String table) {
         ParsedIndex parsed = parse(raw);
         return parsed == null ? "" : build(parsed, table, CollectionIndexSupport::backtick);
@@ -173,6 +190,16 @@ public final class CollectionIndexSupport {
     }
 
     private static String build(ParsedIndex index, String table, Function<String, String> quoteIdentifier) {
+        return build(index, table, quoteIdentifier, null, List.of());
+    }
+
+    private static String build(
+            ParsedIndex index,
+            String table,
+            Function<String, String> quoteIdentifier,
+            JooqDatabase.Engine engine,
+            List<FieldSchema> fields
+    ) {
         StringBuilder sql = new StringBuilder("CREATE ");
         if (index.unique()) {
             sql.append("UNIQUE ");
@@ -185,9 +212,17 @@ public final class CollectionIndexSupport {
                 .append(" ON ")
                 .append(quoteIdentifier.apply(table))
                 .append(" (");
+        Map<String, Integer> mysqlPrefixes = engine == JooqDatabase.Engine.MYSQL
+                ? mysqlPrefixLengths(index, fields)
+                : Map.of();
+        String mysqlPartialCondition = engine == JooqDatabase.Engine.MYSQL && !index.where().isBlank()
+                ? rewriteQuotedIdentifiers(index.where(), quoteIdentifier)
+                : "";
         List<String> columns = new ArrayList<>();
         for (IndexColumn column : index.columns()) {
-            String expression = normalizedColumnExpression(column.expression(), quoteIdentifier);
+            String expression = engine == JooqDatabase.Engine.MYSQL
+                    ? mysqlIndexExpression(index, column, quoteIdentifier, mysqlPrefixes, mysqlPartialCondition)
+                    : normalizedColumnExpression(column.expression(), quoteIdentifier);
             if (!column.collate().isBlank()) {
                 expression += " COLLATE " + column.collate();
             }
@@ -197,10 +232,125 @@ public final class CollectionIndexSupport {
             columns.add(expression);
         }
         sql.append(String.join(", ", columns)).append(")");
-        if (!index.where().isBlank()) {
+        if (!index.where().isBlank() && engine != JooqDatabase.Engine.MYSQL) {
             sql.append(" WHERE ").append(rewriteQuotedIdentifiers(index.where(), quoteIdentifier));
         }
         return sql.toString();
+    }
+
+    private static String mysqlIndexExpression(
+            ParsedIndex index,
+            IndexColumn column,
+            Function<String, String> quoteIdentifier,
+            Map<String, Integer> prefixes,
+            String partialCondition
+    ) {
+        String name = simpleColumnName(column.expression());
+        Integer prefix = name == null ? null : prefixes.get(name.toLowerCase(Locale.ROOT));
+        String expression = prefix == null
+                ? normalizedColumnExpression(column.expression(), quoteIdentifier)
+                : quoteIdentifier.apply(name) + "(" + prefix + ")";
+
+        if (!partialCondition.isBlank()) {
+            // MySQL only permits the `column(prefix)` form in a key part, not
+            // inside the CASE expression used to emulate a partial index. A
+            // fixed-size SHA-256 key is valid in either context and avoids
+            // truncating unique values.
+            if (prefix != null) {
+                expression = mysqlHashExpression(name, quoteIdentifier);
+            }
+            return mysqlFunctionalKeyPart("CASE WHEN " + partialCondition + " THEN " + expression + " ELSE NULL END");
+        }
+
+        if (prefix == null || !index.unique()) {
+            return expression;
+        }
+
+        // A UNIQUE prefix index changes the constraint to "first N
+        // characters are unique", rejecting otherwise distinct values. Use
+        // a compact deterministic hash key instead so the complete value
+        // remains part of the uniqueness check without exceeding InnoDB's
+        // key-size limit.
+        return mysqlFunctionalKeyPart(mysqlHashExpression(name, quoteIdentifier));
+    }
+
+    private static String mysqlHashExpression(String name, Function<String, String> quoteIdentifier) {
+        return "UNHEX(SHA2(" + quoteIdentifier.apply(name) + ", 256))";
+    }
+
+    private static String mysqlFunctionalKeyPart(String expression) {
+        return "(" + expression + ")";
+    }
+
+    private static Map<String, Integer> mysqlPrefixLengths(ParsedIndex index, List<FieldSchema> fields) {
+        Map<String, FieldSchema> fieldsByName = new LinkedHashMap<>();
+        for (FieldSchema field : fields == null ? List.<FieldSchema>of() : fields) {
+            if (field != null && field.name != null && !field.name.isBlank()) {
+                fieldsByName.put(field.name.toLowerCase(Locale.ROOT), field);
+            }
+        }
+
+        List<MysqlStringColumn> strings = new ArrayList<>();
+        for (IndexColumn column : index.columns()) {
+            String name = simpleColumnName(column.expression());
+            if (name == null) {
+                continue;
+            }
+            MysqlStringColumn stringColumn = mysqlStringColumn(name, fieldsByName.get(name.toLowerCase(Locale.ROOT)));
+            if (stringColumn != null) {
+                strings.add(stringColumn);
+            }
+        }
+        if (strings.isEmpty()) {
+            return Map.of();
+        }
+
+        int totalCharacters = strings.stream().mapToInt(MysqlStringColumn::maxCharacters).sum();
+        boolean needsPrefix = totalCharacters > 768 || strings.stream().anyMatch(MysqlStringColumn::forcePrefix);
+        if (!needsPrefix) {
+            return Map.of();
+        }
+
+        strings.sort(Comparator.comparingInt(MysqlStringColumn::maxCharacters));
+        int remainingCharacters = 768;
+        Map<String, Integer> prefixes = new LinkedHashMap<>();
+        for (int i = 0; i < strings.size(); i++) {
+            MysqlStringColumn column = strings.get(i);
+            int remainingColumns = strings.size() - i;
+            int allocation = Math.min(column.maxCharacters(), Math.max(1, remainingCharacters / remainingColumns));
+            if (column.forcePrefix() || allocation < column.maxCharacters()) {
+                prefixes.put(column.name().toLowerCase(Locale.ROOT), allocation);
+            }
+            remainingCharacters -= allocation;
+        }
+        return prefixes;
+    }
+
+    private static MysqlStringColumn mysqlStringColumn(String name, FieldSchema field) {
+        String normalizedName = name.toLowerCase(Locale.ROOT);
+        if ("id".equals(normalizedName)) {
+            return new MysqlStringColumn(name, 255, false);
+        }
+        if ("created".equals(normalizedName) || "updated".equals(normalizedName)) {
+            return new MysqlStringColumn(name, 64, false);
+        }
+        if (field == null || field.type == null) {
+            return null;
+        }
+
+        String type = field.type.trim().toLowerCase(Locale.ROOT);
+        return switch (type) {
+            case "text", "editor" -> new MysqlStringColumn(
+                    name,
+                    "tokenKey".equals(field.name) && field.system ? 255 : 2000,
+                    false
+            );
+            case "email", "password" -> new MysqlStringColumn(name, 255, false);
+            case "url" -> new MysqlStringColumn(name, 2048, false);
+            case "date", "autodate" -> new MysqlStringColumn(name, 64, false);
+            case "select", "json", "file", "relation", "geopoint" -> new MysqlStringColumn(name, 768, true);
+            default -> null;
+        };
     }
 
     private static String normalizedColumnExpression(String raw, Function<String, String> quoteIdentifier) {
@@ -360,6 +510,9 @@ public final class CollectionIndexSupport {
             List<IndexColumn> columns,
             String where
     ) {
+    }
+
+    private record MysqlStringColumn(String name, int maxCharacters, boolean forcePrefix) {
     }
 
     private record IndexColumn(String expression, String collate, String sort) {

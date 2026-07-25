@@ -244,7 +244,7 @@ public final class SchemaMigrationPlanner {
     }
 
     private static String sqlType(FieldSchema field) {
-        return FieldTypeMapping.sqlType(field == null ? null : field.type).getTypeName();
+        return FieldTypeMapping.sqlTypeForField(field).getTypeName();
     }
 
     private static String normalize(String value) {

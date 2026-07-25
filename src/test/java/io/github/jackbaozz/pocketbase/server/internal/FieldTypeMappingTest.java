@@ -3,6 +3,7 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import org.jooq.DataType;
 import org.jooq.impl.SQLDataType;
 import org.junit.jupiter.api.Test;
+import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -120,6 +121,14 @@ class FieldTypeMappingTest {
     @Test
     void typeTrimsWhitespace() {
         assertEquals(FieldTypeMapping.sqlType(" text "), FieldTypeMapping.sqlType("text"));
+    }
+
+    @Test
+    void authTokenKeyUsesAnIndexableVarchar() {
+        FieldSchema tokenKey = new FieldSchema("text2504183744", "tokenKey", "text", true, true, true);
+        tokenKey.system = true;
+
+        assertEquals(SQLDataType.VARCHAR(255), FieldTypeMapping.sqlTypeForField(tokenKey));
     }
 
     @Test

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,6 +34,53 @@ class CollectionIndexSupportTest {
         );
         assertTrue(postgresSql.contains("lower(\"title\")"));
         assertTrue(postgresSql.endsWith("WHERE \"count\" > 0"));
+    }
+
+    @Test
+    void mysqlUsesBoundedPrefixesForLongTextIndexesWithoutChangingMetadata() {
+        CollectionSchema collection = collection("posts");
+
+        String sql = CollectionIndexSupport.createSql(
+                "CREATE INDEX idx_posts_title ON posts (title)",
+                collection.name,
+                identifier -> "`" + identifier + "`",
+                JooqDatabase.Engine.MYSQL,
+                collection.fields
+        );
+
+        assertEquals("CREATE INDEX `idx_posts_title` ON `posts` (`title`(768))", sql);
+    }
+
+    @Test
+    void mysqlUsesFullValueHashesForLongTextUniqueAndPartialIndexes() {
+        CollectionSchema collection = collection("posts");
+
+        String uniqueSql = CollectionIndexSupport.createSql(
+                "CREATE UNIQUE INDEX idx_posts_title_unique ON posts (title)",
+                collection.name,
+                identifier -> "`" + identifier + "`",
+                JooqDatabase.Engine.MYSQL,
+                collection.fields
+        );
+        assertEquals(
+                "CREATE UNIQUE INDEX `idx_posts_title_unique` ON `posts` ((UNHEX(SHA2(`title`, 256))))",
+                uniqueSql
+        );
+        assertFalse(uniqueSql.contains("`title`(768)"));
+
+        String partialSql = CollectionIndexSupport.createSql(
+                "CREATE UNIQUE INDEX idx_posts_title_present ON posts (title) WHERE title != ''",
+                collection.name,
+                identifier -> "`" + identifier + "`",
+                JooqDatabase.Engine.MYSQL,
+                collection.fields
+        );
+        assertEquals(
+                "CREATE UNIQUE INDEX `idx_posts_title_present` ON `posts` "
+                        + "((CASE WHEN title != '' THEN UNHEX(SHA2(`title`, 256)) ELSE NULL END))",
+                partialSql
+        );
+        assertFalse(partialSql.contains("`title`(768)"));
     }
 
     @Test

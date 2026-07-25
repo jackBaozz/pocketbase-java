@@ -26,7 +26,7 @@ public class JsSdkSmokeTest {
         // Start the Java pocketbase server
         ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null, null);
         TestDatabaseFactory.init();
-        server = LocalPocketBase.start(config);
+        server = TestDatabaseFactory.start(config);
         baseUrl = "http://127.0.0.1:" + server.port();
 
         // Ensure npm modules are installed in our test resources dir

@@ -2897,6 +2897,35 @@ class LocalPocketBaseServerTest {
     }
 
     @Test
+    void longAuthCollectionNamesBootstrapAgainstPhysicalTablesOnRestart() throws Exception {
+        start();
+        bootstrapSuperuser();
+        String superuserToken = loginToken();
+        String collectionName = "auth_" + "a".repeat(80);
+
+        request("POST", "/api/collections", superuserToken, Map.of(
+                "name", collectionName,
+                "type", "auth"
+        ));
+        request("POST", "/api/collections/" + collectionName + "/records", superuserToken, Map.of(
+                "email", "long-name@example.com",
+                "password", "secret456",
+                "passwordConfirm", "secret456"
+        ));
+
+        server.close();
+        start();
+
+        JsonNode authenticated = request(
+                "POST",
+                "/api/collections/" + collectionName + "/auth-with-password",
+                null,
+                Map.of("identity", "long-name@example.com", "password", "secret456")
+        );
+        assertTrue(authenticated.hasNonNull("token"));
+    }
+
+    @Test
     void backupsCanBeCreatedDownloadedRestoredAndDeleted() throws Exception {
         start();
         bootstrapSuperuser();
@@ -2906,9 +2935,17 @@ class LocalPocketBaseServerTest {
                 "name", "tasks",
                 "listRule", "",
                 "viewRule", "",
-                "fields", List.of(Map.of("name", "name", "type", "text", "required", true))
+                "fields", List.of(Map.of("name", "name", "type", "text", "required", true)),
+                "indexes", List.of("create index idx_tasks_name_not_blank on tasks (name) where name != ''")
         ));
         request("POST", "/api/collections/tasks/records", token, Map.of("name", "before backup"));
+        request("POST", "/api/collections", token, Map.of(
+                "name", "backup_tasks_view",
+                "type", "view",
+                "listRule", "",
+                "viewRule", "",
+                "viewQuery", "select id, name from tasks"
+        ));
 
         HttpResponse<String> missingUpload = rawMultipartRequest("POST", "/api/backups", token, Map.of(), Map.of());
         assertEquals(400, missingUpload.statusCode());
@@ -2944,6 +2981,28 @@ class LocalPocketBaseServerTest {
         assertEquals(204, createdBackup.statusCode());
         assertTrue(createdBackup.body().isBlank());
         assertTrue(Files.size(tempDir.resolve("backups").resolve("snap.zip")) > 0);
+        if (usesRelationalStorage()) {
+            JsonNode snapshot = relationalBackupSnapshot(tempDir.resolve("backups").resolve("snap.zip"));
+            String configuredStorage = System.getProperty("storage", "json").toLowerCase(java.util.Locale.ROOT);
+            String expectedEngine = switch (configuredStorage) {
+                case "mariadb" -> "mysql";
+                case "postgresql" -> "postgres";
+                default -> configuredStorage;
+            };
+            assertEquals(expectedEngine, snapshot.get("engine").asText());
+            String viewSql = relationalBackupObjectSql(snapshot, "view", "backup_tasks_view");
+            assertTrue(viewSql.toUpperCase(java.util.Locale.ROOT).startsWith("CREATE VIEW"));
+            String indexSql = relationalBackupObjectSql(snapshot, "index", "idx_tasks_name_not_blank");
+            assertTrue(indexSql.toUpperCase(java.util.Locale.ROOT).startsWith("CREATE INDEX"));
+            if ("mysql".equalsIgnoreCase(System.getProperty("storage"))
+                    || "mariadb".equalsIgnoreCase(System.getProperty("storage"))) {
+                String normalizedIndexSql = indexSql.toUpperCase(java.util.Locale.ROOT);
+                assertTrue(normalizedIndexSql.contains("UNHEX(SHA2"));
+                assertTrue(normalizedIndexSql.contains("CASE WHEN"));
+            } else {
+                assertTrue(indexSql.toUpperCase(java.util.Locale.ROOT).contains(" WHERE "));
+            }
+        }
 
         HttpResponse<String> duplicateBackup = rawRequest("POST", "/api/backups", token, Map.of("name", "snap.zip"));
         assertEquals(400, duplicateBackup.statusCode());
@@ -3009,11 +3068,14 @@ class LocalPocketBaseServerTest {
         assertEquals(2, stillChanged.get("totalItems").asInt());
 
         HttpResponse<String> restore = rawRequest("POST", "/api/backups/snap.zip/restore", token, null);
-        assertEquals(204, restore.statusCode());
+        assertEquals(204, restore.statusCode(), restore.body());
         assertTrue(restore.body().isBlank());
         JsonNode restored = request("GET", "/api/collections/tasks/records", null, null);
         assertEquals(1, restored.get("totalItems").asInt());
         assertEquals("before backup", restored.get("items").get(0).get("name").asText());
+        JsonNode restoredView = request("GET", "/api/collections/backup_tasks_view/records", null, null);
+        assertEquals(1, restoredView.get("totalItems").asInt());
+        assertEquals("before backup", restoredView.get("items").get(0).get("name").asText());
 
         HttpResponse<String> deleted = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
         assertEquals(204, deleted.statusCode());
@@ -3021,6 +3083,43 @@ class LocalPocketBaseServerTest {
         HttpResponse<String> deleteMissing = rawRequest("DELETE", "/api/backups/snap.zip", token, null);
         assertEquals(400, deleteMissing.statusCode());
         assertErrorEnvelope(deleteMissing, 400, "Invalid or already deleted backup file.");
+    }
+
+    @Test
+    void legacyEngineLessSnapshotsOnlyRestoreOnSqlite() throws Exception {
+        if (!usesRelationalStorage()) {
+            return;
+        }
+        start();
+        bootstrapSuperuser();
+        String token = loginToken();
+        request("POST", "/api/collections", token, Map.of(
+                "name", "legacy_restore_tasks",
+                "listRule", "",
+                "fields", List.of(Map.of("name", "name", "type", "text", "required", true))
+        ));
+        JsonNode original = request("POST", "/api/collections/legacy_restore_tasks/records", token, Map.of("name", "must survive"));
+        assertEquals(204, rawRequest("POST", "/api/backups", token, Map.of("name", "legacy.zip")).statusCode());
+        request("POST", "/api/collections/legacy_restore_tasks/records", token, Map.of("name", "after backup"));
+
+        removeEngineFromRelationalBackup(tempDir.resolve("backups").resolve("legacy.zip"));
+        HttpResponse<String> restore = rawRequest("POST", "/api/backups/legacy.zip/restore", token, null);
+        if (usesExternalRelationalStorage()) {
+            assertEquals(400, restore.statusCode());
+            assertErrorEnvelope(restore, 400, "Backup storage engine does not match the active storage engine.");
+        } else {
+            assertEquals(204, restore.statusCode(), restore.body());
+        }
+
+        JsonNode remaining = request("GET", "/api/collections/legacy_restore_tasks/records", null, null);
+        assertEquals(usesExternalRelationalStorage() ? 2 : 1, remaining.get("totalItems").asInt());
+        JsonNode preserved = request(
+                "GET",
+                "/api/collections/legacy_restore_tasks/records/" + original.get("id").asText(),
+                token,
+                null
+        );
+        assertEquals("must survive", preserved.get("name").asText());
     }
 
     @Test
@@ -3072,10 +3171,12 @@ class LocalPocketBaseServerTest {
                 "smtp", Map.of("password", "******"),
                 "s3", Map.of("secret", "******")
         ));
-        if ("sqlite".equals(System.getProperty("storage"))) {
-            try (java.sql.Connection conn = java.sql.DriverManager.getConnection("jdbc:sqlite:" + tempDir.resolve("pocketbase.db").toAbsolutePath());
+        if (usesRelationalStorage()) {
+            try (java.sql.Connection conn = openRelationalConnection();
                  java.sql.Statement stmt = conn.createStatement();
-                 java.sql.ResultSet rs = stmt.executeQuery("SELECT value FROM _params WHERE key = 'settings'")) {
+                 java.sql.ResultSet rs = stmt.executeQuery("SELECT " + databaseIdentifier("value")
+                         + " FROM " + databaseIdentifier("_params")
+                         + " WHERE " + databaseIdentifier("key") + " = 'settings'")) {
                 assertTrue(rs.next());
                 String settingsVal = rs.getString(1);
                 assertTrue(settingsVal.contains("smtp-secret"));
@@ -3286,11 +3387,10 @@ class LocalPocketBaseServerTest {
         ));
         assertEquals(404, rawRequest("GET", "/api/missing-log", token, null).statusCode());
 
-        JsonNode filtered = request(
-                "GET",
-                "/api/logs?filter=" + URLEncoder.encode("data.url = '/api/missing-log'", StandardCharsets.UTF_8),
+        JsonNode filtered = waitForLogs(
+                "data.url = '/api/missing-log'",
                 token,
-                null
+                1
         );
         assertEquals(1, filtered.get("totalItems").asInt());
         JsonNode filteredLog = filtered.get("items").get(0);
@@ -3312,11 +3412,10 @@ class LocalPocketBaseServerTest {
                 )
         ));
         assertEquals(404, rawRequest("GET", "/api/old-maintenance-log", token, null).statusCode());
-        JsonNode oldLogs = request(
-                "GET",
-                "/api/logs?filter=" + URLEncoder.encode("data.url = '/api/old-maintenance-log'", StandardCharsets.UTF_8),
+        JsonNode oldLogs = waitForLogs(
+                "data.url = '/api/old-maintenance-log'",
                 token,
-                null
+                1
         );
         assertEquals(1, oldLogs.get("totalItems").asInt());
         JsonNode oldLog = oldLogs.get("items").get(0);
@@ -7306,8 +7405,7 @@ class LocalPocketBaseServerTest {
     }
 
     private void start() throws IOException {
-        TestDatabaseFactory.init();
-        server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, tempDir, null, null, null));
+        server = TestDatabaseFactory.start(new ServerConfig("127.0.0.1", 0, tempDir, null, null, null));
     }
 
     private void bootstrapSuperuser() throws Exception {
@@ -7349,10 +7447,11 @@ class LocalPocketBaseServerTest {
     }
 
     private String collectionTokenSecret(String collectionName, String tokenConfig) throws Exception {
-        Path database = tempDir.resolve("pocketbase.db");
-        if (Files.exists(database)) {
-            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
-                 var query = connection.prepareStatement("SELECT options FROM _collections WHERE name = ?")) {
+        if (usesRelationalStorage()) {
+            try (var connection = openRelationalConnection();
+                 var query = connection.prepareStatement("SELECT " + databaseIdentifier("options")
+                         + " FROM " + databaseIdentifier("_collections")
+                         + " WHERE " + databaseIdentifier("name") + " = ?")) {
                 query.setString(1, collectionName);
                 try (var result = query.executeQuery()) {
                     assertTrue(result.next());
@@ -7367,6 +7466,44 @@ class LocalPocketBaseServerTest {
             }
         }
         throw new AssertionError("Missing collection token secret for " + collectionName + " / " + tokenConfig);
+    }
+
+    private boolean usesRelationalStorage() {
+        return switch (System.getProperty("storage", "json").trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "sqlite", "mysql", "mariadb", "postgres", "postgresql" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean usesExternalRelationalStorage() {
+        return switch (System.getProperty("storage", "json").trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "mysql", "mariadb", "postgres", "postgresql" -> true;
+            default -> false;
+        };
+    }
+
+    private java.sql.Connection openRelationalConnection() throws java.sql.SQLException {
+        String storage = System.getProperty("storage", "json").trim().toLowerCase(java.util.Locale.ROOT);
+        if ("sqlite".equals(storage)) {
+            return java.sql.DriverManager.getConnection("jdbc:sqlite:" + tempDir.resolve("pocketbase.db").toAbsolutePath());
+        }
+        String url = System.getProperty("db.url");
+        String user = System.getProperty("db.user");
+        String password = System.getProperty("db.password");
+        if (url == null || url.isBlank()) {
+            throw new IllegalStateException("External relational test database URL is unavailable.");
+        }
+        return user == null || user.isBlank()
+                ? java.sql.DriverManager.getConnection(url)
+                : java.sql.DriverManager.getConnection(url, user, password == null ? "" : password);
+    }
+
+    private String databaseIdentifier(String identifier) {
+        boolean mysql = "mysql".equalsIgnoreCase(System.getProperty("storage"))
+                || "mariadb".equalsIgnoreCase(System.getProperty("storage"));
+        String quote = mysql ? "`" : "\"";
+        String escaped = identifier.replace(quote, quote + quote);
+        return mysql ? "`" + escaped + "`" : "\"" + escaped + "\"";
     }
 
     private String otpRequestPassword(String email, String otpId) throws IOException {
@@ -7399,12 +7536,13 @@ class LocalPocketBaseServerTest {
     }
 
     private int authOriginCount(String collectionName, String recordId) throws Exception {
-        Path database = tempDir.resolve("pocketbase.db");
-        if (Files.exists(database)) {
+        if (usesRelationalStorage()) {
             String collectionId = request("GET", "/api/collections/" + collectionName, loginToken(), null).get("id").asText();
-            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath());
+            try (var connection = openRelationalConnection();
                  var statement = connection.prepareStatement(
-                         "SELECT COUNT(*) FROM _authOrigins WHERE collectionRef = ? AND recordRef = ?")) {
+                         "SELECT COUNT(*) FROM " + databaseIdentifier("_authOrigins")
+                                 + " WHERE " + databaseIdentifier("collectionRef") + " = ? AND "
+                                 + databaseIdentifier("recordRef") + " = ?")) {
                 statement.setString(1, collectionId);
                 statement.setString(2, recordId);
                 try (var result = statement.executeQuery()) {
@@ -7471,6 +7609,20 @@ class LocalPocketBaseServerTest {
             Thread.sleep(50);
         }
         return false;
+    }
+
+    private JsonNode waitForLogs(String filter, String token, int expectedCount) throws Exception {
+        String path = "/api/logs?filter=" + URLEncoder.encode(filter, StandardCharsets.UTF_8);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        JsonNode last = null;
+        while (System.nanoTime() < deadline) {
+            last = request("GET", path, token, null);
+            if (last.get("totalItems").asInt() >= expectedCount) {
+                return last;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("Timed out waiting for " + expectedCount + " matching activity logs; last response=" + last);
     }
 
     private void ageSqliteLogFixture(String id) throws Exception {
@@ -7729,6 +7881,68 @@ class LocalPocketBaseServerTest {
         }
     }
 
+    private JsonNode relationalBackupSnapshot(Path backup) throws IOException {
+        try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(backup))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                if ("relational-backup.json".equals(entry.getName())) {
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    zip.transferTo(bytes);
+                    return mapper.readTree(bytes.toByteArray());
+                }
+                zip.closeEntry();
+            }
+        }
+        throw new AssertionError("Relational backup snapshot is missing.");
+    }
+
+    private String relationalBackupObjectSql(JsonNode snapshot, String type, String name) {
+        for (JsonNode object : snapshot.path("objects")) {
+            if (type.equals(object.path("type").asText()) && name.equals(object.path("name").asText())) {
+                String sql = object.path("sql").asText();
+                if (!sql.isBlank()) {
+                    return sql;
+                }
+            }
+        }
+        throw new AssertionError("Missing " + type + " object in relational backup: " + name);
+    }
+
+    private void removeEngineFromRelationalBackup(Path backup) throws IOException {
+        Path replacement = Files.createTempFile(backup.getParent(), ".legacy-backup-", ".zip");
+        boolean snapshotFound = false;
+        try {
+            try (ZipInputStream zipInput = new ZipInputStream(Files.newInputStream(backup));
+                 ZipOutputStream zipOutput = new ZipOutputStream(Files.newOutputStream(replacement))) {
+                ZipEntry entry;
+                while ((entry = zipInput.getNextEntry()) != null) {
+                    zipOutput.putNextEntry(new ZipEntry(entry.getName()));
+                    if ("relational-backup.json".equals(entry.getName())) {
+                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                        zipInput.transferTo(bytes);
+                        JsonNode parsed = mapper.readTree(bytes.toByteArray());
+                        if (!(parsed instanceof ObjectNode snapshot)) {
+                            throw new AssertionError("Relational backup snapshot is not an object.");
+                        }
+                        snapshot.remove("engine");
+                        zipOutput.write(mapper.writeValueAsBytes(snapshot));
+                        snapshotFound = true;
+                    } else {
+                        zipInput.transferTo(zipOutput);
+                    }
+                    zipOutput.closeEntry();
+                    zipInput.closeEntry();
+                }
+            }
+            if (!snapshotFound) {
+                throw new AssertionError("Relational backup snapshot is missing.");
+            }
+            Files.move(replacement, backup, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(replacement);
+        }
+    }
+
     private byte[] multipartBody(String boundary, Map<String, String> fields, Map<String, MultipartFile> files) {
         List<byte[]> chunks = new java.util.ArrayList<>();
         fields.forEach((name, value) -> {
@@ -7807,11 +8021,12 @@ class LocalPocketBaseServerTest {
     }
 
     private void downgradeAuthSystemFieldsFixture(String collectionName, String collectionId) throws Exception {
-        Path database = tempDir.resolve("pocketbase.db");
-        if (Files.exists(database)) {
-            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath())) {
+        if (usesRelationalStorage()) {
+            try (var connection = openRelationalConnection()) {
                 String rawSchema;
-                try (var query = connection.prepareStatement("SELECT schema FROM _collections WHERE name = ?")) {
+                try (var query = connection.prepareStatement("SELECT " + databaseIdentifier("schema")
+                        + " FROM " + databaseIdentifier("_collections")
+                        + " WHERE " + databaseIdentifier("name") + " = ?")) {
                     query.setString(1, collectionName);
                     try (var result = query.executeQuery()) {
                         assertTrue(result.next());
@@ -7820,13 +8035,16 @@ class LocalPocketBaseServerTest {
                 }
                 ArrayNode fields = (ArrayNode) mapper.readTree(rawSchema);
                 downgradeAuthSystemFields(fields);
-                try (var update = connection.prepareStatement("UPDATE _collections SET schema = ? WHERE name = ?")) {
+                try (var update = connection.prepareStatement("UPDATE " + databaseIdentifier("_collections")
+                        + " SET " + databaseIdentifier("schema") + " = ? WHERE "
+                        + databaseIdentifier("name") + " = ?")) {
                     update.setString(1, mapper.writeValueAsString(fields));
                     update.setString(2, collectionName);
                     update.executeUpdate();
                 }
                 try (var statement = connection.createStatement()) {
-                    statement.execute("ALTER TABLE \"legacy_auth_fields\" DROP COLUMN \"emailVisibility\"");
+                    statement.execute("ALTER TABLE " + databaseIdentifier(collectionName)
+                            + " DROP COLUMN " + databaseIdentifier("emailVisibility"));
                 }
             }
             return;
@@ -7859,21 +8077,24 @@ class LocalPocketBaseServerTest {
                 SystemCollections.EXTERNAL_AUTHS_ID, SystemCollections.LEGACY_EXTERNAL_AUTHS_ID,
                 SystemCollections.AUTH_ORIGINS_ID, SystemCollections.LEGACY_AUTH_ORIGINS_ID
         );
-        Path database = tempDir.resolve("pocketbase.db");
-        if (Files.exists(database)) {
-            try (var connection = java.sql.DriverManager.getConnection("jdbc:sqlite:" + database.toAbsolutePath())) {
+        if (usesRelationalStorage()) {
+            try (var connection = openRelationalConnection()) {
                 connection.setAutoCommit(false);
                 for (Map.Entry<String, String> replacement : replacements.entrySet()) {
                     for (String table : List.of("_authOrigins", "_externalAuths", "_mfas", "_otps")) {
                         try (var update = connection.prepareStatement(
-                                "UPDATE \"" + table + "\" SET collectionRef = ? WHERE collectionRef = ?")) {
+                                "UPDATE " + databaseIdentifier(table)
+                                        + " SET " + databaseIdentifier("collectionRef")
+                                        + " = ? WHERE " + databaseIdentifier("collectionRef") + " = ?")) {
                             update.setString(1, replacement.getValue());
                             update.setString(2, replacement.getKey());
                             update.executeUpdate();
                         }
                     }
                     try (var update = connection.prepareStatement(
-                            "UPDATE _authRequests SET collectionId = ? WHERE collectionId = ?")) {
+                            "UPDATE " + databaseIdentifier("_authRequests")
+                                    + " SET " + databaseIdentifier("collectionId")
+                                    + " = ? WHERE " + databaseIdentifier("collectionId") + " = ?")) {
                         update.setString(1, replacement.getValue());
                         update.setString(2, replacement.getKey());
                         update.executeUpdate();
@@ -7881,7 +8102,8 @@ class LocalPocketBaseServerTest {
                 }
 
                 List<Map<String, String>> collections = new java.util.ArrayList<>();
-                try (var query = connection.prepareStatement("SELECT id, schema FROM _collections");
+                try (var query = connection.prepareStatement("SELECT " + databaseIdentifier("id") + ", "
+                        + databaseIdentifier("schema") + " FROM " + databaseIdentifier("_collections"));
                      var results = query.executeQuery()) {
                     while (results.next()) {
                         collections.add(Map.of(
@@ -7894,7 +8116,9 @@ class LocalPocketBaseServerTest {
                     String schema = collection.get("schema");
                     if (!schema.isBlank()) {
                         JsonNode migrated = replaceJsonStrings(mapper.readTree(schema), replacements);
-                        try (var update = connection.prepareStatement("UPDATE _collections SET schema = ? WHERE id = ?")) {
+                        try (var update = connection.prepareStatement("UPDATE " + databaseIdentifier("_collections")
+                                + " SET " + databaseIdentifier("schema") + " = ? WHERE "
+                                + databaseIdentifier("id") + " = ?")) {
                             update.setString(1, mapper.writeValueAsString(migrated));
                             update.setString(2, collection.get("id"));
                             update.executeUpdate();
@@ -7902,7 +8126,9 @@ class LocalPocketBaseServerTest {
                     }
                 }
                 for (Map.Entry<String, String> replacement : replacements.entrySet()) {
-                    try (var update = connection.prepareStatement("UPDATE _collections SET id = ? WHERE id = ?")) {
+                    try (var update = connection.prepareStatement("UPDATE " + databaseIdentifier("_collections")
+                            + " SET " + databaseIdentifier("id") + " = ? WHERE "
+                            + databaseIdentifier("id") + " = ?")) {
                         update.setString(1, replacement.getValue());
                         update.setString(2, replacement.getKey());
                         update.executeUpdate();

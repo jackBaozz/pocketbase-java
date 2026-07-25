@@ -103,7 +103,7 @@ public class RecordRepository extends BaseRepository {
         try {
             org.jooq.Record record = database.dsl()
                     .select(recordSelectFields(collection))
-                    .from(qt(collection.name))
+                    .from(qt(tableName(collection)))
                     .where(qf(field).eq(value))
                     .fetchOne();
             return record == null ? null : normalizeStoredRecord(collection, record.intoMap());
@@ -116,7 +116,7 @@ public class RecordRepository extends BaseRepository {
         try {
             return database.dsl()
                     .select(recordSelectFields(collection))
-                    .from(qt(collection.name))
+                    .from(qt(tableName(collection)))
                     .fetch()
                     .map(record -> normalizeStoredRecord(collection, record.intoMap()));
         } catch (DataAccessException e) {
@@ -162,7 +162,7 @@ public class RecordRepository extends BaseRepository {
         int rowId = 0;
         for (org.jooq.Record record : database.dsl()
                 .select(recordSelectFields(colSchema))
-                .from(qt(colSchema.name))
+                .from(qt(tableName(colSchema)))
                 .where(DSL.trueCondition())
                 .fetch()) {
             Map<String, Object> raw = normalizeStoredRecord(colSchema, record.intoMap());
@@ -333,7 +333,7 @@ public class RecordRepository extends BaseRepository {
         try {
             List<Field<Object>> insertFields = fields.stream().map(this::qf).toList();
             database.dsl()
-                    .insertInto(qt(colSchema.name))
+                    .insertInto(qt(tableName(colSchema)))
                     .columns(insertFields)
                     .values(values)
                     .execute();
@@ -465,7 +465,7 @@ public class RecordRepository extends BaseRepository {
                 updates.put(qf(fields.get(i)), values.get(i));
             }
             database.dsl()
-                    .update(qt(colSchema.name))
+                    .update(qt(tableName(colSchema)))
                     .set(updates)
                     .where(qfs("id").eq(id))
                     .execute();
@@ -506,11 +506,11 @@ public class RecordRepository extends BaseRepository {
             throw new ApiException(400, "Record payload must be a JSON object.",
                     ApiErrors.invalidField("body", "Request body must be a JSON object."));
         }
-        String collectionName = collectionRepository.getCollectionSchema(collection).name;
+        CollectionSchema collectionSchema = collectionRepository.getCollectionSchema(collection);
         boolean exists = false;
         try {
             exists = database.dsl().fetchExists(
-                    database.dsl().selectOne().from(qt(collectionName)).where(qfs("id").eq(id))
+                    database.dsl().selectOne().from(qt(tableName(collectionSchema))).where(qfs("id").eq(id))
             );
         } catch (Exception ignored) {
         }
@@ -547,7 +547,7 @@ public class RecordRepository extends BaseRepository {
         }
         try {
             database.dsl()
-                    .deleteFrom(qt(schema.name))
+                    .deleteFrom(qt(tableName(schema)))
                     .where(qfs("id").eq(id))
                     .execute();
         } catch (DataAccessException e) {
@@ -583,7 +583,7 @@ public class RecordRepository extends BaseRepository {
                 updates.put(qf(entry.getKey()), toStoredValue(entry.getValue()));
             }
             database.dsl()
-                    .update(qt(colSchema.name))
+                    .update(qt(tableName(colSchema)))
                     .set(updates)
                     .where(qfs("id").eq(recordId))
                     .execute();
@@ -927,7 +927,11 @@ public class RecordRepository extends BaseRepository {
 
     private Object toStoredValue(Object value) {
         if (value instanceof Boolean b) {
-            return b ? 1 : 0;
+            // PostgreSQL has a native boolean type and rejects the SQLite/MySQL
+            // integer representation (0/1) when values are bound through JDBC.
+            // Keep the existing representation for the other engines, where the
+            // schema and historical data use integer-backed booleans.
+            return database.engine() == JooqDatabase.Engine.POSTGRES ? b : (b ? 1 : 0);
         }
         if (value instanceof Number) {
             return value;
@@ -1153,7 +1157,7 @@ public class RecordRepository extends BaseRepository {
         if (currentId != null) {
             duplicate = duplicate.and(qfs("id").ne(currentId));
         }
-        if (database.dsl().fetchExists(database.dsl().selectOne().from(qt(collection.name)).where(duplicate))) {
+        if (database.dsl().fetchExists(database.dsl().selectOne().from(qt(tableName(collection))).where(duplicate))) {
             throw new ApiException(400, "Failed to validate record.",
                     ApiErrors.fieldError(
                             "recordRef",
@@ -1265,7 +1269,7 @@ public class RecordRepository extends BaseRepository {
                     condition = condition.and(qfs("id").ne(currentRecordId));
                 }
                 boolean exists = database.dsl().fetchExists(
-                        database.dsl().selectOne().from(qt(collection.name)).where(condition)
+                        database.dsl().selectOne().from(qt(tableName(collection))).where(condition)
                 );
                 if (exists) {
                     errors.put(field.name, ApiErrors.validationError("validation_not_unique", ApiErrors.MESSAGE_VALUE_MUST_BE_UNIQUE));
@@ -1274,5 +1278,9 @@ public class RecordRepository extends BaseRepository {
                 throw new ApiException(400, "Failed to validate unique field: " + field.name);
             }
         }
+    }
+
+    private String tableName(CollectionSchema collection) {
+        return collectionRepository.physicalTableName(collection);
     }
 }

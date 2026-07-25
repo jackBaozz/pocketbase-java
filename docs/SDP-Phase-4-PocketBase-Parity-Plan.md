@@ -1,6 +1,6 @@
 # SDP Phase 4: PocketBase Parity And Release Hardening Plan
 
-Updated: 2026-07-19
+Updated: 2026-07-25
 Baseline: [PocketBase v0.39.7](https://github.com/pocketbase/pocketbase/releases/tag/v0.39.7) API and Admin UI behavior compatibility.
 
 This document outlines the roadmap for Phase 4. It excludes all tasks successfully completed during Phase 3 and breaks down the remaining uncompleted requirements into granular, actionable tasks.
@@ -56,6 +56,7 @@ This workstream focuses on database compatibility, dialect abstractions, and sch
 - [x] **Startup permission probes**: Add startup validation to verify that the DSN credentials have the necessary database permissions (CREATE, SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, DROP).
 - [x] **Collation & encoding validation**: Verify that database connection character encoding is UTF-8 (utf8mb4 for MySQL) and collations match PocketBase requirements on startup.
 - [x] **CI pipeline integration**: Configure optional/required MySQL and PostgreSQL test execution in the project's CI configuration.
+- [x] **Real database verification**: Execute the full test matrix against isolated MySQL and PostgreSQL instances, including migrations, backups, SQL API, auth, UI browser flows, and SDK smoke tests.
 - *Acceptance Criteria*: Verification suites run on real MySQL and PostgreSQL databases.
 
 #### [x] P4-A05: JSONL Default Engine & Relational Migration Paths
@@ -89,6 +90,7 @@ This workstream improves the testing coverage to verify compatibility against of
 - [x] **Patch-free JS SDK validation**: Run the official JavaScript SDK test suites against the running server without any custom client-side request modifications.
 - [x] **Expand JS SDK coverage**: Add test coverage for file uploads/downloads, batch operations, realtime subscriptions, token refresh, OAuth2, and MFA.
 - [x] **Dart SDK smoke tests**: Write basic client tests using the official Dart/Flutter SDK to verify mobile client compatibility.
+- [x] **Required Dart CI gate**: Install Dart SDK 3.6 in CI and pass `-DrequireDartSdkSmoke=true`, so a missing or failing Dart smoke test fails the release workflow instead of being skipped.
 - *Acceptance Criteria*: Official JS and Dart SDKs can establish connections and perform CRUD, auth, and realtime operations without client code modifications.
 
 #### [x] P4-B04: HTTP Request Middleware Parity
@@ -388,6 +390,7 @@ This workstream maintains GraalVM compatibility and prepares release pipelines.
 #### [x] P4-G03: Build & Release Gates
 - [x] **Required CI gates**: Configure CI pipeline checks for JVM test execution, SQLite tests, MySQL tests, PostgreSQL tests, and UI asset compilation.
 - [x] **Native binary gate**: Include a compilation step verifying release branches compile on GraalVM.
+- [x] **Native SQLite runtime smoke**: Start the compiled binary, bootstrap a superuser, create a collection and record, restart it, and verify the SQLite record persisted.
 - *Acceptance Criteria*: Merges to main require successful test coverage passes across all database dialects.
 
 ---
@@ -408,6 +411,8 @@ This workstream maintains GraalVM compatibility and prepares release pipelines.
 ---
 
 ## 4. Corrective Completion Audit (2026-07-19)
+
+> Historical evidence in this section reflects the 2026-07-19 audit. The real MySQL/PostgreSQL execution status, required Dart CI gate, UI build, and native runtime evidence are superseded by the 2026-07-25 release-hardening verification below.
 
 The following items were rechecked after the initial Phase 4 completion review. A checked task in this document must have executable implementation and test evidence, not only a design note or placeholder.
 
@@ -451,3 +456,29 @@ Final local verification for this audit:
 - The official JS SDK smoke, including the SearchProvider `skipTotal` contract, passes on both matrices. Dart SDK smoke remains skipped because `dart` is absent from `PATH`.
 - All six Admin UI Playwright browser tests execute and pass on both JSONL and SQLite, including the OAuth2 popup/realtime callback flow with an explicit `oauth2` create rule.
 - `sh/build-native.sh` succeeds with GraalVM 25, and the generated native executable passes a runtime smoke covering the 32-provider metadata registry plus standard GitHub auth-method URL/logo and legacy-provider responses.
+
+---
+
+## 5. Release-Hardening Verification (2026-07-25)
+
+This section supersedes the external-database, Dart gate, UI, and native-release evidence in the historical audit above.
+
+| Task | Status | Current evidence |
+| --- | --- | --- |
+| P4-A01 to P4-A04: relational dialect and real DB matrix | [x] Complete locally | Full suites passed against isolated real MySQL and PostgreSQL instances: 235 tests, 0 failures, 0 errors, 1 Dart skip each. This covers schema changes, import/truncate, backup restore, SQL API, auth flows, browser UI tests, and JS SDK smoke. Long auth collection names are also restarted against their bounded physical table names. |
+| P4-A02: PostgreSQL boolean normalization | [x] Complete | PostgreSQL now receives native JDBC booleans; SQLite/MySQL retain their integer-backed representation. Full PostgreSQL regression is green. |
+| P4-A03: schema DDL transaction safety | [x] Complete | Column existence detection now uses JDBC metadata instead of an intentionally failing probe, preventing PostgreSQL from aborting a transaction before a valid `ALTER TABLE`. |
+| P4-D03 / P4-B12: relational backup restore | [x] Complete | Logical snapshots retain PostgreSQL `text` without an invalid length modifier. MySQL snapshots preserve prefix lengths, sort direction, and functional/partial-index key parts; PostgreSQL stores canonical `pg_get_indexdef(...)` DDL; MySQL views are restored from executable `CREATE VIEW ... AS` definitions. Engine-less legacy snapshots remain restorable only on SQLite and are rejected before mutation on MySQL/PostgreSQL. The create/restore lifecycle passes on all three relational engines. |
+| P4-B03: Dart SDK gate | [x] Implemented; hosted execution pending | CI installs Dart 3.6 and sets `requireDartSdkSmoke=true` for every storage matrix. This machine has no `dart`, so local runs intentionally show one skipped test rather than claiming a Dart execution. |
+| P4-F05: Admin UI build integrity | [x] Complete locally | `npm ci`, `npm run build`, and the resource-diff check passed. |
+| P4-G01 / P4-G03: native release smoke | [x] Complete locally | GraalVM 25 native image built successfully; `scripts/native-sqlite-smoke.sh ./target/pocketbase-java` passed, including restart persistence. `sh/build-native.sh` now explicitly uses the repository Maven settings to avoid stale global mirrors. |
+| P4-RH01: hosted GitHub Actions confirmation | [ ] Pending external CI | The workflow changes are ready, but no new hosted run has been inspected from this workspace (`gh` is unavailable and these changes have not yet been pushed). A push to the release branch must confirm the Dart-required and Node-runtime-maintenance gates in GitHub Actions. |
+
+Current local command results:
+
+- `mise exec maven@3.9.12 -- mvn -B test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
+- `mise exec maven@3.9.12 -- mvn -B -Dstorage=sqlite test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
+- `mise exec maven@3.9.12 -- mvn -B -Pexternal-db-drivers -Dstorage=mysql test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
+- `mise exec maven@3.9.12 -- mvn -B -Pexternal-db-drivers -Dstorage=postgresql -DsocksProxyHost= -DsocksProxyPort=0 test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
+- `UI`: `npm ci`, `npm run build`, and the generated-resource diff check pass.
+- Native: `sh/build-native.sh` with GraalVM 25 and the repository settings produces `target/pocketbase-java`; the SQLite runtime smoke passes.

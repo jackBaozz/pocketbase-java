@@ -37,7 +37,7 @@ class RealtimeSmokeTest {
     void setUp() throws Exception {
         ServerConfig config = new ServerConfig("127.0.0.1", 0, dataDir, null, null, null);
         TestDatabaseFactory.init();
-        server = LocalPocketBase.start(config);
+        server = TestDatabaseFactory.start(config);
         client = PocketBaseClient.builder("http://localhost:" + server.port()).build();
     }
 
