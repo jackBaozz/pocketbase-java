@@ -61,6 +61,7 @@ jobs:
         with:
           java-version: '17'
           distribution: 'graalvm'
+          components: 'native-image'
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Native Image
         run: mvn -Pnative -DskipTests package
