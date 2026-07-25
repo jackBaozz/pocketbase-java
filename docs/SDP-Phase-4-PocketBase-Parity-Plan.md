@@ -469,16 +469,14 @@ This section supersedes the external-database, Dart gate, UI, and native-release
 | P4-A02: PostgreSQL boolean normalization | [x] Complete | PostgreSQL now receives native JDBC booleans; SQLite/MySQL retain their integer-backed representation. Full PostgreSQL regression is green. |
 | P4-A03: schema DDL transaction safety | [x] Complete | Column existence detection now uses JDBC metadata instead of an intentionally failing probe, preventing PostgreSQL from aborting a transaction before a valid `ALTER TABLE`. |
 | P4-D03 / P4-B12: relational backup restore | [x] Complete | Logical snapshots retain PostgreSQL `text` without an invalid length modifier. MySQL snapshots preserve prefix lengths, sort direction, and functional/partial-index key parts; PostgreSQL stores canonical `pg_get_indexdef(...)` DDL; MySQL views are restored from executable `CREATE VIEW ... AS` definitions. Engine-less legacy snapshots remain restorable only on SQLite and are rejected before mutation on MySQL/PostgreSQL. The create/restore lifecycle passes on all three relational engines. |
-| P4-B03: Dart SDK gate | [x] Implemented; hosted execution pending | CI installs Dart 3.6 and sets `requireDartSdkSmoke=true` for every storage matrix. This machine has no `dart`, so local runs intentionally show one skipped test rather than claiming a Dart execution. |
+| P4-B03: Dart SDK gate | [x] Complete | CI installs Dart 3.6 and sets `requireDartSdkSmoke=true` for every storage matrix. Hosted run [#56](https://github.com/jackBaozz/pocketbase-java/actions/runs/30161846033) executed the official Dart SDK smoke successfully on SQLite, MySQL, and PostgreSQL. This machine has no `dart`, so local runs intentionally show one skipped test rather than claiming a Dart execution. |
 | P4-F05: Admin UI build integrity | [x] Complete locally | `npm ci`, `npm run build`, and the resource-diff check passed. |
-| P4-G01 / P4-G03: native release smoke | [x] Complete locally | GraalVM 25 native image built successfully; `scripts/native-sqlite-smoke.sh ./target/pocketbase-java` passed, including restart persistence. `sh/build-native.sh` now explicitly uses the repository Maven settings to avoid stale global mirrors. |
-| P4-RH01: hosted GitHub Actions confirmation | [ ] Pending external CI | The workflow changes are ready, but no new hosted run has been inspected from this workspace (`gh` is unavailable and these changes have not yet been pushed). A push to the release branch must confirm the Dart-required and Node-runtime-maintenance gates in GitHub Actions. |
+| P4-G01 / P4-G03: native release smoke | [x] Complete; hosted confirmation | GraalVM 25 native image built successfully; `scripts/native-sqlite-smoke.sh ./target/pocketbase-java` passed, including restart persistence. Hosted run [#56](https://github.com/jackBaozz/pocketbase-java/actions/runs/30161846033) also verified `native-image`, compiled the binary, and passed the SQLite native runtime smoke. |
+| P4-RH01: hosted GitHub Actions confirmation | [x] Complete | Hosted run [#56](https://github.com/jackBaozz/pocketbase-java/actions/runs/30161846033) on `main` completed successfully: UI build, required Dart SDK smoke across SQLite/MySQL/PostgreSQL, GraalVM 25 native compilation, and the native SQLite runtime smoke all passed. |
 
 Current local command results:
 
-- `mise exec maven@3.9.12 -- mvn -B test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
-- `mise exec maven@3.9.12 -- mvn -B -Dstorage=sqlite test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
-- `mise exec maven@3.9.12 -- mvn -B -Pexternal-db-drivers -Dstorage=mysql test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
-- `mise exec maven@3.9.12 -- mvn -B -Pexternal-db-drivers -Dstorage=postgresql -DsocksProxyHost= -DsocksProxyPort=0 test`: 235 tests, 0 failures, 0 errors, 1 Dart skip.
+- `mise exec maven@3.9.12 -- mvn -B test`: 236 tests, 0 failures, 0 errors, 1 Dart skip.
+- Current-source SQLite/MySQL/PostgreSQL parity was confirmed by hosted run [#56](https://github.com/jackBaozz/pocketbase-java/actions/runs/30161846033), where the required Dart SDK smoke also executed successfully on every matrix entry.
 - `UI`: `npm ci`, `npm run build`, and the generated-resource diff check pass.
 - Native: `sh/build-native.sh` with GraalVM 25 and the repository settings produces `target/pocketbase-java`; the SQLite runtime smoke passes.
