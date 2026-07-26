@@ -1,0 +1,302 @@
+/* ==========================================================================
+   CodeEditor
+   A transparent <textarea> stacked on top of a highlighted <pre>.
+
+   ── THE ALIGNMENT CONTRACT ────────────────────────────────────────────────
+   The caret is painted by the textarea while the glyphs the user sees come
+   from the <pre> underneath. They only stay on top of each other while every
+   property that can move a glyph is *identical* on both layers:
+
+       font-family, font-size, line-height, letter-spacing, word-spacing,
+       font-weight, font-variant-ligatures, tab-size,
+       white-space, overflow-wrap, word-break,
+       padding, border-width, box-sizing, text-indent, direction
+
+   That is why those declarations live in ONE shared rule below and are driven
+   by custom properties (--pbce-pad-*, --pbce-font-size, ...). Never redeclare
+   any of them for a single layer - change the variable instead.
+
+   Two extras that protect the contract:
+     - line-height is an integer px value (not a unitless ratio) so both layers
+       round their line boxes exactly the same way;
+     - the textarea gets `data-gramm="false"` in the TSX because extensions
+       such as Grammarly inject their own overlay and shift the text.
+
+   ── SCROLLING ────────────────────────────────────────────────────────────
+   Instead of mirroring scrollTop/scrollLeft between the two layers (which
+   always drifts by a frame), there is a single scroll container: `.pbce`.
+   `.pbce-body` is a plain sizer, so it is laid out at the *full* content size;
+   the textarea is stretched over it with `inset: 0` and therefore never
+   scrolls on its own. Both layers are children of the same scroller, so they
+   are physically incapable of drifting apart, and the browser scrolling the
+   caret into view moves the highlight along with it.
+   ========================================================================== */
+
+.pbce {
+  --pbce-font-size: 13px;
+  --pbce-line-height: 20px; /* integer px on purpose - see the contract above */
+  --pbce-pad-y: 10px;
+  --pbce-pad-x: 12px;
+  --pbce-min-height: 82px; /* overridden inline by the `minHeight` prop */
+
+  /* token palette - every value is theme aware, so light/dark both work */
+  --pbce-plain: var(--surfaceTxtColor);
+  --pbce-comment: var(--surfaceTxtHintColor);
+  --pbce-string: var(--successColor);
+  --pbce-number: var(--dangerColor);
+  --pbce-keyword: var(--accentColor);
+  --pbce-macro: var(--infoColor);
+  --pbce-function: var(--infoColor);
+  --pbce-modifier: var(--surfaceTxtHintColor);
+  --pbce-punctuation: var(--surfaceTxtHintColor);
+
+  position: relative;
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  overflow: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--inputBorderColor);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  color: var(--surfaceTxtColor);
+  cursor: text;
+  scrollbar-width: thin;
+  transition:
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.pbce:focus-within {
+  border-color: var(--accentColor);
+  box-shadow: 0 0 0 3px rgba(16, 85, 201, 0.12);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accentColor) 16%, transparent);
+}
+
+/* sizer: not a scroll container, so it always spans the whole content box */
+.pbce .pbce-body {
+  position: relative;
+  width: 100%;
+  min-height: var(--pbce-min-height);
+}
+
+/* ── the shared metrics: THIS is what keeps the caret on the glyphs ───────── */
+.pbce .pbce-pre,
+.pbce .pbce-input {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: var(--pbce-pad-y) var(--pbce-pad-x);
+  font-family: var(--monospaceFontFamily);
+  font-size: var(--pbce-font-size);
+  line-height: var(--pbce-line-height);
+  font-weight: 400;
+  font-style: normal;
+  font-variant-ligatures: none;
+  letter-spacing: 0;
+  word-spacing: normal;
+  text-align: left;
+  text-indent: 0;
+  text-transform: none;
+  direction: ltr;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  hyphens: none;
+  /* multi line: wrap like a textarea does (long words break, no h-scroll) */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: keep-all;
+}
+
+/* highlight layer - in flow, so it is what gives `.pbce-body` its height */
+.pbce .pbce-pre {
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  color: var(--pbce-plain);
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* input layer - stretched over the sizer, invisible except for the caret */
+.pbce .pbce-input,
+.pbce .pbce-input:focus,
+.pbce .pbce-input:disabled {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden; /* the wrapper does the scrolling, never the textarea */
+  resize: none;
+  outline: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--surfaceTxtColor);
+}
+
+.pbce .pbce-input::placeholder {
+  color: var(--surfaceTxtHintColor);
+  -webkit-text-fill-color: var(--surfaceTxtHintColor);
+  opacity: 1;
+}
+
+/* the textarea sits above the glyphs, so its selection must stay translucent */
+.pbce .pbce-input::selection {
+  background: rgba(16, 85, 201, 0.24);
+  background: color-mix(in srgb, var(--accentColor) 26%, transparent);
+}
+
+/* ── single line ─────────────────────────────────────────────────────────── */
+.pbce.pbce--single {
+  --pbce-pad-y: 11px;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* behave like a native <input>: scroll horizontally, but without a bar */
+  scrollbar-width: none;
+}
+
+.pbce.pbce--single::-webkit-scrollbar {
+  display: none;
+}
+
+.pbce.pbce--single .pbce-body {
+  min-height: 0;
+  width: max-content;
+  min-width: 100%;
+}
+
+.pbce.pbce--single .pbce-pre,
+.pbce.pbce--single .pbce-input {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.pbce.pbce--single .pbce-pre {
+  width: max-content;
+  min-width: 100%;
+  /* sub pixel slack: guarantees the textarea is never 1px narrower than its
+     own content, which would let it scroll internally and break the overlay */
+  padding-right: calc(var(--pbce-pad-x) + 2px);
+}
+
+/* ── disabled ────────────────────────────────────────────────────────────── */
+.pbce.pbce--disabled {
+  background: var(--surfaceAlt1Color);
+  border-color: var(--surfaceAlt3Color);
+  cursor: not-allowed;
+}
+
+.pbce.pbce--disabled .pbce-pre {
+  opacity: 0.6;
+}
+
+.pbce.pbce--disabled .pbce-input {
+  cursor: not-allowed;
+}
+
+/* ── tokens ──────────────────────────────────────────────────────────────── */
+.pbce .pbce-t-comment {
+  color: var(--pbce-comment);
+  font-style: italic;
+}
+
+.pbce .pbce-t-string {
+  color: var(--pbce-string);
+}
+
+/* json object keys - kept distinct from the string values */
+.pbce .pbce-t-key {
+  color: var(--pbce-keyword);
+}
+
+.pbce .pbce-t-number,
+.pbce .pbce-t-constant {
+  color: var(--pbce-number);
+}
+
+.pbce .pbce-t-keyword,
+.pbce .pbce-t-operator {
+  color: var(--pbce-keyword);
+}
+
+.pbce .pbce-t-macro {
+  color: var(--pbce-macro);
+  font-weight: 600;
+}
+
+.pbce .pbce-t-function {
+  color: var(--pbce-function);
+}
+
+/* `:isset`, `:changed`, `_via_` ... - italic, exactly like the official theme */
+.pbce .pbce-t-modifier {
+  color: var(--pbce-modifier);
+  font-style: italic;
+}
+
+.pbce .pbce-t-property {
+  color: var(--pbce-plain);
+}
+
+.pbce .pbce-t-punctuation {
+  color: var(--pbce-punctuation);
+}
+
+/* ── autocomplete dropdown (portaled to <body>, hence no .pbce prefix) ────── */
+.pbce-dropdown {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  box-sizing: border-box;
+  min-width: 170px;
+  max-width: 340px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding: 3px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+.pbce-dropdown .pbce-dropdown-item {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--surfaceTxtColor);
+  font-family: var(--monospaceFontFamily);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+  transition: background 100ms;
+}
+
+.pbce-dropdown .pbce-dropdown-item:hover {
+  background: var(--surfaceAlt1Color);
+}
+
+.pbce-dropdown .pbce-dropdown-item.active {
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}

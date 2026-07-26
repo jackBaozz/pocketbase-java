@@ -3818,6 +3818,10 @@ td.row-actions .icon-button:last-child {
   font-size: 13px;
   line-height: 1.6;
   color: var(--surfaceTxtHintColor);
+  /* Change summaries are newline-separated bullet lists. */
+  white-space: pre-line;
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .confirm-require {
@@ -3931,5 +3935,114 @@ td.row-actions .icon-button:last-child {
 
 .log-chip.danger {
   background: var(--surfaceDangerColor);
+  color: var(--dangerColor);
+}
+
+/* Rate limit rules editor */
+.rate-limit-card {
+  gap: 12px;
+}
+
+.rate-limit-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.rate-limit-table {
+  display: grid;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.rate-limit-head,
+.rate-limit-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) 110px 100px 130px 34px;
+  gap: 8px;
+  align-items: center;
+  min-width: 600px;
+}
+
+.rate-limit-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--surfaceTxtHintColor);
+}
+
+.rate-limit-row input,
+.rate-limit-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+.rate-limit-add {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+/* Field drag-to-reorder */
+.field-drag-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-radius: var(--borderRadius);
+  transition: opacity 0.12s, box-shadow 0.12s;
+}
+
+.field-drag-row > .field-builder-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+  cursor: grab;
+  color: var(--surfaceTxtHintColor);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.field-drag-row:hover .field-drag-handle {
+  opacity: 0.7;
+}
+
+.field-drag-handle:active {
+  cursor: grabbing;
+  opacity: 1;
+}
+
+.field-drag-row.dragging {
+  opacity: 0.45;
+}
+
+.field-drag-row.drop-target {
+  box-shadow: 0 -2px 0 0 var(--accentColor);
+}
+
+/* Per-field validation errors */
+.record-field-slot {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.record-field-slot.has-error .record-field-card {
+  border-color: var(--dangerColor);
+}
+
+.record-field-error {
+  margin: 0;
+  padding-left: 2px;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--dangerColor);
 }

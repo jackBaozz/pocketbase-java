@@ -10,6 +10,7 @@ import {
   Database,
   Download,
   Edit3,
+  GripVertical,
   FileArchive,
   FileUp,
   HardDrive,
@@ -48,7 +49,10 @@ import { FieldEditor } from "./components/FieldEditor";
 
 import { useTranslation } from "react-i18next";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { ApiPreview } from "./components/ApiPreview";
+import { CodeEditor, buildRuleCompletions } from "./components/CodeEditor";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { IndexManager } from "./components/IndexManager";
 import type { ConfirmRequest } from "./components/ConfirmDialog";
 import { RecordFieldControl } from "./components/RecordFieldControl";
 import { recordSummary } from "./components/RelationPicker";
@@ -167,6 +171,7 @@ type CollectionSchema = {
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
   viewQuery?: string | null;
+  indexes?: string[];
   created?: string;
   updated?: string;
 };
@@ -389,6 +394,7 @@ function App() {
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
   const [setupRequired, setSetupRequired] = useState(true);
   const [confirmState, setConfirmState] = useState<PendingConfirm | null>(null);
+  const [apiPreviewOpen, setApiPreviewOpen] = useState(false);
   const [mfaChallenge, setMfaChallenge] = useState<MfaChallenge | null>(null);
   const [otpCode, setOtpCode] = useState("");
   const [collections, setCollections] = useState<CollectionSchema[]>([]);
@@ -436,6 +442,7 @@ function App() {
   const [testEmailTemplate, setTestEmailTemplate] = useState("verification");
   const [testS3Target, setTestS3Target] = useState("storage");
   const backupUploadRef = useRef<HTMLInputElement>(null);
+  const lastSelectedId = useRef<string | null>(null);
 
   const authenticated = Boolean(token) && !setupRequired;
   const collectionView = view === "records" || view === "schema";
@@ -508,6 +515,7 @@ function App() {
     setSetupRequired(status.required);
     return status;
   }, []);
+
 
   const refreshCollections = useCallback(async () => {
     if (!token) return;
@@ -595,6 +603,29 @@ function App() {
       setLoading(false);
     }
   }, [token]);
+
+  // While the backups page is open, poll health so an in-progress backup/restore
+  // disables the controls and the list refreshes once the operation clears.
+  useEffect(() => {
+    if (view !== "backups" || !token) return;
+    let cancelled = false;
+    let wasBusy = false;
+    const timer = setInterval(async () => {
+      try {
+        const data = await refreshHealth();
+        if (cancelled) return;
+        const busy = data?.canBackup === false;
+        if (wasBusy && !busy) void refreshBackups();
+        wasBusy = busy;
+      } catch {
+        // A transient health failure shouldn't kill the poll.
+      }
+    }, 3500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [refreshBackups, refreshHealth, token, view]);
 
   const refreshSettings = useCallback(async () => {
     if (!token) return;
@@ -1079,7 +1110,28 @@ function App() {
     });
   }
 
-  function toggleRecordSelection(id: string) {
+  function toggleRecordSelection(id: string, extendRange = false) {
+    // Shift+Click applies the new state across the whole span since the last click (PB v0.39.8).
+    if (extendRange && lastSelectedId.current && lastSelectedId.current !== id) {
+      const ids = records.map((record) => record.id);
+      const from = ids.indexOf(lastSelectedId.current);
+      const to = ids.indexOf(id);
+      if (from !== -1 && to !== -1) {
+        const span = ids.slice(Math.min(from, to), Math.max(from, to) + 1);
+        setSelectedRecordIds((current) => {
+          const selecting = !current.includes(id);
+          const next = new Set(current);
+          for (const item of span) {
+            if (selecting) next.add(item);
+            else next.delete(item);
+          }
+          return [...next];
+        });
+        lastSelectedId.current = id;
+        return;
+      }
+    }
+    lastSelectedId.current = id;
     setSelectedRecordIds((current) => {
       if (current.includes(id)) return current.filter((item) => item !== id);
       return [...current, id];
@@ -1222,9 +1274,15 @@ function App() {
   async function saveSettings() {
     try {
       const parsed = JSON.parse(settingsDraft || "{}") as AppSettings;
-      const updated = await api<AppSettings>("/api/settings", { method: "PATCH", body: parsed });
-      setSettings(updated);
-      setSettingsDraft(JSON.stringify(updated, null, 2));
+      // Rules are resolved in order, so normalise priority on save like the official UI.
+      const limits = isPlainObject(parsed.rateLimits) ? parsed.rateLimits : null;
+      if (limits && Array.isArray(limits.rules)) {
+        limits.rules = sortRateLimitRules(limits.rules as RateLimitRule[]);
+      }
+      await api<AppSettings>("/api/settings", { method: "PATCH", body: parsed });
+      // Re-read instead of trusting the PATCH echo: the server normalises settings
+      // (dedupes rate limit rules, redacts secrets) and the response can differ.
+      await refreshSettings();
       notify(t("notifications.settings_saved", "Settings saved"));
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -1328,6 +1386,18 @@ function App() {
       setLoading(false);
     }
   }
+
+  // Table and column names are what you actually type in the SQL console.
+  const sqlCompletions = useMemo(() => {
+    const names: string[] = [];
+    for (const collection of collections) {
+      names.push(collection.name);
+      for (const field of collection.fields ?? []) {
+        names.push(field.name, `${collection.name}.${field.name}`);
+      }
+    }
+    return [...new Set(names)];
+  }, [collections]);
 
   const allColumns = useMemo(() => recordColumns(selected), [selected]);
   const columns = useMemo(
@@ -1482,6 +1552,7 @@ function App() {
                   settings={settings}
                   draft={settingsDraft}
                   loading={loading}
+                  collections={collections}
                   onDraft={setSettingsDraft}
                   onRefresh={refreshSettings}
                   onSave={saveSettings}
@@ -1552,6 +1623,7 @@ function App() {
                   result={sqlResult}
                   error={sqlError}
                   loading={loading}
+                  sqlCompletions={sqlCompletions}
                   onQuery={setSqlQuery}
                   onRun={runSql}
                 />
@@ -1586,6 +1658,7 @@ function App() {
                     onRefresh={() => refreshRecords(selected.name, query)}
                     onLoadMore={loadMoreRecords}
                     onEditCollection={() => setCollectionEditor({ mode: "edit", collection: selected })}
+                    onApiPreview={() => setApiPreviewOpen(true)}
                     onNew={() => setRecordEditor({})}
                     onEdit={(record) => setRecordEditor({ record })}
                     onDelete={deleteRecord}
@@ -1646,6 +1719,10 @@ function App() {
 
       {oauthResult && (
         <OAuthResultModal result={oauthResult} onClose={() => setOauthResult(null)} />
+      )}
+
+      {apiPreviewOpen && selected && (
+        <ApiPreview collection={selected} baseUrl={window.location.origin} onClose={() => setApiPreviewOpen(false)} />
       )}
 
       {confirmState && (
@@ -1974,13 +2051,14 @@ type RecordsViewProps = {
   onRefresh: () => void | Promise<void>;
   onLoadMore: () => void | Promise<void>;
   onEditCollection: () => void;
+  onApiPreview: () => void;
   onNew: () => void;
   onEdit: (record: RecordItem) => void;
   onDelete: (record: RecordItem) => void;
   onDeleteSelected: () => void;
   onToggleColumn: (column: string) => void;
   onResetColumns: () => void;
-  onToggleSelected: (id: string) => void;
+  onToggleSelected: (id: string, extendRange?: boolean) => void;
   onToggleAll: (checked: boolean) => void;
   onClearSelection: () => void;
   onOpenFile: (record: RecordItem, filename: string) => void;
@@ -2039,6 +2117,14 @@ function RecordsView(props: RecordsViewProps) {
           <span title={props.collection.name}>{props.collection.name}</span>
         </nav>
         <div className="page-header-secondary-btns">
+          <button
+            className="icon-button page-circle"
+            onClick={props.onApiPreview}
+            title={t("collections.api_preview", "API Preview")}
+            aria-label={t("collections.api_preview", "API Preview")}
+          >
+            <Code2 size={17} />
+          </button>
           <button className="icon-button page-circle" onClick={props.onEditCollection} title={t("collections.collection_settings", "Collection settings")} aria-label={t("collections.collection_settings", "Collection settings")}>
             <Settings size={17} />
           </button>
@@ -2214,7 +2300,7 @@ function RecordsView(props: RecordsViewProps) {
                     <td className="select-col">
                       <button
                         className="checkbox-button"
-                        onClick={() => props.onToggleSelected(record.id)}
+                        onClick={(event) => props.onToggleSelected(record.id, event.shiftKey)}
                         title={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                         aria-label={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                       >
@@ -2929,10 +3015,94 @@ type SettingsViewProps = {
   settings: AppSettings | null;
   draft: string;
   loading: boolean;
+  collections: CollectionSchema[];
   onDraft: (value: string) => void;
   onRefresh: () => void;
   onSave: () => void;
 };
+
+type RateLimitRule = {
+  label: string;
+  maxRequests: number;
+  duration: number;
+  audience: string;
+};
+
+const BASE_RATE_LIMIT_TAGS = [
+  "*:list",
+  "*:view",
+  "*:create",
+  "*:update",
+  "*:delete",
+  "*:file",
+  "*:listAuthMethods",
+  "*:authRefresh",
+  "*:auth",
+  "*:authWithPassword",
+  "*:authWithOAuth2",
+  "*:authWithOTP",
+  "*:requestOTP",
+  "*:requestPasswordReset",
+  "*:confirmPasswordReset",
+  "*:requestVerification",
+  "*:confirmVerification",
+  "*:requestEmailChange",
+  "*:confirmEmailChange"
+];
+
+/** Per-collection tags, mirroring the official rate limit accordion's suggestions. */
+function rateLimitTags(collections: CollectionSchema[]) {
+  const tags = [...BASE_RATE_LIMIT_TAGS];
+  for (const collection of collections) {
+    if (collection.system) continue;
+    tags.push(`${collection.name}:list`, `${collection.name}:view`);
+    if (collection.type !== "view") {
+      tags.push(`${collection.name}:create`, `${collection.name}:update`, `${collection.name}:delete`);
+    }
+    if (collection.type === "auth") {
+      for (const action of [
+        "listAuthMethods",
+        "authRefresh",
+        "auth",
+        "authWithPassword",
+        "authWithOAuth2",
+        "authWithOTP",
+        "requestOTP",
+        "requestPasswordReset",
+        "confirmPasswordReset",
+        "requestVerification",
+        "confirmVerification",
+        "requestEmailChange",
+        "confirmEmailChange"
+      ]) {
+        tags.push(`${collection.name}:${action}`);
+      }
+    }
+  }
+  return tags;
+}
+
+/**
+ * Orders rules the way the server resolves them: tags beat paths, exact beats
+ * wildcard, and longer prefixes beat shorter ones. Ported from the official sortRules.
+ */
+function sortRateLimitRules(rules: RateLimitRule[]) {
+  const score = (label: string) => {
+    const isTag = label.includes(":") || !label.includes("/");
+    if (isTag) return 1000 + (label.startsWith("*") ? 5 : 10);
+    let value = 0;
+    if (label.includes(" /")) value += 10;
+    if (!label.endsWith("/")) value += 5;
+    return value;
+  };
+  return [...rules].sort((a, b) => {
+    const diff = score(b.label) - score(a.label);
+    if (diff !== 0) return diff;
+    // Among same-shaped prefix rules the more specific (longer) one wins.
+    if (a.label.endsWith("/") && b.label.endsWith("/")) return b.label.length - a.label.length;
+    return 0;
+  });
+}
 
 function SettingsView(props: SettingsViewProps) {
   const { t } = useTranslation();
@@ -2947,6 +3117,47 @@ function SettingsView(props: SettingsViewProps) {
     : "";
   const rawTrustedHeaders = trustedProxy.headers;
   const trustedHeaders = Array.isArray(rawTrustedHeaders) ? rawTrustedHeaders.map((item) => String(item)).join(", ") : "";
+  const rateLimitRules: RateLimitRule[] = Array.isArray(rateLimits.rules)
+    ? (rateLimits.rules as unknown[]).map((rule) => {
+        const item = isPlainObject(rule) ? rule : {};
+        return {
+          label: String(item.label ?? ""),
+          maxRequests: Number(item.maxRequests ?? 0),
+          duration: Number(item.duration ?? 0),
+          audience: String(item.audience ?? "")
+        };
+      })
+    : [];
+  const excludedIPs = Array.isArray(rateLimits.excludedIPs)
+    ? rateLimits.excludedIPs.map((item) => String(item)).join(", ")
+    : "";
+  const rateLimitTagOptions = useMemo(() => rateLimitTags(props.collections), [props.collections]);
+
+  function writeRateLimitRules(rules: RateLimitRule[], enabled?: boolean) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, ["rateLimits", "rules"], sortRateLimitRules(rules));
+    if (enabled !== undefined) setNestedSetting(next, ["rateLimits", "enabled"], enabled);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
+  function addRateLimitRule() {
+    const rules = [...rateLimitRules, { label: "", maxRequests: 300, duration: 10, audience: "" }];
+    // Adding the first rule turns limiting on, matching the official accordion.
+    writeRateLimitRules(rules, rateLimitRules.length === 0 ? true : undefined);
+  }
+
+  function updateRateLimitRule(index: number, patch: Partial<RateLimitRule>) {
+    // Don't re-sort while typing — it would yank the focused row out from under the cursor.
+    const rules = rateLimitRules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule));
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, ["rateLimits", "rules"], rules);
+    props.onDraft(JSON.stringify(next, null, 2));
+  }
+
+  function removeRateLimitRule(index: number) {
+    const rules = rateLimitRules.filter((_, i) => i !== index);
+    writeRateLimitRules(rules, rules.length === 0 ? false : undefined);
+  }
 
   function updateSetting(path: string[], value: unknown) {
     const next = cloneJsonObject(draftSettings);
@@ -3178,10 +3389,106 @@ function SettingsView(props: SettingsViewProps) {
                 onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
               />
             </label>
-            <div className="settings-inline-metrics">
-              <span>{t("settings.rate_limit_rules", { count: Array.isArray(rateLimits.rules) ? rateLimits.rules.length : 0, defaultValue: "{{count}} rate limit rules" })}</span>
-              <span>{t("settings.excluded_ips", { count: Array.isArray(rateLimits.excludedIPs) ? rateLimits.excludedIPs.length : 0, defaultValue: "{{count}} excluded IPs" })}</span>
-            </div>
+          </article>
+
+          <article className="settings-accordion-card rate-limit-card">
+            <header>
+              <div>
+                <strong>{t("settings.rate_limiting", "Rate limiting")}</strong>
+                <span>{t("settings.rate_limiting_desc", "Throttle requests per rule")}</span>
+              </div>
+              <Activity size={18} />
+            </header>
+
+            <label className="check-row switch-row">
+              <input
+                id="rate-limits-enabled"
+                name="rateLimits.enabled"
+                type="checkbox"
+                checked={Boolean(rateLimits.enabled)}
+                onChange={(event) => updateSetting(["rateLimits", "enabled"], event.target.checked)}
+              />
+              {t("settings.enable_rate_limiting", "Enable rate limiting")}
+            </label>
+
+            <datalist id="rate-limit-tags">
+              {rateLimitTagOptions.map((tag) => (
+                <option key={tag} value={tag} />
+              ))}
+            </datalist>
+
+            {rateLimitRules.length === 0 ? (
+              <p className="rate-limit-empty">{t("settings.no_rate_limit_rules", "No rules defined yet.")}</p>
+            ) : (
+              <div className="rate-limit-table">
+                <div className="rate-limit-head">
+                  <span>{t("settings.rule_label", "Label")}</span>
+                  <span>{t("settings.max_requests", "Max requests")}</span>
+                  <span>{t("settings.interval_seconds", "Interval (s)")}</span>
+                  <span>{t("settings.audience", "Audience")}</span>
+                  <span />
+                </div>
+                {rateLimitRules.map((rule, index) => (
+                  <div className="rate-limit-row" key={index}>
+                    <input
+                      type="text"
+                      list="rate-limit-tags"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="*:list or /api/path"
+                      value={rule.label}
+                      onChange={(event) => updateRateLimitRule(index, { label: event.target.value })}
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      value={String(rule.maxRequests ?? 0)}
+                      onChange={(event) => updateRateLimitRule(index, { maxRequests: Number(event.target.value || 0) })}
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      value={String(rule.duration ?? 0)}
+                      onChange={(event) => updateRateLimitRule(index, { duration: Number(event.target.value || 0) })}
+                    />
+                    <select
+                      value={rule.audience ?? ""}
+                      onChange={(event) => updateRateLimitRule(index, { audience: event.target.value })}
+                    >
+                      <option value="">{t("settings.audience_all", "All")}</option>
+                      <option value="@guest">{t("settings.audience_guest", "Guest only")}</option>
+                      <option value="@auth">{t("settings.audience_auth", "Auth only")}</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="icon-button danger"
+                      onClick={() => removeRateLimitRule(index)}
+                      title={t("settings.remove_rule", "Remove rule")}
+                      aria-label={t("settings.remove_rule", "Remove rule")}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button type="button" className="subtle rate-limit-add" onClick={addRateLimitRule}>
+              <Plus size={14} />
+              {t("settings.add_rule", "Add rule")}
+            </button>
+
+            <label>
+              {t("settings.excluded_ips_label", "Excluded IPs")}
+              <input
+                id="rate-limit-excluded-ips"
+                name="rateLimits.excludedIPs"
+                autoComplete="off"
+                placeholder="127.0.0.1, 10.0.0.0/8"
+                value={excludedIPs}
+                onChange={(event) => updateSetting(["rateLimits", "excludedIPs"], splitCsv(event.target.value))}
+              />
+            </label>
           </article>
         </section>
       </section>
@@ -3927,6 +4234,7 @@ type SqlViewProps = {
   result: SqlResult | null;
   error: string;
   loading: boolean;
+  sqlCompletions: string[];
   onQuery: (value: string) => void;
   onRun: () => void;
 };
@@ -3951,12 +4259,15 @@ function SqlView(props: SqlViewProps) {
           </div>
           <label className="sql-textarea">
             {t("sql.query", "Query")}
-            <textarea
+            <CodeEditor
+              value={props.query}
+              onChange={props.onQuery}
+              language="sql"
+              completions={props.sqlCompletions}
               id="sql-query"
               name="sqlQuery"
-              value={props.query}
-              onChange={(event) => props.onQuery(event.target.value)}
-              spellCheck={false}
+              ariaLabel={t("sql.query", "Query")}
+              minHeight={140}
             />
           </label>
         </section>
@@ -4178,6 +4489,7 @@ type CollectionPayload = {
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
   viewQuery?: string | null;
+  indexes?: string[];
 };
 
 type RuleKey = "listRule" | "viewRule" | "createRule" | "updateRule" | "deleteRule";
@@ -4198,6 +4510,22 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
   const [type, setType] = useState(collection?.type ?? "base");
   const [fields, setFields] = useState(JSON.stringify(collection?.fields ?? DEFAULT_FIELDS, null, 2));
   const [viewQuery, setViewQuery] = useState(collection?.viewQuery ?? "");
+  const [indexes, setIndexes] = useState<string[]>(collection?.indexes ?? []);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [dragArmed, setDragArmed] = useState(false);
+  const ruleCompletions = useMemo(
+    () => buildRuleCompletions(collection ?? null, allCollections),
+    [allCollections, collection]
+  );
+  const viewQueryCompletions = useMemo(() => {
+    const names: string[] = [];
+    for (const item of allCollections) {
+      names.push(item.name);
+      for (const field of item.fields ?? []) names.push(field.name, `${item.name}.${field.name}`);
+    }
+    return [...new Set(names)];
+  }, [allCollections]);
   const [passwordEnabled, setPasswordEnabled] = useState(collection?.passwordAuth?.enabled ?? true);
   const [identityFields, setIdentityFields] = useState<string[]>(collection?.passwordAuth?.identityFields ?? ["email"]);
   const [otpEnabled, setOtpEnabled] = useState(collection?.otp?.enabled ?? false);
@@ -4235,6 +4563,7 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     type,
     fields,
     viewQuery,
+    indexes,
     rules,
     passwordEnabled,
     identityFields,
@@ -4273,15 +4602,32 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     }
   }, [activeTab, tabs]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
       const parsedFields = JSON.parse(fields || "[]") as FieldSchema[];
       if (!Array.isArray(parsedFields)) throw new Error(t("errors.fields_must_be_array", "Fields must be an array."));
+
+      // Editing an existing collection can drop columns or break clients — show what
+      // is about to change before it is applied, like the official confirmation modal.
+      if (collection) {
+        const changes = collectionChanges(collection, { name: name.trim(), fields: parsedFields, rules }, t);
+        if (changes.lines.length > 0) {
+          const proceed = await onConfirm({
+            title: t("confirm.apply_changes_title", "Apply collection changes"),
+            message: changes.lines.join("\n"),
+            confirmLabel: t("actions.apply_changes", "Apply changes"),
+            danger: changes.destructive
+          });
+          if (!proceed) return;
+        }
+      }
+
       onSubmit({
         name: name.trim(),
         type,
         fields: type === "view" ? [] : parsedFields,
+        ...(type === "view" ? {} : { indexes }),
         listRule: normalizeRule(rules.listRule),
         viewRule: normalizeRule(rules.viewRule),
         createRule: normalizeRule(rules.createRule),
@@ -4417,6 +4763,18 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     updateFields(nextFields);
   }
 
+  function moveField(from: number, to: number) {
+    if (fieldsPreview.error) {
+      setError(fieldsPreview.error);
+      return;
+    }
+    const nextFields = [...fieldsPreview.fields];
+    const [moved] = nextFields.splice(from, 1);
+    if (!moved) return;
+    nextFields.splice(to, 0, moved);
+    updateFields(nextFields);
+  }
+
   return (
     <Modal
       title={
@@ -4506,14 +4864,47 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                 <p className="sidebar-empty">{t("collections.no_fields_configured", "No fields configured")}</p>
               ) : (
                 fieldsPreview.fields.map((field, index) => (
-                  <FieldEditor
+                  <div
                     key={`${field.name}-${index}`}
-                    field={field}
-                    index={index}
-                    collections={allCollections}
-                    onUpdate={updateFieldAt}
-                    onRemove={removeField}
-                  />
+                    className={`field-drag-row${dragIndex === index ? " dragging" : ""}${dragOverIndex === index && dragIndex !== index ? " drop-target" : ""}`}
+                    draggable={dragArmed}
+                    onDragStart={() => setDragIndex(index)}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragOverIndex(index);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragIndex !== null && dragIndex !== index) moveField(dragIndex, index);
+                      setDragIndex(null);
+                      setDragOverIndex(null);
+                      setDragArmed(false);
+                    }}
+                    onDragEnd={() => {
+                      setDragIndex(null);
+                      setDragOverIndex(null);
+                      setDragArmed(false);
+                    }}
+                  >
+                    <span
+                      className="field-drag-handle"
+                      // Arm dragging only from the handle so text selection inside the
+                      // expanded editor keeps working.
+                      onMouseDown={() => setDragArmed(true)}
+                      onMouseUp={() => setDragArmed(false)}
+                      title={t("collections.drag_to_reorder", "Drag to reorder")}
+                      aria-hidden="true"
+                    >
+                      <GripVertical size={14} />
+                    </span>
+                    <FieldEditor
+                      field={field}
+                      index={index}
+                      collections={allCollections}
+                      onUpdate={updateFieldAt}
+                      onRemove={removeField}
+                    />
+                  </div>
                 ))
               )}
             </div>
@@ -4522,6 +4913,13 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
             {t("collections.fields_json", "Fields JSON")}
             <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
           </label>
+          <IndexManager
+            indexes={indexes}
+            collectionName={name || collection?.name || ""}
+            fieldNames={fieldsPreview.fields.map((field) => field.name)}
+            disabled={Boolean(collection?.system)}
+            onChange={setIndexes}
+          />
           </section>
         )}
 
@@ -4529,11 +4927,15 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
           <section className="collection-query-panel collection-tab-panel">
             <label>
               {t("collections.view_query", "View query")}
-              <textarea
+              <CodeEditor
                 value={viewQuery}
-                onChange={(event) => setViewQuery(event.target.value)}
+                onChange={setViewQuery}
+                language="sql"
+                completions={viewQueryCompletions}
                 placeholder="select id, created, updated from posts"
-                spellCheck={false}
+                name="viewQuery"
+                ariaLabel={t("collections.view_query", "View query")}
+                minHeight={120}
               />
             </label>
           </section>
@@ -4812,15 +5214,18 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                         <span>{t("collections.rule_locked", "Superusers only")}</span>
                       </div>
                     ) : (
-                      <textarea
+                      <CodeEditor
                         value={value}
-                        onChange={(event) => setRules({ ...rules, [key]: event.target.value })}
+                        onChange={(next) => setRules({ ...rules, [key]: next })}
+                        language="pbrule"
+                        completions={ruleCompletions}
                         placeholder={t(
                           "collections.rule_placeholder",
                           'Leave empty to grant everyone access, eg. @request.auth.id != ""'
                         )}
-                        spellCheck={false}
                         disabled={readOnly}
+                        name={key}
+                        ariaLabel={collectionRuleLabel(key, t)}
                       />
                     )}
                   </div>
@@ -4874,6 +5279,7 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
   const [activeTab, setActiveTab] = useState<"main" | "providers">("main");
   const [files, setFiles] = useState<Record<string, File[]>>({});
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const editing = Boolean(state.record);
   const showTabs = Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
@@ -4913,6 +5319,13 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
       return next;
     });
     setError("");
+    // Editing a field clears its own error, so stale markers don't linger.
+    setFieldErrors((current) => {
+      if (!current[field.name]) return current;
+      const next = { ...current };
+      delete next[field.name];
+      return next;
+    });
   }
 
   function updateJson(value: string) {
@@ -4975,6 +5388,7 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
       setInitialDraft(null);
     } catch (err) {
       setError(errorMessage(err));
+      setFieldErrors(fieldErrorsOf(err));
     } finally {
       setSaving(false);
     }
@@ -5039,14 +5453,21 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
                   <p className="sidebar-empty">{t("records.no_editable_fields", "No editable fields")}</p>
                 ) : (
                   editableFields.map((field) => (
-                    <RecordFieldControl
+                    <div
                       key={field.name}
-                      field={field}
-                      value={payload[field.name]}
-                      collections={collections}
-                      fetchRecords={fetchRecords}
-                      onChange={(value) => updatePayload(field, value)}
-                    />
+                      className={`record-field-slot${fieldErrors[field.name] ? " has-error" : ""}`}
+                    >
+                      <RecordFieldControl
+                        field={field}
+                        value={payload[field.name]}
+                        collections={collections}
+                        fetchRecords={fetchRecords}
+                        onChange={(value) => updatePayload(field, value)}
+                      />
+                      {fieldErrors[field.name] && (
+                        <p className="record-field-error">{fieldErrors[field.name]}</p>
+                      )}
+                    </div>
                   ))
                 )}
               </div>
@@ -5401,6 +5822,109 @@ function normalizeRule(value: string | null) {
   return value === null ? null : value.trim();
 }
 
+/**
+ * Describes what a collection save will actually do, so destructive edits (dropped
+ * columns, renames, multi→single narrowing) are stated before they are applied.
+ */
+function collectionChanges(
+  original: CollectionSchema,
+  next: { name: string; fields: FieldSchema[]; rules: Record<RuleKey, string | null> },
+  t: TFunction
+) {
+  const lines: string[] = [];
+  let destructive = false;
+
+  if (original.name !== next.name && next.name) {
+    lines.push(
+      t("changes.renamed_collection", {
+        from: original.name,
+        to: next.name,
+        defaultValue: "• Collection renamed: {{from}} → {{to}}"
+      })
+    );
+  }
+
+  const originalFields = original.fields ?? [];
+  for (const field of originalFields) {
+    const match = next.fields.find((item) => (field.id && item.id === field.id) || item.name === field.name);
+    if (!match) {
+      destructive = true;
+      lines.push(
+        t("changes.deleted_field", {
+          name: field.name,
+          defaultValue: "• Field removed: {{name}} — its stored data will be permanently deleted"
+        })
+      );
+      continue;
+    }
+    if (match.name !== field.name) {
+      lines.push(
+        t("changes.renamed_field", {
+          from: field.name,
+          to: match.name,
+          defaultValue: "• Field renamed: {{from}} → {{to}}"
+        })
+      );
+    }
+    if (match.type !== field.type) {
+      destructive = true;
+      lines.push(
+        t("changes.retyped_field", {
+          name: match.name,
+          from: field.type,
+          to: match.type,
+          defaultValue: "• Field type changed: {{name}} ({{from}} → {{to}}) — existing values may not convert"
+        })
+      );
+    }
+    const wasMulti = Number(field.maxSelect ?? 1) > 1;
+    const isMulti = Number(match.maxSelect ?? 1) > 1;
+    if (wasMulti && !isMulti) {
+      destructive = true;
+      lines.push(
+        t("changes.narrowed_field", {
+          name: match.name,
+          defaultValue: "• Field {{name}} changed to single value — only the last item of each record is kept"
+        })
+      );
+    }
+  }
+
+  const added = next.fields.filter(
+    (field) => !originalFields.some((item) => (field.id && item.id === field.id) || item.name === field.name)
+  );
+  for (const field of added) {
+    lines.push(
+      t("changes.added_field", { name: field.name, defaultValue: "• Field added: {{name}}" })
+    );
+  }
+
+  const describeRule = (value: string | null) =>
+    value === null
+      ? t("collections.rule_locked", "Superusers only")
+      : value === ""
+        ? t("changes.rule_public", "everyone")
+        : value;
+
+  for (const key of ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"] as RuleKey[]) {
+    const before = original[key] ?? null;
+    const after = normalizeRule(next.rules[key]);
+    if (before === after) continue;
+    // Opening a rule up is the change most likely to be unintended.
+    if (before === null) destructive = true;
+    lines.push(
+      t("changes.rule_changed", {
+        rule: collectionRuleLabel(key, t),
+        from: describeRule(before),
+        to: describeRule(after),
+        defaultValue: "• {{rule}}: {{from}} → {{to}}"
+      })
+    );
+  }
+
+  return { lines, destructive };
+}
+
 const FILTER_OPERATORS = ["=", "!=", "~", "!~", ">", ">=", "<", "<="];
 
 /**
@@ -5545,6 +6069,21 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+/**
+ * Extracts PocketBase's per-field validation errors ({ data: { field: { message } } })
+ * so they can be shown next to the input that caused them.
+ */
+function fieldErrorsOf(error: unknown): Record<string, string> {
+  if (!(error instanceof ApiRequestError) || !isPlainObject(error.data)) return {};
+  const result: Record<string, string> = {};
+  for (const [field, detail] of Object.entries(error.data)) {
+    if (isPlainObject(detail) && typeof detail.message === "string") {
+      result[field] = detail.message;
+    }
+  }
+  return result;
 }
 
 /** Same level thresholds the official UI uses (slog levels). */
