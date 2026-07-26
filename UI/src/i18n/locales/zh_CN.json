@@ -18,6 +18,7 @@
     "new_collection": "新建集合",
     "save": "保存",
     "cancel": "取消",
+    "confirm": "确认",
     "delete": "删除",
     "edit": "编辑",
     "view": "查看",
@@ -48,12 +49,14 @@
     "review": "预览",
     "run": "运行",
     "run_query": "运行查询",
+    "execute": "执行",
     "save_settings": "保存设置",
     "save_changes": "保存更改",
     "send_test": "发送测试",
     "test_s3": "测试 S3",
     "initialize_backup": "初始化新备份",
     "start_backup": "开始备份",
+    "upload": "上传",
     "upload_backup": "上传备份",
     "load_json_file": "从 JSON 文件加载",
     "import_collections": "导入集合",
@@ -72,9 +75,12 @@
     "reset_form": "重置表单",
     "save_and_continue": "保存并继续",
     "restore_draft": "恢复草稿",
+    "discard": "丢弃",
     "discard_draft": "丢弃草稿",
     "refresh_records": "刷新记录",
-    "test": "测试"
+    "test": "测试",
+    "done": "完成",
+    "remove": "移除"
   },
   "common": {
     "loading": "加载中...",
@@ -100,7 +106,9 @@
     "disabled_status": "已禁用",
     "waiting": "等待中...",
     "ready": "就绪",
-    "not_set": "未设置"
+    "not_set": "未设置",
+    "no_results": "无结果",
+    "loaded_of_total": "已显示 {{loaded}} / {{count}}"
   },
   "settings": {
     "application": "应用",
@@ -163,7 +171,7 @@
     "cron_expression": "Cron 表达式",
     "max_auto_backups": "最多保留 @auto 备份数",
     "backup_s3_storage": "备份 S3 存储",
-    "no_bucket": "无 bucket",
+    "no_bucket": "无存储桶",
     "local_backup_filesystem": "本地备份文件系统",
     "store_backups_s3": "将备份保存到 S3 存储",
     "backup_create_warning": "备份生成期间数据库可能会临时锁定，并发写请求可能失败。存储在 S3 的文件不会包含在本地 ZIP 备份中。",
@@ -212,7 +220,7 @@
     "storage_migration_warning": "已有上传文件需要在本地文件系统和 S3 存储之间手动迁移。",
     "s3_configuration": "S3 配置",
     "endpoint": "端点",
-    "bucket": "Bucket",
+    "bucket": "存储桶",
     "region": "区域",
     "access_key": "访问密钥",
     "secret": "密钥",
@@ -225,7 +233,7 @@
     "auth_url": "认证 URL",
     "token_url": "令牌 URL",
     "user_info_url": "用户信息 URL",
-    "scopes": "Scopes",
+    "scopes": "授权范围",
     "missing_credentials": "缺少凭据"
   },
   "auth": {
@@ -247,7 +255,13 @@
     "otp_window": "{{seconds}} 秒窗口",
     "no_otp": "未启用一次性密码",
     "mfa_challenge": "{{seconds}} 秒挑战",
-    "no_second_factor": "未启用第二因素"
+    "no_second_factor": "未启用第二因素",
+    "mfa_step": "第 2 步，共 2 步",
+    "enter_otp": "输入一次性验证码",
+    "otp_code": "一次性验证码",
+    "otp_sent_to": "我们已将一次性验证码发送至 {{email}}。",
+    "request_another_otp": "重新获取验证码",
+    "verify_and_sign_in": "验证并登录"
   },
   "collections": {
     "title": "数据集合",
@@ -306,7 +320,16 @@
     "sort_field": "排序字段",
     "sort_direction": "排序方向",
     "sort_asc": "升序",
-    "sort_desc": "降序"
+    "sort_desc": "降序",
+    "rule_placeholder": "留空表示所有人均可访问，例如 @request.auth.id != \"\"",
+    "rule_locked": "仅超级用户",
+    "superusers_only": "（仅超级用户）",
+    "set_superusers_only": "设为仅超级用户",
+    "unlock_rule": "解锁并设置自定义规则",
+    "oauth_provider_id_field": "提供商 ID 字段",
+    "oauth_name_field": "名称字段",
+    "oauth_username_field": "用户名字段",
+    "oauth_avatar_field": "头像字段"
   },
   "language": {
     "change": "切换语言"
@@ -355,7 +378,65 @@
     "edit_field": "编辑字段",
     "remove_field": "删除字段",
     "select_placeholder": "-- 请选择 --",
-    "no_options_configured": "未配置选项"
+    "no_options_configured": "未配置选项",
+    "select_mode": "选择模式",
+    "single": "单个",
+    "multiple": "多个",
+    "default_to_single": "默认为单个",
+    "min": "最小值",
+    "max": "最大值",
+    "no_min_limit": "不限最小值",
+    "no_max_limit": "不限最大值",
+    "only_int": "不允许小数",
+    "min_length": "最小长度",
+    "max_length": "最大长度",
+    "default_max_text": "默认最大 5000 个字符",
+    "validation_pattern": "校验规则",
+    "autogenerate_pattern": "自动生成规则",
+    "autogenerate_pattern_help": "当创建请求未提供该字段时，按此规则自动生成一个值。",
+    "choices": "可选项",
+    "choices_placeholder": "每行一个选项",
+    "choices_help": "每行一个选项。重复项和空行会被自动移除。",
+    "min_select": "最少选择数",
+    "max_select": "最多选择数",
+    "min_date": "最早日期（本地时间）",
+    "max_date": "最晚日期（本地时间）",
+    "auto_set_on": "自动写入时机",
+    "autodate_create": "创建时",
+    "autodate_update": "更新时",
+    "autodate_create_update": "创建/更新时",
+    "bcrypt_cost": "Bcrypt 强度",
+    "default_bcrypt_cost": "默认为 10",
+    "default_max_password": "最多 71 个字符",
+    "default_max_json_size": "默认最大约 1MB",
+    "default_max_editor_size": "默认最大约 5MB",
+    "convert_urls": "移除 URL 中的域名",
+    "default_max_file_size": "默认约 5MB",
+    "mime_types": "允许的 MIME 类型",
+    "no_restriction": "不限制",
+    "mime_types_help": "使用英文逗号分隔，或直接点击上方预设。留空表示不限制。",
+    "mime_preset_images": "图片（jpg、png、svg、gif、webp）",
+    "mime_preset_documents": "文档（pdf、doc/docx、xls/xlsx）",
+    "mime_preset_videos": "视频（mp4、mpeg、avi、mov、3gp）",
+    "mime_preset_archives": "压缩包（zip、7zip、rar）",
+    "thumbs": "缩略图尺寸",
+    "thumbs_placeholder": "例如 100x100, 0x200, 100x100t",
+    "thumbs_help": "使用英文逗号分隔。WxH 从中心裁剪，WxHt 从顶部裁剪，WxHb 从底部裁剪，WxHf 缩放至框内，0xH 或 Wx0 保持宽高比。",
+    "protected": "受保护",
+    "protected_help": "文件下载请求必须满足 View API 规则。",
+    "only_domains": "仅允许域名",
+    "except_domains": "排除的域名",
+    "domains_placeholder": "例如 example.com, test.dev",
+    "domains_help": "使用英文逗号分隔。两个列表只能同时设置其中一个。",
+    "related_collection": "关联集合",
+    "select_collection": "选择集合",
+    "collection_id_placeholder": "目标集合 ID",
+    "relation_target_locked": "字段创建后，关联集合不可再修改。",
+    "cascade_delete": "级联删除",
+    "select_records": "选择记录",
+    "select_from": "从 {{collection}} 中选择",
+    "selected_of_max": "已选 {{count}} / {{max}}",
+    "no_records_selected": "未选择任何记录"
   },
   "transfer": {
     "export_intro": "下面是当前集合配置，可导入到另一个 PocketBase 环境。",
@@ -402,7 +483,11 @@
     "inspect": "查看日志",
     "visible_count": "显示 {{count}} 条",
     "log_title": "日志 {{id}}",
-    "observability": "可观测性"
+    "observability": "可观测性",
+    "level": "级别",
+    "message": "消息",
+    "no_message": "（无消息）",
+    "load_older": "加载更早（剩余 {{count}} 条）"
   },
   "notifications": {
     "superuser_created": "超级用户已创建",
@@ -424,7 +509,8 @@
     "collections_imported": "集合已导入",
     "sql_executed": "SQL 已执行",
     "cron_triggered": "已触发 {{id}}",
-    "copied": "已复制"
+    "copied": "已复制",
+    "otp_sent": "一次性验证码已发送到你的邮箱"
   },
   "errors": {
     "provider_missing_auth_url": "提供方 {{name}} 缺少认证 URL",
@@ -437,12 +523,25 @@
     "oauth_popup_timed_out": "OAuth2 弹窗已超时。"
   },
   "confirm": {
+    "delete_collection_title": "删除集合",
     "delete_collection": "删除集合 {{name}}？",
+    "delete_collection_body": "“{{name}}” 的所有记录及其上传的文件都将被永久删除，此操作无法撤销。",
+    "delete_record_title": "删除记录",
     "delete_record": "删除记录 {{id}}？",
+    "delete_records_title": "删除记录",
     "delete_selected_records": "删除已选择的 {{count}} 条记录？",
+    "restore_backup_title": "恢复备份",
     "restore_backup": "恢复 {{key}}？",
+    "restore_backup_body": "当前的应用数据将被 “{{key}}” 中的数据完全覆盖。该备份之后创建的所有记录、文件和设置都将永久丢失，此操作无法撤销。",
+    "delete_backup_title": "删除备份",
     "delete_backup": "删除备份 {{key}}？",
-    "upload_backup": "上传的备份文件在恢复前不会被验证。只有在信任来源时才继续。\n\n上传 “{{name}}”？"
+    "upload_backup_title": "上传备份",
+    "upload_backup": "上传的备份文件在恢复前不会被验证。只有在信任来源时才继续。\n\n上传 “{{name}}”？",
+    "run_sql_title": "执行写入语句",
+    "run_sql_body": "该查询以 {{statement}} 开头，可能修改或破坏数据。确定要执行吗？",
+    "discard_changes_title": "放弃更改",
+    "discard_changes_body": "你有尚未保存的更改，确定要放弃吗？",
+    "type_to_continue": "输入 “{{text}}” 以继续"
   },
   "status": {
     "syncing": "同步中",
@@ -463,6 +562,8 @@
     "not_linked": "未关联",
     "record": "记录",
     "meta": "元数据",
-    "search_placeholder": "搜索词或过滤条件..."
+    "search_placeholder": "搜索词或过滤条件...",
+    "load_more": "加载更多（剩余 {{count}} 条）",
+    "load_more_short": "加载更多"
   }
 }

@@ -14,7 +14,7 @@
     "change": "Design ändern",
     "light": "Hell",
     "dark": "Dunkel",
-    "auto": "Auto"
+    "auto": "Automatisch"
   },
   "common": {
     "loading": "Wird geladen...",
@@ -35,12 +35,14 @@
     "total_count": "Gesamt: {{count}}",
     "enabled": "Aktiviert",
     "configured": "konfiguriert",
-    "breadcrumb": "Breadcrumb",
+    "breadcrumb": "Navigationspfad",
     "enabled_status": "aktiviert",
     "disabled_status": "deaktiviert",
     "waiting": "Warten...",
     "ready": "bereit",
-    "not_set": "nicht gesetzt"
+    "not_set": "nicht gesetzt",
+    "no_results": "Keine Ergebnisse",
+    "loaded_of_total": "{{loaded}} von {{count}} angezeigt"
   },
   "actions": {
     "add_record": "Datensatz hinzufügen",
@@ -48,6 +50,7 @@
     "new_record": "Neuer Datensatz",
     "save": "Speichern",
     "cancel": "Abbrechen",
+    "confirm": "Bestätigen",
     "delete": "Löschen",
     "delete_selected": "Ausgewählte löschen",
     "edit": "Bearbeiten",
@@ -77,12 +80,14 @@
     "review": "Prüfen",
     "run": "Ausführen",
     "run_query": "Abfrage ausführen",
+    "execute": "Ausführen",
     "save_settings": "Einstellungen speichern",
     "save_changes": "Änderungen speichern",
     "send_test": "Test senden",
     "test_s3": "S3 testen",
     "initialize_backup": "Neues Backup initialisieren",
     "start_backup": "Backup starten",
+    "upload": "Hochladen",
     "upload_backup": "Backup hochladen",
     "load_json_file": "Aus JSON-Datei laden",
     "import_collections": "Sammlungen importieren",
@@ -101,9 +106,12 @@
     "reset_form": "Formular zurücksetzen",
     "save_and_continue": "Speichern und fortfahren",
     "restore_draft": "Entwurf wiederherstellen",
+    "discard": "Verwerfen",
     "discard_draft": "Entwurf verwerfen",
     "refresh_records": "Datensätze aktualisieren",
-    "test": "Testen"
+    "test": "Testen",
+    "done": "Fertig",
+    "remove": "Entfernen"
   },
   "auth": {
     "login": "Anmelden",
@@ -113,7 +121,7 @@
     "current_password": "Aktuelles Passwort",
     "remember_me": "Angemeldet bleiben",
     "sign_in": "Anmelden",
-    "bootstrap": "Bootstrap",
+    "bootstrap": "Einrichtung",
     "superuser": "Superuser",
     "create_first_superuser": "Ersten Superuser erstellen",
     "sign_in_manage": "Anmelden, um Daten zu verwalten",
@@ -124,7 +132,13 @@
     "otp_window": "{{seconds}}s Fenster",
     "no_otp": "Keine Einmalpasswörter",
     "mfa_challenge": "{{seconds}}s Challenge",
-    "no_second_factor": "Kein zweiter Faktor"
+    "no_second_factor": "Kein zweiter Faktor",
+    "mfa_step": "Schritt 2 von 2",
+    "enter_otp": "Einmalcode eingeben",
+    "otp_code": "Einmalcode",
+    "otp_sent_to": "Wir haben einen Einmalcode an {{email}} gesendet.",
+    "request_another_otp": "Neuen Code anfordern",
+    "verify_and_sign_in": "Bestätigen und anmelden"
   },
   "auth_actions": {
     "install": {
@@ -219,7 +233,16 @@
     "sort_field": "Sortierfeld",
     "sort_direction": "Sortierrichtung",
     "sort_asc": "Aufsteigend",
-    "sort_desc": "Absteigend"
+    "sort_desc": "Absteigend",
+    "rule_placeholder": "Leer lassen, um allen Zugriff zu gewähren, z. B. @request.auth.id != \"\"",
+    "rule_locked": "Nur Superuser",
+    "superusers_only": "(Nur Superuser)",
+    "set_superusers_only": "Auf Superuser beschränken",
+    "unlock_rule": "Entsperren und eigene Regel festlegen",
+    "oauth_provider_id_field": "Feld für Anbieter-ID",
+    "oauth_name_field": "Feld für Namen",
+    "oauth_username_field": "Feld für Benutzernamen",
+    "oauth_avatar_field": "Feld für Avatar"
   },
   "fields": {
     "presentable": "Anzeigbar",
@@ -229,14 +252,72 @@
     "edit_field": "Feld bearbeiten",
     "remove_field": "Feld entfernen",
     "select_placeholder": "-- Auswählen --",
-    "no_options_configured": "Keine Optionen konfiguriert"
+    "no_options_configured": "Keine Optionen konfiguriert",
+    "select_mode": "Auswahlmodus",
+    "single": "Einzeln",
+    "multiple": "Mehrfach",
+    "default_to_single": "Standard: einzeln",
+    "min": "Min.",
+    "max": "Max.",
+    "no_min_limit": "Kein Minimum",
+    "no_max_limit": "Kein Maximum",
+    "only_int": "Keine Dezimalstellen",
+    "min_length": "Min. Länge",
+    "max_length": "Max. Länge",
+    "default_max_text": "Standard: max. 5000 Zeichen",
+    "validation_pattern": "Validierungsmuster",
+    "autogenerate_pattern": "Muster für Autogenerierung",
+    "autogenerate_pattern_help": "Erzeugt automatisch einen zum Muster passenden Wert, wenn das Feld beim Anlegen fehlt.",
+    "choices": "Auswahlwerte",
+    "choices_placeholder": "Ein Wert pro Zeile",
+    "choices_help": "Auswahlwerte durch Zeilenumbruch getrennt. Duplikate und Leerzeilen werden automatisch entfernt.",
+    "min_select": "Min. Auswahl",
+    "max_select": "Max. Auswahl",
+    "min_date": "Min. Datum (lokal)",
+    "max_date": "Max. Datum (lokal)",
+    "auto_set_on": "Automatisch setzen bei",
+    "autodate_create": "Erstellen",
+    "autodate_update": "Aktualisieren",
+    "autodate_create_update": "Erstellen/Aktualisieren",
+    "bcrypt_cost": "Bcrypt-Kostenfaktor",
+    "default_bcrypt_cost": "Standard: 10",
+    "default_max_password": "Bis zu 71 Zeichen",
+    "default_max_json_size": "Standard: max. ~1 MB",
+    "default_max_editor_size": "Standard: max. ~5 MB",
+    "convert_urls": "Domain aus URLs entfernen",
+    "default_max_file_size": "~5 MB Standard",
+    "mime_types": "Erlaubte MIME-Typen",
+    "no_restriction": "Keine Einschränkung",
+    "mime_types_help": "Mit Komma trennen oder die Voreinstellungen oben verwenden. Leer lassen für keine Einschränkung.",
+    "mime_preset_images": "Bilder (jpg, png, svg, gif, webp)",
+    "mime_preset_documents": "Dokumente (pdf, doc/docx, xls/xlsx)",
+    "mime_preset_videos": "Videos (mp4, mpeg, avi, mov, 3gp)",
+    "mime_preset_archives": "Archive (zip, 7zip, rar)",
+    "thumbs": "Thumbnail-Größen",
+    "thumbs_placeholder": "z. B. 100x100, 0x200, 100x100t",
+    "thumbs_help": "Mit Komma trennen. WxH schneidet aus der Mitte zu, WxHt von oben, WxHb von unten, WxHf passt das Bild ein, 0xH oder Wx0 behält das Seitenverhältnis bei.",
+    "protected": "Geschützt",
+    "protected_help": "Datei-Download-Anfragen müssen die View-API-Regel erfüllen.",
+    "only_domains": "Nur diese Domains",
+    "except_domains": "Ausgenommene Domains",
+    "domains_placeholder": "z. B. example.com, test.dev",
+    "domains_help": "Mit Komma trennen. Es kann immer nur eine der beiden Listen gesetzt werden.",
+    "related_collection": "Verknüpfte Sammlung",
+    "select_collection": "Sammlung auswählen",
+    "collection_id_placeholder": "ID der Ziel-Sammlung",
+    "relation_target_locked": "Die verknüpfte Sammlung kann nach dem Anlegen des Feldes nicht mehr geändert werden.",
+    "cascade_delete": "Kaskadierendes Löschen",
+    "select_records": "Datensätze auswählen",
+    "select_from": "Auswahl aus {{collection}}",
+    "selected_of_max": "{{count}} von {{max}} ausgewählt",
+    "no_records_selected": "Keine Datensätze ausgewählt"
   },
   "settings": {
     "application": "Anwendung",
     "mail": "Mail-Einstellungen",
     "storage": "Speicher",
     "backups": "Backups",
-    "admin": "Admin UI",
+    "admin": "Admin-Oberfläche",
     "oauth2": "OAuth2",
     "auth_providers": "Auth-Anbieter",
     "title": "Einstellungen",
@@ -350,7 +431,7 @@
       "sql": "SQL-Konsole"
     },
     "client_id": "Client-ID",
-    "client_secret": "Client Secret",
+    "client_secret": "Client-Secret",
     "auth_url": "Auth-URL",
     "token_url": "Token-URL",
     "user_info_url": "User-Info-URL",
@@ -402,7 +483,11 @@
     "inspect": "Protokoll prüfen",
     "visible_count": "{{count}} sichtbar",
     "log_title": "Protokoll {{id}}",
-    "observability": "Observability"
+    "observability": "Observability",
+    "level": "Level",
+    "message": "Nachricht",
+    "no_message": "(keine Nachricht)",
+    "load_older": "Ältere laden ({{count}} verbleibend)"
   },
   "notifications": {
     "superuser_created": "Superuser erstellt",
@@ -424,7 +509,8 @@
     "collections_imported": "Sammlungen importiert",
     "sql_executed": "SQL ausgeführt",
     "cron_triggered": "{{id}} ausgelöst",
-    "copied": "Kopiert"
+    "copied": "Kopiert",
+    "otp_sent": "Ein Einmalcode wurde an deine E-Mail-Adresse gesendet"
   },
   "errors": {
     "provider_missing_auth_url": "Anbieter {{name}} hat keine Auth-URL",
@@ -437,12 +523,25 @@
     "oauth_popup_timed_out": "OAuth2-Popup ist abgelaufen."
   },
   "confirm": {
+    "delete_collection_title": "Sammlung löschen",
     "delete_collection": "Sammlung {{name}} löschen?",
+    "delete_collection_body": "Alle Datensätze von „{{name}}“ und deren hochgeladene Dateien werden dauerhaft gelöscht. Dies kann nicht rückgängig gemacht werden.",
+    "delete_record_title": "Datensatz löschen",
     "delete_record": "Datensatz {{id}} löschen?",
+    "delete_records_title": "Datensätze löschen",
     "delete_selected_records": "{{count}} ausgewählte Datensätze löschen?",
+    "restore_backup_title": "Backup wiederherstellen",
     "restore_backup": "{{key}} wiederherstellen?",
+    "restore_backup_body": "Die aktuellen Anwendungsdaten werden durch die aus „{{key}}“ ERSETZT. Alle Datensätze, Dateien und Einstellungen, die seit diesem Backup erstellt wurden, gehen verloren. Dies kann nicht rückgängig gemacht werden.",
+    "delete_backup_title": "Backup löschen",
     "delete_backup": "Backup {{key}} löschen?",
-    "upload_backup": "Hochgeladene Backup-Dateien werden vor der Wiederherstellung nicht validiert. Fahre nur fort, wenn du der Quelle vertraust.\n\n\"{{name}}\" hochladen?"
+    "upload_backup_title": "Backup hochladen",
+    "upload_backup": "Hochgeladene Backup-Dateien werden vor der Wiederherstellung nicht validiert. Fahre nur fort, wenn du der Quelle vertraust.\n\n\"{{name}}\" hochladen?",
+    "run_sql_title": "Schreibanweisung ausführen",
+    "run_sql_body": "Diese Abfrage beginnt mit {{statement}} und kann Daten verändern oder zerstören. Möchtest du sie wirklich ausführen?",
+    "discard_changes_title": "Änderungen verwerfen",
+    "discard_changes_body": "Du hast ungespeicherte Änderungen. Möchtest du sie wirklich verwerfen?",
+    "type_to_continue": "Gib „{{text}}“ ein, um fortzufahren"
   },
   "status": {
     "syncing": "synchronisiert",
@@ -463,6 +562,8 @@
     "not_linked": "nicht verknüpft",
     "record": "Datensatz",
     "meta": "Meta",
-    "search_placeholder": "Suchbegriff oder Filter..."
+    "search_placeholder": "Suchbegriff oder Filter...",
+    "load_more": "Mehr laden ({{count}} verbleibend)",
+    "load_more_short": "Mehr laden"
   }
 }

@@ -18,6 +18,7 @@
     "new_collection": "New Collection",
     "save": "Save",
     "cancel": "Cancel",
+    "confirm": "Confirm",
     "delete": "Delete",
     "edit": "Edit",
     "view": "View",
@@ -48,12 +49,14 @@
     "review": "Review",
     "run": "Run",
     "run_query": "Run query",
+    "execute": "Execute",
     "save_settings": "Save settings",
     "save_changes": "Save changes",
     "send_test": "Send test",
     "test_s3": "Test S3",
     "initialize_backup": "Initialize new backup",
     "start_backup": "Start backup",
+    "upload": "Upload",
     "upload_backup": "Upload backup",
     "load_json_file": "Load from JSON file",
     "import_collections": "Import collections",
@@ -72,9 +75,12 @@
     "reset_form": "Reset form",
     "save_and_continue": "Save and continue",
     "restore_draft": "Restore draft",
+    "discard": "Discard",
     "discard_draft": "Discard draft",
     "refresh_records": "Refresh records",
-    "test": "Test"
+    "test": "Test",
+    "done": "Done",
+    "remove": "Remove"
   },
   "common": {
     "loading": "Loading...",
@@ -100,7 +106,9 @@
     "disabled_status": "disabled",
     "waiting": "Waiting...",
     "ready": "ready",
-    "not_set": "not set"
+    "not_set": "not set",
+    "no_results": "No results",
+    "loaded_of_total": "Showing {{loaded}} of {{count}}"
   },
   "settings": {
     "application": "Application",
@@ -247,7 +255,13 @@
     "otp_window": "{{seconds}}s window",
     "no_otp": "No one-time passwords",
     "mfa_challenge": "{{seconds}}s challenge",
-    "no_second_factor": "No second factor"
+    "no_second_factor": "No second factor",
+    "mfa_step": "Step 2 of 2",
+    "enter_otp": "Enter the one-time code",
+    "otp_code": "One-time code",
+    "otp_sent_to": "We sent a one-time code to {{email}}.",
+    "request_another_otp": "Request another code",
+    "verify_and_sign_in": "Verify and sign in"
   },
   "collections": {
     "title": "Collections",
@@ -306,7 +320,16 @@
     "sort_field": "Sort field",
     "sort_direction": "Sort direction",
     "sort_asc": "Ascending",
-    "sort_desc": "Descending"
+    "sort_desc": "Descending",
+    "rule_placeholder": "Leave empty to grant everyone access, eg. @request.auth.id != \"\"",
+    "rule_locked": "Superusers only",
+    "superusers_only": "(Superusers only)",
+    "set_superusers_only": "Set superusers only",
+    "unlock_rule": "Unlock and set custom rule",
+    "oauth_provider_id_field": "Provider ID field",
+    "oauth_name_field": "Name field",
+    "oauth_username_field": "Username field",
+    "oauth_avatar_field": "Avatar field"
   },
   "language": {
     "change": "Change language"
@@ -355,7 +378,65 @@
     "edit_field": "Edit field",
     "remove_field": "Remove field",
     "select_placeholder": "-- Select --",
-    "no_options_configured": "No options configured"
+    "no_options_configured": "No options configured",
+    "select_mode": "Select mode",
+    "single": "Single",
+    "multiple": "Multiple",
+    "default_to_single": "Default to single",
+    "min": "Min",
+    "max": "Max",
+    "no_min_limit": "No min limit",
+    "no_max_limit": "No max limit",
+    "only_int": "No decimals",
+    "min_length": "Min length",
+    "max_length": "Max length",
+    "default_max_text": "Default to max 5000 characters",
+    "validation_pattern": "Validation pattern",
+    "autogenerate_pattern": "Autogenerate pattern",
+    "autogenerate_pattern_help": "Autogenerate a value matching the pattern when the create request omits the field.",
+    "choices": "Choices",
+    "choices_placeholder": "One choice per line",
+    "choices_help": "New-line separated choices. Duplicates and empty lines are removed automatically.",
+    "min_select": "Min select",
+    "max_select": "Max select",
+    "min_date": "Min date (local)",
+    "max_date": "Max date (local)",
+    "auto_set_on": "Auto set on",
+    "autodate_create": "Create",
+    "autodate_update": "Update",
+    "autodate_create_update": "Create/Update",
+    "bcrypt_cost": "Bcrypt cost",
+    "default_bcrypt_cost": "Default to 10",
+    "default_max_password": "Up to 71 chars",
+    "default_max_json_size": "Default to max ~1MB",
+    "default_max_editor_size": "Default to max ~5MB",
+    "convert_urls": "Strip URLs domain",
+    "default_max_file_size": "~5MB default",
+    "mime_types": "Allowed mime types",
+    "no_restriction": "No restriction",
+    "mime_types_help": "Use comma as separator, or toggle the presets above. Leave empty for no restriction.",
+    "mime_preset_images": "Images (jpg, png, svg, gif, webp)",
+    "mime_preset_documents": "Documents (pdf, doc/docx, xls/xlsx)",
+    "mime_preset_videos": "Videos (mp4, mpeg, avi, mov, 3gp)",
+    "mime_preset_archives": "Archives (zip, 7zip, rar)",
+    "thumbs": "Thumb sizes",
+    "thumbs_placeholder": "e.g. 100x100, 0x200, 100x100t",
+    "thumbs_help": "Use comma as separator. WxH crops from center, WxHt from top, WxHb from bottom, WxHf fits inside, 0xH or Wx0 preserves the aspect ratio.",
+    "protected": "Protected",
+    "protected_help": "File download requests will need to satisfy the View API rule.",
+    "only_domains": "Only domains",
+    "except_domains": "Except domains",
+    "domains_placeholder": "e.g. example.com, test.dev",
+    "domains_help": "Use comma as separator. Only one of the two lists can be set at a time.",
+    "related_collection": "Related collection",
+    "select_collection": "Select collection",
+    "collection_id_placeholder": "Target collection id",
+    "relation_target_locked": "The related collection cannot be changed once the field exists.",
+    "cascade_delete": "Cascade delete",
+    "select_records": "Select records",
+    "select_from": "Select from {{collection}}",
+    "selected_of_max": "{{count}} of {{max}} selected",
+    "no_records_selected": "No records selected"
   },
   "transfer": {
     "export_intro": "Below you'll find your current collections configuration that you could import in another PocketBase environment.",
@@ -402,7 +483,11 @@
     "inspect": "Inspect log",
     "visible_count": "{{count}} visible",
     "log_title": "Log {{id}}",
-    "observability": "Observability"
+    "observability": "Observability",
+    "level": "Level",
+    "message": "Message",
+    "no_message": "(no message)",
+    "load_older": "Load older ({{count}} remaining)"
   },
   "notifications": {
     "superuser_created": "Superuser created",
@@ -424,7 +509,8 @@
     "collections_imported": "Collections imported",
     "sql_executed": "SQL executed",
     "cron_triggered": "Triggered {{id}}",
-    "copied": "Copied"
+    "copied": "Copied",
+    "otp_sent": "A one-time code has been sent to your email"
   },
   "errors": {
     "provider_missing_auth_url": "Provider {{name}} is missing an auth URL",
@@ -437,12 +523,25 @@
     "oauth_popup_timed_out": "OAuth2 popup timed out."
   },
   "confirm": {
+    "delete_collection_title": "Delete collection",
     "delete_collection": "Delete collection {{name}}?",
+    "delete_collection_body": "All records of \"{{name}}\" and their uploaded files will be permanently deleted. This cannot be undone.",
+    "delete_record_title": "Delete record",
     "delete_record": "Delete record {{id}}?",
+    "delete_records_title": "Delete records",
     "delete_selected_records": "Delete {{count}} selected records?",
+    "restore_backup_title": "Restore backup",
     "restore_backup": "Restore {{key}}?",
+    "restore_backup_body": "The current application data will be REPLACED with the one from \"{{key}}\". All records, files and settings created since that backup will be lost. This cannot be undone.",
+    "delete_backup_title": "Delete backup",
     "delete_backup": "Delete backup {{key}}?",
-    "upload_backup": "Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload \"{{name}}\"?"
+    "upload_backup_title": "Upload backup",
+    "upload_backup": "Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload \"{{name}}\"?",
+    "run_sql_title": "Run write statement",
+    "run_sql_body": "This query starts with {{statement}} and can modify or destroy data. Are you sure you want to execute it?",
+    "discard_changes_title": "Discard changes",
+    "discard_changes_body": "You have unsaved changes. Do you really want to discard them?",
+    "type_to_continue": "Type \"{{text}}\" to continue"
   },
   "status": {
     "syncing": "syncing",
@@ -463,6 +562,8 @@
     "not_linked": "not linked",
     "record": "Record",
     "meta": "Meta",
-    "search_placeholder": "Search term or filter..."
+    "search_placeholder": "Search term or filter...",
+    "load_more": "Load more ({{count}} remaining)",
+    "load_more_short": "Load more"
   }
 }

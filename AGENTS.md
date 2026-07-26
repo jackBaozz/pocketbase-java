@@ -20,6 +20,15 @@
   - **Admin UI 深度对齐**：实现了 Hash 路由、集合 Schema 编辑器、关系属性选择器、高级记录检索与 System Settings 设置面板。
   - **GraalVM 原生编译验证**：完成了 `sh/build-native.sh` 脚本在 Darwin 与 Linux 环境下的 Native Image 编译验证，所有 JDBC、jOOQ 以及 Jackson 反射配置均已注册完成。
 
+## 🎨 Admin UI 与官方交互对齐 (2026-07-26)
+
+- **差异基线文档**：`docs/UI-Parity-Gap-Analysis-v0.39.9.md` 记录了本项目 Admin UI 与官方 v0.39.9 的逐模块交互差异（约 102 项缺失 / 53 项不一致），并附修复记录与未完成项清单。**继续补齐 UI 功能前请先读该文档**，避免重复分析。
+- **已修复的关键语义**：API 规则的空字符串 `""`（所有人可访问）与 `null`（仅超管）是两种不同状态，必须在加载与提交时严格保持区分——不可用 `?? ""` 或 "空则转 null" 之类的写法抹平，那会静默破坏用户的集合权限配置。UI 上以锁定/解锁交互体现这一区分。
+- **字段控件的唯一实现**在 `UI/src/components/RecordFieldControl.tsx`；`App.tsx` 内曾存在一份从未被引用的同名副本，已删除，请勿再在 `App.tsx` 里重复定义组件。
+- **CSS 变量**必须使用 `UI/src/styles.css` 中实际定义的名称（如 `--surfaceColor`、`--surfaceTxtHintColor`、`--surfaceAlt1~4Color`），不要照搬官方 Svelte 版的变量名（`--baseColor`、`--txtHintColor` 等在本项目不存在，会静默失效）。
+- **新增文案**一律使用 `t("key", "English default")` 形式，并同步补齐 `UI/src/i18n/locales/` 下全部 9 个语言文件（9 个文件的 key 集合必须完全一致）。
+- **UI 改动后必须重新构建**（`cd UI && npm run build`，产物直接写入 `src/main/resources/pocketbase-admin/`），否则 Playwright E2E 测试与本地启动的服务加载的仍是旧资源。
+
 ## 🛠️ 构建与编译 (Build Commands)
 
 - **普通打包**：`mvn clean package`
