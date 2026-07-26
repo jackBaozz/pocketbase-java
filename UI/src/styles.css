@@ -1560,8 +1560,8 @@ td.row-actions .icon-button:last-child {
 
 .settings-intro {
   color: var(--surfaceTxtHintColor);
-  font-size: var(--lgFontSize);
-  line-height: var(--lgLineHeight);
+  font-size: calc(var(--fontSize) + 1px);
+  line-height: calc(var(--lineHeight) + 2px);
 }
 
 .settings-intro p + p {
@@ -2675,6 +2675,36 @@ td.row-actions .icon-button:last-child {
   min-height: 82px;
 }
 
+.auth-hint {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--surfaceTxtHintColor);
+  line-height: 1.5;
+}
+
+.auth-secondary-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.auth-secondary-actions button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 4px;
+}
+
+.load-more-row button {
+  min-width: 220px;
+  justify-content: center;
+}
+
 .rule-field {
   display: grid;
   gap: 6px;
@@ -3423,8 +3453,8 @@ td.row-actions .icon-button:last-child {
   }
 }
 .field-builder-row.editing {
-  background: var(--bg-body);
-  border: 1px solid var(--border-color);
+  background: var(--surfaceAlt1Color);
+  border: 1px solid var(--surfaceAlt2Color);
   padding: 16px;
   flex-direction: column;
   align-items: stretch;
@@ -3464,5 +3494,442 @@ td.row-actions .icon-button:last-child {
 
 .field-type-specific-options {
   padding-top: 8px;
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.field-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px 16px;
+}
+
+.field-options-grid > .span-2 {
+  grid-column: 1 / -1;
+}
+
+.field-option-help {
+  margin: 0;
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.field-choices-input {
+  min-height: 84px;
+  resize: vertical;
+  font-family: var(--monospaceFontFamily);
+  font-size: 12px;
+}
+
+.field-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.field-preset-chip {
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  padding: 4px 9px;
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.field-preset-chip:hover {
+  border-color: var(--surfaceAlt4Color);
+  background: var(--surfaceAlt1Color);
+  color: var(--surfaceTxtColor);
+}
+
+.field-preset-chip.active {
+  border-color: var(--accentColor);
+  background: var(--surfaceAccentColor);
+  color: var(--accentColor);
+}
+
+@media (max-width: 640px) {
+  .field-options-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Relation picker */
+.relation-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.relation-selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 30px;
+  align-items: center;
+}
+
+.relation-empty {
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.relation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 14px;
+  background: var(--surfaceAlt2Color);
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.relation-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.relation-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  padding: 2px;
+}
+
+.relation-chip-remove:hover {
+  opacity: 1;
+}
+
+.relation-open {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.relation-target {
+  font-style: normal;
+  opacity: 0.65;
+}
+
+.relation-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 20px;
+}
+
+.relation-modal {
+  background: var(--surfaceColor);
+  border-radius: var(--borderRadius);
+  width: min(560px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.relation-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.relation-modal-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  color: var(--surfaceTxtHintColor);
+}
+
+.relation-modal-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: inherit;
+}
+
+.relation-modal-hint {
+  margin: 0;
+  padding: 8px 16px 0;
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.relation-modal-list {
+  overflow-y: auto;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  flex: 1;
+}
+
+.relation-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--borderRadius);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: inherit;
+}
+
+.relation-option:hover {
+  background: var(--surfaceAlt1Color);
+}
+
+.relation-option.active {
+  border-color: var(--accentColor);
+  background: var(--surfaceAlt1Color);
+}
+
+.relation-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relation-option code {
+  font-size: 11px;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.relation-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+/* Relation summary cells */
+.relation-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.relation-cell-item {
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--surfaceAlt2Color);
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relation-cell-more {
+  font-size: 11px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.record-field-empty {
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+/* Confirm dialog */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--modalOverlayColor);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  padding: 20px;
+}
+
+.confirm-dialog {
+  width: min(460px, 100%);
+  background: var(--surfaceColor);
+  color: var(--surfaceTxtColor);
+  border-radius: var(--lgBorderRadius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.confirm-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+}
+
+.confirm-danger-icon {
+  color: var(--dangerColor);
+  flex-shrink: 0;
+}
+
+.confirm-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.confirm-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--surfaceTxtHintColor);
+}
+
+.confirm-require {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.confirm-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Log level + data summary cells */
+.logs-table .log-level-col {
+  width: 92px;
+}
+
+.log-level {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtHintColor);
+}
+
+.log-level.success {
+  background: var(--surfaceSuccessColor);
+  color: var(--successColor);
+}
+
+.log-level.warning {
+  background: var(--surfaceAccentColor);
+  color: var(--accentColor);
+}
+
+.log-level.danger {
+  background: var(--surfaceDangerColor);
+  color: var(--dangerColor);
+}
+
+.log-row {
+  cursor: pointer;
+}
+
+.log-row:hover {
+  background: var(--surfaceAlt1Color);
+}
+
+.log-message {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.log-message-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 520px;
+}
+
+.log-data-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.log-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--surfaceAlt2Color);
+  font-size: 11px;
+  font-family: var(--monospaceFontFamily);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-chip em {
+  font-style: normal;
+  opacity: 0.55;
+}
+
+.log-chip.success {
+  background: var(--surfaceSuccessColor);
+  color: var(--successColor);
+}
+
+.log-chip.warning {
+  background: var(--surfaceAccentColor);
+  color: var(--accentColor);
+}
+
+.log-chip.danger {
+  background: var(--surfaceDangerColor);
+  color: var(--dangerColor);
 }

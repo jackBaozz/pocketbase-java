@@ -48,6 +48,11 @@ import { FieldEditor } from "./components/FieldEditor";
 
 import { useTranslation } from "react-i18next";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import type { ConfirmRequest } from "./components/ConfirmDialog";
+import { RecordFieldControl } from "./components/RecordFieldControl";
+import { recordSummary } from "./components/RelationPicker";
+import type { RelationFetcher } from "./components/RelationPicker";
 
 
 type HealthResponse = {
@@ -74,6 +79,14 @@ type ApiError = {
   message?: string;
   data?: unknown;
 };
+
+type MfaChallenge = {
+  mfaId: string;
+  otpId: string;
+  email: string;
+};
+
+type PendingConfirm = ConfirmRequest & { resolve: (confirmed: boolean) => void };
 
 type FieldSchema = {
   id?: string;
@@ -375,6 +388,9 @@ function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
   const [setupRequired, setSetupRequired] = useState(true);
+  const [confirmState, setConfirmState] = useState<PendingConfirm | null>(null);
+  const [mfaChallenge, setMfaChallenge] = useState<MfaChallenge | null>(null);
+  const [otpCode, setOtpCode] = useState("");
   const [collections, setCollections] = useState<CollectionSchema[]>([]);
   const [selectedName, setSelectedName] = useState<string>("");
   const [records, setRecords] = useState<RecordItem[]>([]);
@@ -513,28 +529,61 @@ function App() {
   }, [token]);
 
   const refreshRecords = useCallback(
-    async (collectionName = selectedName, nextQuery = query) => {
+    async (collectionName = selectedName, nextQuery = query, page = 1) => {
       if (!token || !collectionName) return;
       setLoading(true);
       try {
+        const collection = collections.find((item) => item.name === collectionName);
+        // Eagerly expand first-level relations so cells can show summaries instead of raw ids.
+        const relationFields = (collection?.fields ?? [])
+          .filter((field) => field.type === "relation" && !field.hidden)
+          .map((field) => field.name);
         const qs = buildQuery({
-          page: 1,
+          page,
           perPage: nextQuery.perPage,
           sort: nextQuery.sort,
-          filter: nextQuery.filter
+          filter: normalizeSearchFilter(nextQuery.filter, collection),
+          ...(relationFields.length ? { expand: relationFields.join(",") } : {})
         });
         const data = await apiRequest<ListResponse<RecordItem>>(
           `/api/collections/${encodeURIComponent(collectionName)}/records?${qs}`,
           token
         );
         setRecordPage(data);
-        setRecords(data.items);
+        setRecords((prev) => (page > 1 ? [...prev, ...data.items] : data.items));
       } finally {
         setLoading(false);
       }
     },
-    [query, selectedName, token]
+    [collections, query, selectedName, token]
   );
+
+  const confirm = useCallback(
+    (request: ConfirmRequest) =>
+      new Promise<boolean>((resolve) => {
+        setConfirmState({ ...request, resolve });
+      }),
+    []
+  );
+
+  const fetchRelationRecords = useCallback<RelationFetcher>(
+    async (collectionName, params) => {
+      const collection = collections.find((item) => item.name === collectionName);
+      const qs = buildQuery({
+        page: params.page,
+        perPage: params.perPage,
+        sort: "-created",
+        filter: normalizeSearchFilter(params.filter, collection)
+      });
+      return apiRequest(`/api/collections/${encodeURIComponent(collectionName)}/records?${qs}`, token);
+    },
+    [collections, token]
+  );
+
+  const loadMoreRecords = useCallback(async () => {
+    if (!selectedName || !recordPage) return;
+    await refreshRecords(selectedName, query, recordPage.page + 1);
+  }, [query, recordPage, refreshRecords, selectedName]);
 
   const refreshBackups = useCallback(async () => {
     if (!token) return;
@@ -559,27 +608,33 @@ function App() {
     }
   }, [token]);
 
-  const refreshLogs = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      const qs = buildQuery({
-        page: 1,
-        perPage: 100,
-        sort: "-created",
-        filter: logFilter
-      });
-      const [logData, statsData] = await Promise.all([
-        apiRequest<ListResponse<LogItem>>(`/api/logs?${qs}`, token),
-        apiRequest<LogStat[]>("/api/logs/stats", token)
-      ]);
-      setLogPage(logData);
-      setLogs(logData.items);
-      setLogStats(statsData);
-    } finally {
-      setLoading(false);
-    }
-  }, [logFilter, token]);
+  const refreshLogs = useCallback(
+    async (page = 1) => {
+      if (!token) return;
+      setLoading(true);
+      try {
+        const filter = normalizeSearchTerm(logFilter, LOG_SEARCH_FIELDS);
+        const qs = buildQuery({ page, perPage: 50, sort: "-created", filter });
+        const statsQs = buildQuery({ filter });
+        const [logData, statsData] = await Promise.all([
+          apiRequest<ListResponse<LogItem>>(`/api/logs?${qs}`, token),
+          // Keep the chart in sync with the active filter, like the official UI does.
+          apiRequest<LogStat[]>(`/api/logs/stats${statsQs ? `?${statsQs}` : ""}`, token)
+        ]);
+        setLogPage(logData);
+        setLogs((prev) => (page > 1 ? [...prev, ...logData.items] : logData.items));
+        setLogStats(statsData);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [logFilter, token]
+  );
+
+  const loadMoreLogs = useCallback(async () => {
+    if (!logPage) return;
+    await refreshLogs(logPage.page + 1);
+  }, [logPage, refreshLogs]);
 
   const refreshCrons = useCallback(async () => {
     if (!token) return;
@@ -712,6 +767,27 @@ function App() {
     setAuthMethods(null);
   }, [authenticated, notify, refreshAuthMethods, selectedName, view]);
 
+  async function completeAuth(auth: AuthResponse) {
+    setAuthToken(auth.token);
+    setAuthEmail("");
+    setAuthPassword("");
+    setMfaChallenge(null);
+    setOtpCode("");
+    const [, bootstrap] = await Promise.all([refreshHealth(auth.token), refreshBootstrapStatus()]);
+    if (!bootstrap.required) {
+      await refreshCollectionsWithToken(auth.token);
+    }
+  }
+
+  async function requestOtp(email: string, mfaId: string) {
+    const otp = await apiRequest<{ otpId: string }>("/api/collections/_superusers/request-otp", "", {
+      method: "POST",
+      body: { email }
+    });
+    setMfaChallenge({ mfaId, otpId: otp.otpId, email });
+    notify(t("notifications.otp_sent", "A one-time code has been sent to your email"));
+  }
+
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = authEmail.trim();
@@ -726,18 +802,56 @@ function App() {
         method: "POST",
         body
       });
-      setAuthToken(auth.token);
-      setAuthEmail("");
-      setAuthPassword("");
-      const [, bootstrap] = await Promise.all([refreshHealth(auth.token), refreshBootstrapStatus()]);
-      if (!bootstrap.required) {
-        await refreshCollectionsWithToken(auth.token);
+      await completeAuth(auth);
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.mfaId) {
+        try {
+          await requestOtp(email, error.mfaId);
+        } catch (otpError) {
+          notify(errorMessage(otpError), "error");
+        }
+      } else {
+        notify(errorMessage(error), "error");
       }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleOtpSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!mfaChallenge) return;
+    setLoading(true);
+    try {
+      const auth = await apiRequest<AuthResponse>("/api/collections/_superusers/auth-with-otp", "", {
+        method: "POST",
+        body: { otpId: mfaChallenge.otpId, password: otpCode.trim(), mfaId: mfaChallenge.mfaId }
+      });
+      await completeAuth(auth);
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
       setLoading(false);
     }
+  }
+
+  async function resendOtp() {
+    if (!mfaChallenge) return;
+    setLoading(true);
+    try {
+      setOtpCode("");
+      await requestOtp(mfaChallenge.email, mfaChallenge.mfaId);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function cancelMfa() {
+    setMfaChallenge(null);
+    setOtpCode("");
+    setAuthPassword("");
   }
 
   async function refreshCollectionsWithToken(nextToken: string) {
@@ -801,7 +915,18 @@ function App() {
   }
 
   async function deleteCollection(collection: CollectionSchema) {
-    if (!window.confirm(t("confirm.delete_collection", { name: collection.name, defaultValue: "Delete collection {{name}}?" }))) return;
+    const confirmed = await confirm({
+      title: t("confirm.delete_collection_title", "Delete collection"),
+      message: t("confirm.delete_collection_body", {
+        name: collection.name,
+        defaultValue:
+          'All records of "{{name}}" and their uploaded files will be permanently deleted. This cannot be undone.'
+      }),
+      confirmLabel: t("actions.delete", "Delete"),
+      danger: true,
+      requireText: collection.name
+    });
+    if (!confirmed) return;
     try {
       await api(`/api/collections/${encodeURIComponent(collection.name)}`, { method: "DELETE" });
       notify(t("notifications.collection_deleted", "Collection deleted"));
@@ -900,7 +1025,14 @@ function App() {
   }
 
   async function deleteRecord(record: RecordItem) {
-    if (!selected || !window.confirm(t("confirm.delete_record", { id: record.id, defaultValue: "Delete record {{id}}?" }))) return;
+    if (!selected) return;
+    const confirmed = await confirm({
+      title: t("confirm.delete_record_title", "Delete record"),
+      message: t("confirm.delete_record", { id: record.id, defaultValue: "Delete record {{id}}?" }),
+      confirmLabel: t("actions.delete", "Delete"),
+      danger: true
+    });
+    if (!confirmed) return;
     try {
       await api(`/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(record.id)}`, {
         method: "DELETE"
@@ -914,7 +1046,16 @@ function App() {
 
   async function deleteSelectedRecords() {
     if (!selected || selectedRecordIds.length === 0) return;
-    if (!window.confirm(t("confirm.delete_selected_records", { count: selectedRecordIds.length, defaultValue: "Delete {{count}} selected records?" }))) return;
+    const confirmed = await confirm({
+      title: t("confirm.delete_records_title", "Delete records"),
+      message: t("confirm.delete_selected_records", {
+        count: selectedRecordIds.length,
+        defaultValue: "Delete {{count}} selected records?"
+      }),
+      confirmLabel: t("actions.delete", "Delete"),
+      danger: true
+    });
+    if (!confirmed) return;
     try {
       await Promise.all(
         selectedRecordIds.map((id) =>
@@ -1039,7 +1180,18 @@ function App() {
   }
 
   async function restoreBackup(backup: BackupInfo) {
-    if (!window.confirm(t("confirm.restore_backup", { key: backup.key, defaultValue: "Restore {{key}}?" }))) return;
+    const confirmed = await confirm({
+      title: t("confirm.restore_backup_title", "Restore backup"),
+      message: t("confirm.restore_backup_body", {
+        key: backup.key,
+        defaultValue:
+          'The current application data will be REPLACED with the one from "{{key}}". All records, files and settings created since that backup will be lost. This cannot be undone.'
+      }),
+      confirmLabel: t("actions.restore", "Restore"),
+      danger: true,
+      requireText: backup.key
+    });
+    if (!confirmed) return;
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}/restore`, { method: "POST" });
       notify(t("notifications.backup_restored", "Backup restored"));
@@ -1051,7 +1203,13 @@ function App() {
   }
 
   async function deleteBackup(backup: BackupInfo) {
-    if (!window.confirm(t("confirm.delete_backup", { key: backup.key, defaultValue: "Delete backup {{key}}?" }))) return;
+    const confirmed = await confirm({
+      title: t("confirm.delete_backup_title", "Delete backup"),
+      message: t("confirm.delete_backup", { key: backup.key, defaultValue: "Delete backup {{key}}?" }),
+      confirmLabel: t("actions.delete", "Delete"),
+      danger: true
+    });
+    if (!confirmed) return;
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}`, { method: "DELETE" });
       notify(t("notifications.backup_deleted", "Backup deleted"));
@@ -1127,6 +1285,22 @@ function App() {
   }
 
   async function runSql() {
+    const statement = DANGEROUS_SQL.find((keyword) =>
+      new RegExp(`^\\s*${keyword}\\b`, "i").test(sqlQuery)
+    );
+    if (statement) {
+      const confirmed = await confirm({
+        title: t("confirm.run_sql_title", "Run write statement"),
+        message: t("confirm.run_sql_body", {
+          statement: statement.toUpperCase(),
+          defaultValue:
+            "This query starts with {{statement}} and can modify or destroy data. Are you sure you want to execute it?"
+        }),
+        confirmLabel: t("actions.execute", "Execute"),
+        danger: true
+      });
+      if (!confirmed) return;
+    }
     setSqlError("");
     setLoading(true);
     try {
@@ -1258,9 +1432,15 @@ function App() {
               email={authEmail}
               password={authPassword}
               loading={loading}
+              mfaChallenge={mfaChallenge}
+              otpCode={otpCode}
               onEmail={setAuthEmail}
               onPassword={setAuthPassword}
+              onOtpCode={setOtpCode}
               onSubmit={handleAuth}
+              onOtpSubmit={handleOtpSubmit}
+              onResendOtp={resendOtp}
+              onCancelMfa={cancelMfa}
             />
           ) : (
             <>
@@ -1286,6 +1466,7 @@ function App() {
                   canBackup={Boolean(health?.canBackup)}
                   loading={loading}
                   uploadRef={backupUploadRef}
+                  onConfirm={confirm}
                   onBackupName={setBackupName}
                   onDraft={setSettingsDraft}
                   onSave={saveSettings}
@@ -1382,7 +1563,8 @@ function App() {
                   stats={logStats}
                   loading={loading}
                   onFilter={setLogFilter}
-                  onRefresh={refreshLogs}
+                  onRefresh={() => refreshLogs()}
+                  onLoadMore={loadMoreLogs}
                 />
               ) : view === "crons" ? (
                 <CronsView crons={crons} loading={loading} onRefresh={refreshCrons} onRun={runCron} />
@@ -1390,6 +1572,7 @@ function App() {
                 view === "records" ? (
                   <RecordsView
                     collection={selected}
+                    collections={collections}
                     records={records}
                     columns={columns}
                     allColumns={allColumns}
@@ -1401,6 +1584,7 @@ function App() {
                     onQuery={setQuery}
                     onApply={(nextQuery) => refreshRecords(selected.name, nextQuery)}
                     onRefresh={() => refreshRecords(selected.name, query)}
+                    onLoadMore={loadMoreRecords}
                     onEditCollection={() => setCollectionEditor({ mode: "edit", collection: selected })}
                     onNew={() => setRecordEditor({})}
                     onEdit={(record) => setRecordEditor({ record })}
@@ -1441,7 +1625,9 @@ function App() {
         <CollectionModal
           state={collectionEditor}
           oauthProviders={oauthProviders}
+          allCollections={collections}
           onClose={() => setCollectionEditor(null)}
+          onConfirm={confirm}
           onSubmit={(payload) => saveCollection(payload)}
         />
       )}
@@ -1449,14 +1635,27 @@ function App() {
       {recordEditor && selected && (
         <RecordModal
           collection={selected}
+          collections={collections}
           state={recordEditor}
           onClose={() => setRecordEditor(null)}
+          onConfirm={confirm}
+          fetchRecords={fetchRelationRecords}
           onSubmit={saveRecord}
         />
       )}
 
       {oauthResult && (
         <OAuthResultModal result={oauthResult} onClose={() => setOauthResult(null)} />
+      )}
+
+      {confirmState && (
+        <ConfirmDialog
+          {...confirmState}
+          onResolve={(confirmed) => {
+            confirmState.resolve(confirmed);
+            setConfirmState(null);
+          }}
+        />
       )}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.message}</div>}
@@ -1469,13 +1668,65 @@ type AuthPanelProps = {
   email: string;
   password: string;
   loading: boolean;
+  mfaChallenge: MfaChallenge | null;
+  otpCode: string;
   onEmail: (value: string) => void;
   onPassword: (value: string) => void;
+  onOtpCode: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onOtpSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onResendOtp: () => void;
+  onCancelMfa: () => void;
 };
 
 function AuthPanel(props: AuthPanelProps) {
   const { t } = useTranslation();
+
+  if (props.mfaChallenge) {
+    return (
+      <section className="auth-layout">
+        <div className="auth-copy">
+          <p className="eyebrow">{t("auth.mfa_step", "Step 2 of 2")}</p>
+          <h2>{t("auth.enter_otp", "Enter the one-time code")}</h2>
+          <p className="auth-hint">
+            {t("auth.otp_sent_to", {
+              email: props.mfaChallenge.email,
+              defaultValue: "We sent a one-time code to {{email}}."
+            })}
+          </p>
+        </div>
+        <form className="auth-form" onSubmit={props.onOtpSubmit}>
+          <label>
+            {t("auth.otp_code", "One-time code")}
+            <input
+              id="superuser-otp"
+              name="otp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              required
+              value={props.otpCode}
+              onChange={(event) => props.onOtpCode(event.target.value)}
+            />
+          </label>
+          <button className="primary submit" type="submit" disabled={props.loading}>
+            <KeyRound size={16} />
+            {t("auth.verify_and_sign_in", "Verify and sign in")}
+          </button>
+          <div className="auth-secondary-actions">
+            <button type="button" className="subtle" onClick={props.onResendOtp} disabled={props.loading}>
+              {t("auth.request_another_otp", "Request another code")}
+            </button>
+            <button type="button" className="subtle" onClick={props.onCancelMfa} disabled={props.loading}>
+              {t("actions.cancel", "Cancel")}
+            </button>
+          </div>
+        </form>
+      </section>
+    );
+  }
+
   return (
     <section className="auth-layout">
       <div className="auth-copy">
@@ -1709,6 +1960,7 @@ function SettingsSidebar({ current, onSelect }: { current: ViewName; onSelect: (
 
 type RecordsViewProps = {
   collection: CollectionSchema;
+  collections: CollectionSchema[];
   records: RecordItem[];
   columns: string[];
   allColumns: string[];
@@ -1720,6 +1972,7 @@ type RecordsViewProps = {
   onQuery: (query: QueryState) => void;
   onApply: (query: QueryState) => void;
   onRefresh: () => void | Promise<void>;
+  onLoadMore: () => void | Promise<void>;
   onEditCollection: () => void;
   onNew: () => void;
   onEdit: (record: RecordItem) => void;
@@ -1741,6 +1994,9 @@ function RecordsView(props: RecordsViewProps) {
   const allVisibleSelected =
     props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
   const canCreateRecord = props.collection.type !== "view";
+  const hasMoreRecords = Boolean(
+    props.recordPage && props.records.length > 0 && props.records.length < props.recordPage.totalItems
+  );
   const sortState = parseSortValue(draft.sort);
   const sortableColumns = useMemo(() => {
     const source = props.columns.length ? props.columns : props.allColumns;
@@ -1969,6 +2225,7 @@ function RecordsView(props: RecordsViewProps) {
                       <td key={column}>
                         <CellValue
                           collection={props.collection}
+                          collections={props.collections}
                           column={column}
                           record={record}
                           onOpenFile={props.onOpenFile}
@@ -1995,8 +2252,26 @@ function RecordsView(props: RecordsViewProps) {
           </tbody>
         </table>
       </div>
+      {hasMoreRecords && (
+        <div className="load-more-row">
+          <button className="subtle" onClick={() => props.onLoadMore()} disabled={props.loading}>
+            {props.loading
+              ? t("common.loading", "Loading...")
+              : t("records.load_more", {
+                  count: (props.recordPage?.totalItems ?? 0) - props.records.length,
+                  defaultValue: "Load more ({{count}} remaining)"
+                })}
+          </button>
+        </div>
+      )}
       <footer className="page-footer">
-        <span>{t("common.total_count", { count: props.recordPage?.totalItems ?? props.records.length, defaultValue: "Total: {{count}}" })}</span>
+        <span>
+          {t("common.loaded_of_total", {
+            loaded: props.records.length,
+            count: props.recordPage?.totalItems ?? props.records.length,
+            defaultValue: "Showing {{loaded}} of {{count}}"
+          })}
+        </span>
         <span>{t("collections.fields_count", { count: props.collection.fields?.length ?? 0, defaultValue: "{{count}} fields" })}</span>
         <span>{t("collections.columns_count", { shown: props.columns.length, total: props.allColumns.length, defaultValue: "{{shown}}/{{total}} columns" })}</span>
       </footer>
@@ -2008,12 +2283,38 @@ type CellValueProps = {
   collection: CollectionSchema;
   column: string;
   record: RecordItem;
+  collections?: CollectionSchema[];
   onOpenFile: (record: RecordItem, filename: string) => void;
 };
 
-function CellValue({ collection, column, record, onOpenFile }: CellValueProps) {
+function CellValue({ collection, collections, column, record, onOpenFile }: CellValueProps) {
   const field = collection.fields?.find((item) => item.name === column);
   const value = record[column];
+
+  if (field?.type === "relation" && value) {
+    const ids = (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
+    const target = collections?.find((item) => item.id === field.collectionId);
+    const expand = isPlainObject(record.expand) ? (record.expand as Record<string, unknown>) : undefined;
+    const expanded = expand?.[column];
+    const expandedList = expanded === undefined ? [] : Array.isArray(expanded) ? expanded : [expanded];
+    const summaries = new Map<string, string>();
+    for (const item of expandedList) {
+      if (isPlainObject(item) && typeof item.id === "string") {
+        summaries.set(item.id, recordSummary(item as RecordItem, target));
+      }
+    }
+    const shown = ids.slice(0, 3);
+    return (
+      <div className="relation-cell">
+        {shown.map((id) => (
+          <span key={id} className="relation-cell-item" title={id}>
+            {summaries.get(id) ?? id}
+          </span>
+        ))}
+        {ids.length > shown.length && <span className="relation-cell-more">({ids.length - shown.length} more)</span>}
+      </div>
+    );
+  }
 
   if (field?.type === "file" && value) {
     const files = Array.isArray(value) ? value : [value];
@@ -2168,6 +2469,7 @@ type BackupViewProps = {
   canBackup: boolean;
   loading: boolean;
   uploadRef: RefObject<HTMLInputElement | null>;
+  onConfirm: (request: ConfirmRequest) => Promise<boolean>;
   onBackupName: (value: string) => void;
   onDraft: (value: string) => void;
   onSave: () => void;
@@ -2229,14 +2531,18 @@ function BackupView(props: BackupViewProps) {
     updateSetting(["backups", "cron"], enabled ? String(backupsSettings.cron || cronPresets[0].cron) : "");
   }
 
-  function confirmUpload(file?: File) {
+  async function confirmUpload(file?: File) {
     if (!file) return;
-    const confirmed = window.confirm(
-      t("confirm.upload_backup", {
+    const confirmed = await props.onConfirm({
+      title: t("confirm.upload_backup_title", "Upload backup"),
+      message: t("confirm.upload_backup", {
         name: file.name,
-        defaultValue: "Uploaded backup files are not validated before restore. Proceed only if you trust the source.\n\nUpload \"{{name}}\"?"
-      })
-    );
+        defaultValue:
+          'Uploaded backup files are not validated before restore. Proceed only if you trust the source. Upload "{{name}}"?'
+      }),
+      confirmLabel: t("actions.upload", "Upload"),
+      danger: true
+    });
     if (confirmed) {
       props.onUpload(file);
     } else if (props.uploadRef.current) {
@@ -3703,12 +4009,14 @@ type LogsViewProps = {
   loading: boolean;
   onFilter: (value: string) => void;
   onRefresh: () => void;
+  onLoadMore: () => void | Promise<void>;
 };
 
 function LogsView(props: LogsViewProps) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<LogItem | null>(null);
   const total = props.logPage?.totalItems ?? props.logs.length;
+  const hasMoreLogs = Boolean(props.logPage && props.logs.length > 0 && props.logs.length < total);
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const maxStat = Math.max(1, ...props.stats.map((item) => Number(item.total || 0)));
   const chartStats = props.stats.slice(-28);
@@ -3775,46 +4083,53 @@ function LogsView(props: LogsViewProps) {
         <table className="logs-table">
           <thead>
             <tr>
-              <th>{t("logs.time", "Time")}</th>
-              <th>{t("logs.method", "Method")}</th>
-              <th>{t("logs.status", "Status")}</th>
-              <th>URL</th>
-              <th>{t("logs.auth", "Auth")}</th>
-              <th>{t("logs.exec", "Exec")}</th>
+              <th className="log-level-col">{t("logs.level", "Level")}</th>
+              <th>{t("logs.message", "Message")}</th>
+              <th>{t("logs.time", "Created")}</th>
               <th className="actions-col">{t("collections.actions")}</th>
             </tr>
           </thead>
           <tbody>
             {props.logs.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={7}>
+                <td className="empty-row" colSpan={4}>
                   {t("logs.no_logs", "No logs")}
                 </td>
               </tr>
             ) : (
               props.logs.map((log) => {
-                const data = log.data ?? {};
-                const status = Number(data.status ?? 0);
+                const level = logLevel(log.level);
                 return (
-                  <tr key={log.id}>
+                  <tr key={log.id} onClick={() => setSelected(log)} className="log-row">
+                    <td className="log-level-col">
+                      <span className={`log-level ${level.kind}`}>{level.label}</span>
+                    </td>
+                    <td>
+                      <div className="log-message">
+                        <span className="log-message-text" title={log.message}>
+                          {log.message || <em>{t("logs.no_message", "(no message)")}</em>}
+                        </span>
+                        <span className="log-data-chips">
+                          {logDataChips(log).map((chip) => (
+                            <span key={chip.key} className={`log-chip ${chip.kind ?? ""}`} title={`${chip.key}: ${chip.value}`}>
+                              <em>{chip.key}</em>
+                              {chip.value}
+                            </span>
+                          ))}
+                        </span>
+                      </div>
+                    </td>
                     <td>{formatDate(log.created)}</td>
-                    <td>
-                      <code>{String(data.method ?? "")}</code>
-                    </td>
-                    <td>
-                      <span className={status >= 500 ? "status-code error" : status >= 400 ? "status-code warn" : "status-code ok"}>
-                        {status || ""}
-                      </span>
-                    </td>
-                    <td>
-                      <code title={String(data.url ?? "")}>{String(data.url ?? "")}</code>
-                    </td>
-                    <td>
-                      <code>{String(data.authId ?? data.auth ?? "")}</code>
-                    </td>
-                    <td>{formatExecTime(data.execTime)}</td>
                     <td className="row-actions">
-                      <button className="icon-button" onClick={() => setSelected(log)} title={t("logs.inspect", "Inspect log")} aria-label={t("logs.inspect", "Inspect log")}>
+                      <button
+                        className="icon-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelected(log);
+                        }}
+                        title={t("logs.inspect", "Inspect log")}
+                        aria-label={t("logs.inspect", "Inspect log")}
+                      >
                         <ChevronRight size={16} />
                       </button>
                     </td>
@@ -3826,6 +4141,15 @@ function LogsView(props: LogsViewProps) {
         </table>
       </div>
 
+      {hasMoreLogs && (
+        <div className="load-more-row">
+          <button className="subtle" onClick={() => props.onLoadMore()} disabled={props.loading}>
+            {props.loading
+              ? t("common.loading", "Loading...")
+              : t("logs.load_older", { count: total - props.logs.length, defaultValue: "Load older ({{count}} remaining)" })}
+          </button>
+        </div>
+      )}
       <footer className="page-footer">
         <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
         <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
@@ -3861,11 +4185,13 @@ type RuleKey = "listRule" | "viewRule" | "createRule" | "updateRule" | "deleteRu
 type CollectionModalProps = {
   state: CollectionEditorState;
   oauthProviders: OAuthProviderMetadata[];
+  allCollections: CollectionSchema[];
   onClose: () => void;
+  onConfirm: (request: ConfirmRequest) => Promise<boolean>;
   onSubmit: (payload: CollectionPayload) => void;
 };
 
-function CollectionModal({ state, oauthProviders, onClose, onSubmit }: CollectionModalProps) {
+function CollectionModal({ state, oauthProviders, allCollections, onClose, onConfirm, onSubmit }: CollectionModalProps) {
   const { t } = useTranslation();
   const collection = state.collection;
   const [name, setName] = useState(collection?.name ?? "");
@@ -3903,6 +4229,43 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("fields");
   const tabs = useMemo(() => collectionModalTabs(type, t), [type, t]);
+
+  const snapshot = JSON.stringify({
+    name,
+    type,
+    fields,
+    viewQuery,
+    rules,
+    passwordEnabled,
+    identityFields,
+    otpEnabled,
+    otpDuration,
+    otpLength,
+    mfaEnabled,
+    mfaDuration,
+    oauthEnabled,
+    oauthProviderNames,
+    oauthProviderConfigs,
+    oauthMappedFields
+  });
+  const initialSnapshot = useRef(snapshot);
+  const hasChanges = snapshot !== initialSnapshot.current;
+
+  async function requestClose() {
+    if (hasChanges) {
+      const discard = await onConfirm({
+        title: t("confirm.discard_changes_title", "Discard changes"),
+        message: t(
+          "confirm.discard_changes_body",
+          "You have unsaved changes. Do you really want to discard them?"
+        ),
+        confirmLabel: t("actions.discard", "Discard"),
+        danger: true
+      });
+      if (!discard) return;
+    }
+    onClose();
+  }
 
   useEffect(() => {
     if (!tabs.some((tab) => tab.id === activeTab)) {
@@ -4061,7 +4424,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
           ? t("collections.edit_collection_title", { name: collection?.name, defaultValue: "Edit {{name}}" })
           : t("actions.new_collection", "New collection")
       }
-      onClose={onClose}
+      onClose={requestClose}
       wide
     >
       <form className="modal-grid collection-upsert-form" onSubmit={submit}>
@@ -4147,6 +4510,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
                     key={`${field.name}-${index}`}
                     field={field}
                     index={index}
+                    collections={allCollections}
                     onUpdate={updateFieldAt}
                     onRemove={removeField}
                   />
@@ -4467,7 +4831,7 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
-          <button type="button" className="subtle" onClick={onClose}>
+          <button type="button" className="subtle" onClick={requestClose}>
             <X size={16} />
             {t("actions.cancel", "Cancel")}
           </button>
@@ -4483,8 +4847,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
 
 type RecordModalProps = {
   collection: CollectionSchema;
+  collections: CollectionSchema[];
   state: RecordEditorState;
   onClose: () => void;
+  onConfirm: (request: ConfirmRequest) => Promise<boolean>;
+  fetchRecords: RelationFetcher;
   onSubmit: (
     payload: Record<string, unknown>,
     files: Record<string, File[]>,
@@ -4492,7 +4859,7 @@ type RecordModalProps = {
   ) => Promise<void> | void;
 };
 
-function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps) {
+function RecordModal({ collection, collections, state, onClose, onConfirm, fetchRecords, onSubmit }: RecordModalProps) {
   const { t } = useTranslation();
   const fileFields = (collection.fields ?? []).filter((field) => field.type === "file" && !field.hidden);
   const editableFields = (collection.fields ?? []).filter(
@@ -4521,6 +4888,23 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
   useEffect(() => {
     if (!showTabs && activeTab !== "main") setActiveTab("main");
   }, [activeTab, showTabs]);
+
+  async function requestClose() {
+    if (changed) {
+      const discard = await onConfirm({
+        title: t("confirm.discard_changes_title", "Discard changes"),
+        message: t(
+          "confirm.discard_changes_body",
+          "You have unsaved changes. Do you really want to discard them?"
+        ),
+        confirmLabel: t("actions.discard", "Discard"),
+        danger: true
+      });
+      if (!discard) return;
+      localStorage.removeItem(draftKey);
+    }
+    onClose();
+  }
 
   function updatePayload(field: FieldSchema, value: unknown) {
     setPayload((current) => {
@@ -4603,7 +4987,7 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
           ? t("records.edit_record_title", { id: state.record.id, defaultValue: "Edit {{id}}" })
           : t("records.new_record_title", { name: collection.name, defaultValue: "New {{name}}" })
       }
-      onClose={onClose}
+      onClose={requestClose}
       wide
     >
       <form className="modal-grid record-upsert-form" onSubmit={(event) => submit(event, true)}>
@@ -4659,6 +5043,8 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
                       key={field.name}
                       field={field}
                       value={payload[field.name]}
+                      collections={collections}
+                      fetchRecords={fetchRecords}
                       onChange={(value) => updatePayload(field, value)}
                     />
                   ))
@@ -4700,7 +5086,7 @@ function RecordModal({ collection, state, onClose, onSubmit }: RecordModalProps)
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions record-footer-actions">
-          <button type="button" className="subtle" onClick={onClose}>
+          <button type="button" className="subtle" onClick={requestClose}>
             <X size={16} />
             {t("actions.close", "Close")}
           </button>
@@ -4748,12 +5134,6 @@ function AuthProvidersPanel({ collection, record }: { collection: CollectionSche
     </section>
   );
 }
-
-type RecordFieldControlProps = {
-  field: FieldSchema;
-  value: unknown;
-  onChange: (value: unknown) => void;
-};
 
 
 type ModalProps = {
@@ -4913,16 +5293,38 @@ async function apiRequest<T>(path: string, token: string, options: ApiOptions = 
   const text = await response.text();
   const parsed = text ? parseJson(text) : null;
   if (!response.ok) {
-    if (response.status === 401) {
+    const payload = isPlainObject(parsed) ? (parsed as Record<string, unknown>) : {};
+    const mfaId = typeof payload.mfaId === "string" ? payload.mfaId : undefined;
+    // An MFA challenge is a login step, not an expired session — leave the auth state alone.
+    if (response.status === 401 && !mfaId && token) {
       localStorage.removeItem("pbj_token");
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("pbj_unauthorized"));
       }
     }
-    const apiError = isPlainObject(parsed) ? (parsed as ApiError) : {};
-    throw new Error(apiError.message || text || `${response.status} ${response.statusText}`);
+    const apiError = payload as ApiError;
+    throw new ApiRequestError(
+      apiError.message || text || `${response.status} ${response.statusText}`,
+      response.status,
+      apiError.data,
+      mfaId
+    );
   }
   return parsed as T;
+}
+
+class ApiRequestError extends Error {
+  readonly status: number;
+  readonly data: unknown;
+  readonly mfaId?: string;
+
+  constructor(message: string, status: number, data?: unknown, mfaId?: string) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.data = data;
+    this.mfaId = mfaId;
+  }
 }
 
 function parseJson(text: string): unknown {
@@ -4946,7 +5348,13 @@ function recordColumns(collection: CollectionSchema | null) {
   const fieldNames = (collection.fields ?? [])
     .filter((field) => field.type !== "password" && !field.hidden)
     .map((field) => field.name);
-  return ["id", ...fieldNames, "created", "updated"];
+  // id/created/updated are ordinary schema fields since PB v0.23, so they may already
+  // be present — dedupe or the header ends up wider than the rows and shifts out of line.
+  const columns: string[] = [];
+  for (const name of ["id", ...fieldNames, "created", "updated"]) {
+    if (!columns.includes(name)) columns.push(name);
+  }
+  return columns;
 }
 
 function recordEditorPayload(collection: CollectionSchema, record?: RecordItem) {
@@ -4992,6 +5400,32 @@ function maxFiles(field: FieldSchema) {
 function normalizeRule(value: string | null) {
   return value === null ? null : value.trim();
 }
+
+const FILTER_OPERATORS = ["=", "!=", "~", "!~", ">", ">=", "<", "<="];
+
+/**
+ * Turns a plain search term into a filter expression spanning the given fields.
+ * Terms that already read as an expression are passed through untouched.
+ */
+function normalizeSearchTerm(term: string, fallbackFields: string[]) {
+  const searchTerm = (term || "").trim();
+  if (!searchTerm || fallbackFields.length === 0) return searchTerm;
+  if (FILTER_OPERATORS.some((op) => searchTerm.includes(op))) return searchTerm;
+
+  const isLiteral = Number.isNaN(Number(searchTerm)) && searchTerm !== "true" && searchTerm !== "false";
+  const needle = isLiteral ? `"${searchTerm.replace(/^["'`]|["'`]$/gm, "")}"` : searchTerm;
+  return fallbackFields.map((name) => `${name}~${needle}`).join("||");
+}
+
+function normalizeSearchFilter(term: string, collection?: CollectionSchema) {
+  const fields = (collection?.fields ?? []).filter((field) => !field.hidden).map((field) => field.name);
+  return normalizeSearchTerm(term, fields);
+}
+
+const LOG_SEARCH_FIELDS = ["level", "message", "data"];
+
+// Mirrors the statements the official console guards behind a confirmation.
+const DANGEROUS_SQL = ["alter", "insert", "create", "update", "delete", "drop", "detach", "pragma", "replace"];
 
 function splitScopes(value: string | string[] | undefined) {
   const items = Array.isArray(value) ? value : String(value ?? "").split(",");
@@ -5111,6 +5545,56 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+/** Same level thresholds the official UI uses (slog levels). */
+function logLevel(value: number) {
+  if (value >= 8) return { label: "ERROR", kind: "danger" };
+  if (value >= 4) return { label: "WARN", kind: "warning" };
+  if (value >= 0) return { label: "INFO", kind: "success" };
+  return { label: "DEBUG", kind: "" };
+}
+
+type LogChip = { key: string; value: string; kind?: string };
+
+/**
+ * Summarises log.data as chips: request logs get their well-known keys in a fixed
+ * order, anything else falls back to the first few data entries so non-HTTP logs
+ * (cron runs, app errors) still carry information in the list.
+ */
+function logDataChips(log: LogItem): LogChip[] {
+  const data = log.data ?? {};
+  const chips: LogChip[] = [];
+  const isRequest = data.method !== undefined || data.status !== undefined;
+
+  if (isRequest) {
+    const status = Number(data.status ?? 0);
+    if (data.method !== undefined) chips.push({ key: "method", value: String(data.method) });
+    if (status) {
+      chips.push({
+        key: "status",
+        value: String(status),
+        kind: status >= 500 ? "danger" : status >= 400 ? "warning" : "success"
+      });
+    }
+    if (data.execTime !== undefined) chips.push({ key: "execTime", value: formatExecTime(data.execTime) });
+    if (data.auth !== undefined) chips.push({ key: "auth", value: String(data.auth) });
+    if (data.authId !== undefined) chips.push({ key: "authId", value: String(data.authId) });
+    if (data.userIP !== undefined) chips.push({ key: "userIP", value: String(data.userIP) });
+  } else {
+    for (const [key, value] of Object.entries(data)) {
+      if (key === "error" || key === "details") continue;
+      if (chips.length >= 6) break;
+      if (value === null || value === undefined || value === "") continue;
+      chips.push({ key, value: typeof value === "object" ? JSON.stringify(value) : String(value) });
+    }
+  }
+
+  // Errors are the reason someone opens this page — keep them last so they read as the outcome.
+  if (data.details !== undefined) chips.push({ key: "details", value: String(data.details), kind: "warning" });
+  if (data.error !== undefined) chips.push({ key: "error", value: String(data.error), kind: "danger" });
+
+  return chips;
 }
 
 function formatExecTime(value: unknown) {
@@ -5372,21 +5856,8 @@ function uniqueFieldName(fields: FieldSchema[], type: string) {
   return `${base}_${index}`;
 }
 
-function fieldInputValue(value: unknown) {
-  if (value === undefined || value === null) return "";
-  if (Array.isArray(value)) return value.map(String).join(", ");
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
 function splitCsv(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
-}
-
-function selectFieldOptions(field: FieldSchema) {
-  const legacyValues = (field as FieldSchema & { values?: unknown }).values;
-  const values = Array.isArray(legacyValues) ? legacyValues : field.options?.values;
-  return Array.isArray(values) ? values.map(String) : [];
 }
 
 function parseSortValue(value: string): { field: string; direction: SortDirection } {
@@ -5421,183 +5892,3 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 export default App;
-export function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps) {
-  const { t } = useTranslation();
-  const commonMeta = (
-    <span className="record-field-meta">
-      {field.type}
-      {field.required ? ` / ${t("collections.required", "required")}` : ""}
-      {field.unique ? ` / ${t("collections.unique", "unique")}` : ""}
-    </span>
-  );
-
-  if (field.type === "bool") {
-    return (
-      <label className="record-field-card checkbox-field">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <input name={field.name} type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-      </label>
-    );
-  }
-
-  if (field.type === "number" || field.type === "autonumber") {
-    return (
-      <label className="record-field-card">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <input
-          name={field.name}
-          autoComplete="off"
-          type="number"
-          value={value === undefined || value === null ? "" : String(value)}
-          onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
-        />
-      </label>
-    );
-  }
-
-  if (field.type === "json") {
-    return (
-      <label className="record-field-card wide">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <textarea
-          name={field.name}
-          className="compact-textarea"
-          value={value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-          onChange={(event) => {
-            const raw = event.target.value;
-            try {
-              onChange(raw.trim() ? JSON.parse(raw) : null);
-            } catch {
-              onChange(raw);
-            }
-          }}
-          spellCheck={false}
-        />
-      </label>
-    );
-  }
-
-  if (field.type === "editor") {
-    return (
-      <label className="record-field-card wide">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <textarea
-          name={field.name}
-          className="compact-textarea"
-          value={value === undefined || value === null ? "" : String(value)}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </label>
-    );
-  }
-
-  if (field.type === "date" || field.type === "autodate") {
-    const dateValue = typeof value === "string" ? value.replace(' ', 'T').substring(0, 16) : ""; // YYYY-MM-DDTHH:mm
-    return (
-      <label className="record-field-card">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <input
-          name={field.name}
-          type="datetime-local"
-          value={dateValue}
-          disabled={field.type === "autodate"}
-          onChange={(event) => {
-            if (event.target.value) {
-              const date = new Date(event.target.value);
-              // PocketBase uses string formats for dates
-              onChange(date.toISOString().replace('T', ' ')); 
-            } else {
-              onChange(null);
-            }
-          }}
-        />
-      </label>
-    );
-  }
-
-  if (field.type === "select") {
-    const isMultiple = maxFiles(field) > 1;
-    const options = selectFieldOptions(field);
-
-    if (isMultiple) {
-       const selectedValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
-       return (
-          <label className="record-field-card wide">
-            <span>
-              <strong>{field.name}</strong>
-              {commonMeta}
-            </span>
-            <div className="select-multiple-grid" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', padding: '4px 0' }}>
-               {options.length > 0 ? options.map((opt: string) => (
-                 <label key={opt} className="check-row" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                   <input
-                     type="checkbox"
-                     checked={selectedValues.includes(opt)}
-                     onChange={(e) => {
-                       if (e.target.checked) {
-                         onChange([...selectedValues, opt]);
-                       } else {
-                         onChange(selectedValues.filter(v => v !== opt));
-                       }
-                     }}
-                   />
-                   {opt}
-                 </label>
-               )) : <span style={{color: 'var(--text-subtle)'}}>{t("fields.no_options_configured", "No options configured")}</span>}
-            </div>
-          </label>
-       );
-    }
-    
-    return (
-      <label className="record-field-card">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <select
-          name={field.name}
-          value={value === undefined || value === null ? "" : String(value)}
-          onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
-        >
-          <option value="">{t("fields.select_placeholder", "-- Select --")}</option>
-          {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-        </select>
-      </label>
-    );
-  }
-
-  const inputType = field.type === "email" ? "email" : field.type === "url" ? "url" : field.type === "password" ? "password" : "text";
-  const relationMulti = field.type === "relation" && maxFiles(field) > 1;
-  return (
-    <label className="record-field-card">
-      <span>
-        <strong>{field.name}</strong>
-        {commonMeta}
-      </span>
-      <input
-        name={field.name}
-        autoComplete="off"
-        type={inputType}
-        value={fieldInputValue(value)}
-        placeholder={relationMulti ? "id1, id2" : ""}
-        onChange={(event) => onChange(relationMulti ? splitCsv(event.target.value) : event.target.value)}
-      />
-    </label>
-  );
-}

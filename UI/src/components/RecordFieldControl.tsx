@@ -1,5 +1,7 @@
 import React from 'react';
 import { useTranslation } from "react-i18next";
+import { RelationPicker } from "./RelationPicker";
+import type { RelationFetcher } from "./RelationPicker";
 // Types derived from App.tsx
 type FieldSchema = {
   id?: string;
@@ -29,7 +31,8 @@ function maxFiles(field: FieldSchema) {
 
 function fieldInputValue(value: unknown) {
   if (value === undefined || value === null) return "";
-  if (Array.isArray(value)) return value.join(", ");
+  if (Array.isArray(value)) return value.map(String).join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
@@ -41,8 +44,8 @@ function splitCsv(value: string) {
 }
 
 function selectFieldOptions(field: FieldSchema) {
-  const optionValues = field.options?.values;
-  const values = Array.isArray(field.values) ? field.values : optionValues;
+  const legacyValues = (field as FieldSchema & { values?: unknown }).values;
+  const values = Array.isArray(legacyValues) ? legacyValues : field.options?.values;
   return Array.isArray(values) ? values.map(String) : [];
 }
 
@@ -50,9 +53,11 @@ type RecordFieldControlProps = {
   field: FieldSchema;
   value: unknown;
   onChange: (value: unknown) => void;
+  collections?: Array<{ id: string; name: string; fields?: FieldSchema[] }>;
+  fetchRecords?: RelationFetcher;
 };
 
-export function RecordFieldControl({ field, value, onChange }: RecordFieldControlProps) {
+export function RecordFieldControl({ field, value, onChange, collections, fetchRecords }: RecordFieldControlProps) {
   const { t } = useTranslation();
   const commonMeta = (
     <span className="record-field-meta">
@@ -135,7 +140,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
   }
 
   if (field.type === "date" || field.type === "autodate") {
-    const dateValue = typeof value === "string" ? value.substring(0, 16) : ""; // YYYY-MM-DDTHH:mm
+    const dateValue = typeof value === "string" ? value.replace(" ", "T").substring(0, 16) : ""; // YYYY-MM-DDTHH:mm
     return (
       <label className="record-field-card">
         <span>
@@ -166,6 +171,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
     const options = selectFieldOptions(field);
 
     if (isMultiple) {
+       const maxSelected = maxFiles(field);
        const selectedValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
        return (
           <label className="record-field-card wide">
@@ -174,11 +180,12 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
               {commonMeta}
             </span>
             <div className="select-multiple-grid">
-               {options.map((opt) => (
+               {options.length > 0 ? options.map((opt) => (
                  <label key={opt} className="check-row">
                    <input
                      type="checkbox"
                      checked={selectedValues.includes(opt)}
+                     disabled={!selectedValues.includes(opt) && selectedValues.length >= maxSelected}
                      onChange={(e) => {
                        if (e.target.checked) {
                          onChange([...selectedValues, opt]);
@@ -189,7 +196,7 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
                    />
                    {opt}
                  </label>
-               ))}
+               )) : <span className="record-field-empty">{t("fields.no_options_configured", "No options configured")}</span>}
             </div>
           </label>
        );
@@ -209,6 +216,24 @@ export function RecordFieldControl({ field, value, onChange }: RecordFieldContro
           <option value="">{t("fields.select_placeholder", "-- Select --")}</option>
           {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
         </select>
+      </label>
+    );
+  }
+
+  if (field.type === "relation" && collections && fetchRecords) {
+    return (
+      <label className="record-field-card wide">
+        <span>
+          <strong>{field.name}</strong>
+          {commonMeta}
+        </span>
+        <RelationPicker
+          field={field}
+          value={value}
+          collections={collections}
+          fetchRecords={fetchRecords}
+          onChange={onChange}
+        />
       </label>
     );
   }

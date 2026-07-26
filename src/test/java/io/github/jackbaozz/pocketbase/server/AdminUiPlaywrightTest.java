@@ -355,8 +355,15 @@ public class AdminUiPlaywrightTest {
         page.waitForSelector(".modal-backdrop:has-text('Edit ui_workflow_posts')", new Page.WaitForSelectorOptions().setTimeout(5000));
         page.waitForSelector(".field-builder-panel", new Page.WaitForSelectorOptions().setTimeout(5000));
         page.click(".modal-backdrop button:has-text('Rules')");
+        // Rules start locked (superusers only, i.e. null) and only expose an editor once unlocked,
+        // which is what keeps a null rule from being saved back as an empty "public" rule.
+        page.waitForSelector(".collection-rules-panel .rule-field.locked", new Page.WaitForSelectorOptions().setTimeout(5000));
+        page.click(".collection-rules-panel .rule-field.locked button:has-text('Unlock and set custom rule')");
         page.waitForSelector(".collection-rules-panel textarea", new Page.WaitForSelectorOptions().setTimeout(5000));
         page.click(".modal-backdrop button[title='Close']");
+        // Unlocking is an unsaved change, so closing asks for confirmation first.
+        page.waitForSelector(".confirm-dialog", new Page.WaitForSelectorOptions().setTimeout(5000));
+        page.click(".confirm-actions button.danger");
         page.waitForSelector(".modal-backdrop", new Page.WaitForSelectorOptions()
                 .setState(WaitForSelectorState.HIDDEN).setTimeout(5000));
 
