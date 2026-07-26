@@ -28,6 +28,8 @@
 - **CSS 变量**必须使用 `UI/src/styles.css` 中实际定义的名称（如 `--surfaceColor`、`--surfaceTxtHintColor`、`--surfaceAlt1~4Color`），不要照搬官方 Svelte 版的变量名（`--baseColor`、`--txtHintColor` 等在本项目不存在，会静默失效）。
 - **新增文案**一律使用 `t("key", "English default")` 形式，并同步补齐 `UI/src/i18n/locales/` 下全部 9 个语言文件（9 个文件的 key 集合必须完全一致）。
 - **UI 改动后必须重新构建**（`cd UI && npm run build`，产物直接写入 `src/main/resources/pocketbase-admin/`），否则 Playwright E2E 测试与本地启动的服务加载的仍是旧资源。
+- **可复用组件**均在 `UI/src/components/` 下且自带同名 CSS 文件（通过 `import "./X.css"` 引入，不要往 `styles.css` 里加组件样式）：`CodeEditor`（语法高亮 + 补全，零第三方依赖，用于规则/SQL/JSON）、`ApiPreview`（API 文档侧栏）、`IndexManager`（索引管理）、`RelationPicker`（关联记录选择器）、`ConfirmDialog`（Promise 式确认框，替代 `window.confirm`）。新增确认交互一律走 `ConfirmDialog`，危险操作可用 `requireText` 要求手输名称。
+- **设置保存不要信任 PATCH 响应**：服务端在存储阶段才做规范化（限流规则去重与优先级排序、`******` 密钥脱敏），响应回显的是提交值，保存后需重新拉取 `/api/settings`。
 
 ## 🛠️ 构建与编译 (Build Commands)
 

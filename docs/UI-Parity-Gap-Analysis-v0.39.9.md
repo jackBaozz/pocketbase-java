@@ -265,10 +265,27 @@
 - **CSS 变量失效**：9 处引用了本项目不存在的 `--baseColor`/`--txtHintColor`（照搬官方命名），另有既有的 `--bg-body`/`--border-color`/`--lgFontSize`/`--lgLineHeight` 未定义（导致字段编辑器编辑态背景透明）。已全部替换为项目实际变量。
 - **i18n**：新增约 97 个 key × 9 种语言；并修复存量未翻译条目（`confirm.*` 等在 ja/es/pt/fr/ru 曾是英文原文，会造成中英混排）与 zh_TW 混入的简体字。
 
-### 未完成项（按剩余价值排序）
+### 第二轮修复（同日，承接上表）
 
-1. **限流规则编辑器**（P1）— 目前仍只能通过 Advanced JSON 编辑，缺 label 自动补全、增删行自动启停、优先级排序、excludedIPs 编辑。
-2. **API Preview 文档侧栏**（官方 `apiPreview/` 共 19 个文件）— 端点导航、SDK 代码示例、参数与响应表，整块缺失。
-3. **索引与唯一约束管理** — 索引列表与编辑弹窗、重命名时同步索引表名/列名。
-4. **保存前变更确认 diff** — 集合保存前展示重命名/删除字段/规则变更的对比与警告。
-5. **代码编辑器**（规则/SQL/filter/JSON 的语法高亮与自动补全）、**字段级错误定位**、**拖拽排序**、**URL 状态同步**、**auth 记录运营能力**（impersonate、邮件模板、token 配置）、**文件字段完整编辑**（拖拽、删除恢复、缩略图预览）、**备份 canBackup 轮询**、**Shift+Click 范围选择**。
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **限流规则编辑器** | 规则表格（label 带按集合动态生成的 datalist 补全、maxRequests/interval/audience、增删行）、首条规则自动启用与删空自动停用、excludedIPs 编辑；保存前按官方 `sortRules` 优先级重排（tag > 精确路径 > 长前缀 > 短前缀） | 实测新增规则后保存，UI 自动同步为 `*:auth, *:create, /api/batch, /api/collections/, /api/` 的正确优先级顺序 |
+| **API Preview 文档侧栏** | 新增 `ApiPreview` 组件：20 个端点（按集合类型动态生成，未启用的置灰并提示）、JS/Dart SDK 示例（选择记忆 localStorage）、参数表、200/4xx 响应示例、代码块复制 | 记录页头部入口打开，实测导航与 SDK 切换、路径使用实际集合名与 baseUrl |
+| **索引管理** | 新增 `IndexManager` 组件：索引列表（名称/列/UNIQUE 标记）、编辑弹窗（表单模式的列 chip 多选 + Unique + WHERE，或直接编辑 SQL，带实时预览）、移植官方 `parseIndex`/`buildIndex` | 实测读取既有索引、且后端确认唯一索引真实生效（重复值返回 `validation_not_unique`） |
+| **保存前变更 diff 确认** | 集合保存前比对原始 schema，逐条列出集合/字段重命名、字段增删、类型变更、多值转单值、规则变更（含 `null`/`""`/表达式三态描述）；含破坏性变更时对话框转为危险样式 | 实测删字段 + 重命名后弹出红色确认框，逐条列明"数据将被永久删除" |
+| **代码编辑器** | 新增 `CodeEditor` 组件（零新增依赖，textarea + 高亮层方案）：pbrule/sql/json 三种高亮、光标处补全下拉（↑↓/Enter/Tab/ESC）、Tab 缩进、Ctrl+D 选词；已接入 API 规则、SQL 控制台、view 查询 | 实测 SQL 关键字高亮且两层像素级对齐（left/top 偏差 0）；规则输入 `@request.au` 弹出 `@request.auth.id` 等候选 |
+| **字段级错误定位** | 解析 PocketBase 的 `data.{field}.message` 结构，错误显示在对应字段下方并高亮边框，再次编辑该字段即清除 | 实测唯一约束冲突时 email 字段红框 + "Value must be unique." |
+| **字段拖拽排序** | 字段列表支持拖拽重排（独立手柄，避免干扰编辑态文本选择），拖拽中与落点有视觉反馈 | 类型检查 + 构建 |
+| **Shift+Click 范围选择** | 记录列表按官方 v0.39.8 的 `bulkSelectRange` 语义：从上次点击行到当前行批量应用选中/取消 | 实测普通点击选 1 行 → Shift 点击第 5 行变 4 行 → 反向 Shift 点击回到 1 行 |
+| **备份 canBackup 轮询** | 备份页打开时每 3.5s 轮询 health，操作进行中禁用控件，操作结束后自动刷新列表 | 类型检查 + 构建 |
+
+顺带修复：**设置保存后 UI 与服务端不同步**——后端 PATCH 响应回显的是提交值而非规范化后的存储值（规则去重/排序、secret 脱敏均在存储阶段发生），导致保存后界面显示陈旧。改为保存后重新拉取。
+
+### 仍未完成（按剩余价值排序）
+
+1. **auth 记录运营能力** — impersonate 模拟登录、发送验证/密码重置邮件、邮件模板编辑、token 时长与失效控制、OAuth2 外链解绑。
+2. **文件字段完整编辑** — 拖拽上传、已有文件的删除/恢复标记、新旧混排排序、缩略图与预览弹窗。
+3. **URL 状态同步** — filter/sort/分页/记录 id 写入 hash query，支持刷新恢复与深链分享。
+4. **集合层其它** — Truncate、Duplicate、Collections overview（ERD）、view 集合 SQL 试运行预览、auth 集合的 authRule/manageRule。
+5. **日志页余项** — 图表框选缩放与联动、批量选择导出、"包含超管请求"开关、日志设置迁移到日志页齿轮。
+6. **其它体验项** — 自定义 tooltip 体系、模态 ESC/遮罩关闭与层叠管理、搜索历史、S3 自动连通性测试、Superuser IPs 防锁死、Trusted proxy 实时诊断、SQL 结果分页与导出 CSV。
