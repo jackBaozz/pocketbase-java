@@ -15,6 +15,7 @@ import {
   HardDrive,
   KeyRound,
   ListFilter,
+  Lock,
   LogOut,
   Mail,
   Minus,
@@ -33,6 +34,7 @@ import {
   Square,
   Sun,
   Trash2,
+  Unlock,
   Upload,
   X
 } from "lucide-react";
@@ -3888,13 +3890,16 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
   const [oauthMappedFields, setOauthMappedFields] = useState<OAuth2MappedFields>(
     collection?.oauth2?.mappedFields ?? { id: "", name: "", username: "", avatarURL: "" }
   );
-  const [rules, setRules] = useState({
-    listRule: collection?.listRule ?? "",
-    viewRule: collection?.viewRule ?? "",
-    createRule: collection?.createRule ?? "",
-    updateRule: collection?.updateRule ?? "",
-    deleteRule: collection?.deleteRule ?? ""
+  // null = superusers only (locked); "" = public access. The distinction is part of
+  // the PocketBase API contract, so it must survive a load/save round-trip untouched.
+  const [rules, setRules] = useState<Record<RuleKey, string | null>>({
+    listRule: collection?.listRule ?? null,
+    viewRule: collection?.viewRule ?? null,
+    createRule: collection?.createRule ?? null,
+    updateRule: collection?.updateRule ?? null,
+    deleteRule: collection?.deleteRule ?? null
   });
+  const [ruleMemory, setRuleMemory] = useState<Partial<Record<RuleKey, string>>>({});
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("fields");
   const tabs = useMemo(() => collectionModalTabs(type, t), [type, t]);
@@ -3914,11 +3919,11 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
         name: name.trim(),
         type,
         fields: type === "view" ? [] : parsedFields,
-        listRule: nullableRule(rules.listRule),
-        viewRule: nullableRule(rules.viewRule),
-        createRule: nullableRule(rules.createRule),
-        updateRule: nullableRule(rules.updateRule),
-        deleteRule: nullableRule(rules.deleteRule),
+        listRule: normalizeRule(rules.listRule),
+        viewRule: normalizeRule(rules.viewRule),
+        createRule: normalizeRule(rules.createRule),
+        updateRule: normalizeRule(rules.updateRule),
+        deleteRule: normalizeRule(rules.deleteRule),
         ...(type === "view" ? { viewQuery: viewQuery.trim() } : {}),
         ...(type === "auth"
           ? {
@@ -4398,18 +4403,65 @@ function CollectionModal({ state, oauthProviders, onClose, onSubmit }: Collectio
               </div>
             </div>
             <div className="rules-grid official">
-              {collectionRuleKeys(type).map((key) => (
-                <label key={key}>
-                  {collectionRuleLabel(key, t)}
-                  <textarea
-                    value={rules[key]}
-                    onChange={(event) => setRules({ ...rules, [key]: event.target.value })}
-                    placeholder={key === "listRule" ? '@request.auth.id != ""' : ""}
-                    spellCheck={false}
-                    disabled={Boolean(collection?.system)}
-                  />
-                </label>
-              ))}
+              {collectionRuleKeys(type).map((key) => {
+                const value = rules[key];
+                const locked = value === null;
+                const readOnly = Boolean(collection?.system);
+                return (
+                  <div key={key} className={`rule-field${locked ? " locked" : ""}`}>
+                    <div className="rule-field-header">
+                      <span className="rule-field-label">
+                        {collectionRuleLabel(key, t)}
+                        {locked && (
+                          <em className="rule-field-hint">
+                            {t("collections.superusers_only", "(Superusers only)")}
+                          </em>
+                        )}
+                      </span>
+                      {!readOnly &&
+                        (locked ? (
+                          <button
+                            type="button"
+                            className="subtle rule-field-toggle"
+                            onClick={() => setRules({ ...rules, [key]: ruleMemory[key] ?? "" })}
+                          >
+                            <Unlock size={14} />
+                            {t("collections.unlock_rule", "Unlock and set custom rule")}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="subtle rule-field-toggle"
+                            onClick={() => {
+                              setRuleMemory({ ...ruleMemory, [key]: value ?? "" });
+                              setRules({ ...rules, [key]: null });
+                            }}
+                          >
+                            <Lock size={14} />
+                            {t("collections.set_superusers_only", "Set superusers only")}
+                          </button>
+                        ))}
+                    </div>
+                    {locked ? (
+                      <div className="rule-field-locked" aria-hidden="true">
+                        <Lock size={15} />
+                        <span>{t("collections.rule_locked", "Superusers only")}</span>
+                      </div>
+                    ) : (
+                      <textarea
+                        value={value}
+                        onChange={(event) => setRules({ ...rules, [key]: event.target.value })}
+                        placeholder={t(
+                          "collections.rule_placeholder",
+                          'Leave empty to grant everyone access, eg. @request.auth.id != ""'
+                        )}
+                        spellCheck={false}
+                        disabled={readOnly}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
@@ -4937,9 +4989,8 @@ function maxFiles(field: FieldSchema) {
   return Math.max(1, Number(direct ?? optionValue ?? 1));
 }
 
-function nullableRule(value: string) {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
+function normalizeRule(value: string | null) {
+  return value === null ? null : value.trim();
 }
 
 function splitScopes(value: string | string[] | undefined) {
