@@ -3,7 +3,6 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
-
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URLDecoder;
@@ -21,370 +20,384 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
-/**
- * In-memory SSE broker for PocketBase-style realtime record events.
- */
+/** In-memory SSE broker for PocketBase-style realtime record events. */
 public final class RealtimeHub {
-    private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
+  private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
-    private final ObjectMapper mapper;
-    private final Map<String, Client> clients = new ConcurrentHashMap<>();
+  private final ObjectMapper mapper;
+  private final Map<String, Client> clients = new ConcurrentHashMap<>();
 
-    public RealtimeHub(ObjectMapper mapper) {
-        this.mapper = mapper;
-    }
+  public RealtimeHub(ObjectMapper mapper) {
+    this.mapper = mapper;
+  }
 
-    public void connect(HttpExchange exchange) throws IOException {
-        connect(exchange, "");
-    }
+  public void connect(HttpExchange exchange) throws IOException {
+    connect(exchange, "");
+  }
 
-    public void connect(HttpExchange exchange, String remoteIp) throws IOException {
-        String clientId = IdGenerator.id();
-        Client client = new Client(clientId, exchange.getResponseBody(), remoteIp);
-        clients.put(clientId, client);
+  public void connect(HttpExchange exchange, String remoteIp) throws IOException {
+    String clientId = IdGenerator.id();
+    Client client = new Client(clientId, exchange.getResponseBody(), remoteIp);
+    clients.put(clientId, client);
 
-        exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-        exchange.getResponseHeaders().set("Cache-Control", "no-cache");
-        exchange.getResponseHeaders().set("Connection", "keep-alive");
-        exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
-        exchange.sendResponseHeaders(200, 0);
+    exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+    exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+    exchange.getResponseHeaders().set("Connection", "keep-alive");
+    exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
+    exchange.sendResponseHeaders(200, 0);
 
+    try {
+      try {
+        client.send("PB_CONNECT", Map.of("clientId", clientId), clientId);
+      } catch (IOException ignored) {
+        return;
+      }
+      while (!Thread.currentThread().isInterrupted() && client.awaitHeartbeat()) {
         try {
-            try {
-                client.send("PB_CONNECT", Map.of("clientId", clientId), clientId);
-            } catch (IOException ignored) {
-                return;
-            }
-            while (!Thread.currentThread().isInterrupted() && client.awaitHeartbeat()) {
-                try {
-                    client.comment("keepalive");
-                } catch (IOException ignored) {
-                    break;
-                }
-            }
-        } finally {
-            clients.remove(clientId);
-            client.close();
+          client.comment("keepalive");
+        } catch (IOException ignored) {
+          break;
         }
+      }
+    } finally {
+      clients.remove(clientId);
+      client.close();
     }
+  }
 
-    public void subscribe(String clientId, List<String> topics, RequestPrincipal principal) {
-        subscribe(clientId, topics, SubscriptionOptions.empty(), principal);
+  public void subscribe(String clientId, List<String> topics, RequestPrincipal principal) {
+    subscribe(clientId, topics, SubscriptionOptions.empty(), principal);
+  }
+
+  public void subscribe(
+      String clientId,
+      List<String> topics,
+      SubscriptionOptions options,
+      RequestPrincipal principal) {
+    subscribe(clientId, topics, options, principal, "");
+  }
+
+  public void subscribe(
+      String clientId,
+      List<String> topics,
+      SubscriptionOptions options,
+      RequestPrincipal principal,
+      String remoteIp) {
+    Client client = clients.get(clientId);
+    if (client == null) {
+      throw new ApiException(404, "Realtime client not found.");
     }
-
-    public void subscribe(String clientId, List<String> topics, SubscriptionOptions options, RequestPrincipal principal) {
-        subscribe(clientId, topics, options, principal, "");
+    if (!client.matchesRemoteIp(remoteIp)) {
+      throw new ApiException(400, "Invalid realtime client.");
     }
-
-    public void subscribe(
-            String clientId,
-            List<String> topics,
-            SubscriptionOptions options,
-            RequestPrincipal principal,
-            String remoteIp
-    ) {
-        Client client = clients.get(clientId);
-        if (client == null) {
-            throw new ApiException(404, "Realtime client not found.");
-        }
-        if (!client.matchesRemoteIp(remoteIp)) {
-            throw new ApiException(400, "Invalid realtime client.");
-        }
-        Set<Subscription> subscriptions = new LinkedHashSet<>();
-        for (String topic : topics == null ? List.<String>of() : topics) {
-            if (topic == null || topic.isBlank()) {
-                continue;
-            }
-            subscriptions.add(Subscription.parse(topic, mapper).merge(options));
-        }
-        client.setSubscriptions(subscriptions, principal);
+    Set<Subscription> subscriptions = new LinkedHashSet<>();
+    for (String topic : topics == null ? List.<String>of() : topics) {
+      if (topic == null || topic.isBlank()) {
+        continue;
+      }
+      subscriptions.add(Subscription.parse(topic, mapper).merge(options));
     }
+    client.setSubscriptions(subscriptions, principal);
+  }
 
-    public boolean sendOAuth2Redirect(String clientId, String remoteIp, Map<String, Object> payload) {
-        Client client = clients.get(clientId);
-        if (client == null) {
-            return false;
+  public boolean sendOAuth2Redirect(String clientId, String remoteIp, Map<String, Object> payload) {
+    Client client = clients.get(clientId);
+    if (client == null) {
+      return false;
+    }
+    try {
+      return client.sendOAuth2Redirect(remoteIp, payload);
+    } catch (IOException e) {
+      client.close();
+      clients.remove(client.id());
+      return false;
+    }
+  }
+
+  public SubscriptionOptions parseSubscriptionOptions(String options) {
+    return SubscriptionOptions.parse(options, mapper);
+  }
+
+  public void publish(
+      String collectionName,
+      String collectionId,
+      String recordId,
+      String action,
+      BiFunction<Subscription, RequestPrincipal, Map<String, Object>> recordFactory) {
+    for (Client client : new ArrayList<>(clients.values())) {
+      for (Subscription subscription : client.subscriptions()) {
+        if (!subscription.matches(collectionName, collectionId, recordId)) {
+          continue;
         }
+        Map<String, Object> record = recordFactory.apply(subscription, client.principal());
+        if (record == null) {
+          continue;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("action", action);
+        payload.put("record", record);
         try {
-            return client.sendOAuth2Redirect(remoteIp, payload);
+          client.send(subscription.topic(), payload, null);
         } catch (IOException e) {
-            client.close();
-            clients.remove(client.id());
-            return false;
+          client.close();
+          clients.remove(client.id());
+          break;
         }
+      }
+    }
+  }
+
+  public record SubscriptionOptions(Map<String, String> query, Map<String, String> headers) {
+    static SubscriptionOptions empty() {
+      return new SubscriptionOptions(Map.of(), Map.of());
     }
 
-    public SubscriptionOptions parseSubscriptionOptions(String options) {
-        return SubscriptionOptions.parse(options, mapper);
+    static SubscriptionOptions parse(String rawOptions, ObjectMapper mapper) {
+      if (rawOptions == null || rawOptions.isBlank()) {
+        return empty();
+      }
+      JsonNode options;
+      try {
+        options = mapper.readTree(rawOptions);
+      } catch (IOException e) {
+        throw new ApiException(
+            400,
+            "Failed to subscribe.",
+            ApiErrors.invalidField("options", "Invalid realtime subscription options."));
+      }
+      if (options == null || !options.isObject()) {
+        throw new ApiException(
+            400,
+            "Failed to subscribe.",
+            ApiErrors.invalidField("options", "Realtime subscription options must be an object."));
+      }
+
+      Map<String, String> query = new LinkedHashMap<>();
+      Map<String, String> headers = new LinkedHashMap<>();
+      mergeObject(options.get("query"), mapper, query);
+      mergeObject(options.get("headers"), mapper, headers);
+      return new SubscriptionOptions(Map.copyOf(query), Map.copyOf(headers));
     }
 
-    public void publish(
-            String collectionName,
-            String collectionId,
-            String recordId,
-            String action,
-            BiFunction<Subscription, RequestPrincipal, Map<String, Object>> recordFactory
-    ) {
-        for (Client client : new ArrayList<>(clients.values())) {
-            for (Subscription subscription : client.subscriptions()) {
-                if (!subscription.matches(collectionName, collectionId, recordId)) {
-                    continue;
-                }
-                Map<String, Object> record = recordFactory.apply(subscription, client.principal());
-                if (record == null) {
-                    continue;
-                }
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("action", action);
-                payload.put("record", record);
-                try {
-                    client.send(subscription.topic(), payload, null);
-                } catch (IOException e) {
-                    client.close();
-                    clients.remove(client.id());
-                    break;
-                }
-            }
-        }
+    private static void mergeObject(
+        JsonNode node, ObjectMapper mapper, Map<String, String> target) {
+      if (node == null || node.isNull()) {
+        return;
+      }
+      if (!node.isObject()) {
+        throw new ApiException(
+            400,
+            "Failed to subscribe.",
+            ApiErrors.invalidField(
+                "options", "Realtime subscription options query and headers must be objects."));
+      }
+      node.fields()
+          .forEachRemaining(
+              entry -> target.put(entry.getKey(), stringify(entry.getValue(), mapper)));
     }
 
-    public record SubscriptionOptions(Map<String, String> query, Map<String, String> headers) {
-        static SubscriptionOptions empty() {
-            return new SubscriptionOptions(Map.of(), Map.of());
-        }
+    private static String stringify(JsonNode value, ObjectMapper mapper) {
+      if (value == null || value.isNull()) {
+        return "";
+      }
+      if (value.isValueNode()) {
+        return value.asText("");
+      }
+      try {
+        return mapper.writeValueAsString(value);
+      } catch (IOException e) {
+        throw new ApiException(
+            400,
+            "Failed to subscribe.",
+            ApiErrors.invalidField("options", "Invalid realtime subscription options."));
+      }
+    }
+  }
 
-        static SubscriptionOptions parse(String rawOptions, ObjectMapper mapper) {
-            if (rawOptions == null || rawOptions.isBlank()) {
-                return empty();
-            }
-            JsonNode options;
-            try {
-                options = mapper.readTree(rawOptions);
-            } catch (IOException e) {
-                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Invalid realtime subscription options."));
-            }
-            if (options == null || !options.isObject()) {
-                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Realtime subscription options must be an object."));
-            }
-
-            Map<String, String> query = new LinkedHashMap<>();
-            Map<String, String> headers = new LinkedHashMap<>();
-            mergeObject(options.get("query"), mapper, query);
-            mergeObject(options.get("headers"), mapper, headers);
-            return new SubscriptionOptions(Map.copyOf(query), Map.copyOf(headers));
-        }
-
-        private static void mergeObject(JsonNode node, ObjectMapper mapper, Map<String, String> target) {
-            if (node == null || node.isNull()) {
-                return;
-            }
-            if (!node.isObject()) {
-                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Realtime subscription options query and headers must be objects."));
-            }
-            node.fields().forEachRemaining(entry -> target.put(entry.getKey(), stringify(entry.getValue(), mapper)));
-        }
-
-        private static String stringify(JsonNode value, ObjectMapper mapper) {
-            if (value == null || value.isNull()) {
-                return "";
-            }
-            if (value.isValueNode()) {
-                return value.asText("");
-            }
-            try {
-                return mapper.writeValueAsString(value);
-            } catch (IOException e) {
-                throw new ApiException(400, "Failed to subscribe.", ApiErrors.invalidField("options", "Invalid realtime subscription options."));
-            }
-        }
+  public record Subscription(
+      String topic,
+      String collection,
+      String recordId,
+      boolean wildcard,
+      Map<String, String> query,
+      Map<String, String> headers) {
+    static Subscription parse(String topic, ObjectMapper mapper) {
+      String[] pieces = topic.split("\\?", 2);
+      String target = pieces[0];
+      int slash = target.indexOf('/');
+      if (slash <= 0 || slash == target.length() - 1) {
+        return new Subscription(topic, target, "", false, Map.of(), Map.of());
+      }
+      String collection = target.substring(0, slash);
+      String record = target.substring(slash + 1);
+      Map<String, String> query =
+          pieces.length == 2 ? parseQuery(pieces[1]) : new LinkedHashMap<>();
+      Map<String, String> headers = new LinkedHashMap<>();
+      String options = query.remove("options");
+      if (options != null && !options.isBlank()) {
+        SubscriptionOptions parsed = SubscriptionOptions.parse(options, mapper);
+        query.putAll(parsed.query());
+        headers.putAll(parsed.headers());
+      }
+      return new Subscription(
+          topic, collection, record, "*".equals(record), Map.copyOf(query), Map.copyOf(headers));
     }
 
-    public record Subscription(
-            String topic,
-            String collection,
-            String recordId,
-            boolean wildcard,
-            Map<String, String> query,
-            Map<String, String> headers
-    ) {
-        static Subscription parse(String topic, ObjectMapper mapper) {
-            String[] pieces = topic.split("\\?", 2);
-            String target = pieces[0];
-            int slash = target.indexOf('/');
-            if (slash <= 0 || slash == target.length() - 1) {
-                return new Subscription(topic, target, "", false, Map.of(), Map.of());
-            }
-            String collection = target.substring(0, slash);
-            String record = target.substring(slash + 1);
-            Map<String, String> query = pieces.length == 2 ? parseQuery(pieces[1]) : new LinkedHashMap<>();
-            Map<String, String> headers = new LinkedHashMap<>();
-            String options = query.remove("options");
-            if (options != null && !options.isBlank()) {
-                SubscriptionOptions parsed = SubscriptionOptions.parse(options, mapper);
-                query.putAll(parsed.query());
-                headers.putAll(parsed.headers());
-            }
-            return new Subscription(
-                    topic,
-                    collection,
-                    record,
-                    "*".equals(record),
-                    Map.copyOf(query),
-                    Map.copyOf(headers)
-            );
-        }
-
-        Subscription merge(SubscriptionOptions inherited) {
-            if (inherited == null || (inherited.query().isEmpty() && inherited.headers().isEmpty())) {
-                return this;
-            }
-            Map<String, String> mergedQuery = new LinkedHashMap<>(inherited.query());
-            mergedQuery.putAll(query);
-            Map<String, String> mergedHeaders = new LinkedHashMap<>(inherited.headers());
-            mergedHeaders.putAll(headers);
-            return new Subscription(
-                    topic,
-                    collection,
-                    recordId,
-                    wildcard,
-                    Map.copyOf(mergedQuery),
-                    Map.copyOf(mergedHeaders)
-            );
-        }
-
-
-        boolean matches(String collectionName, String collectionId, String changedRecordId) {
-            boolean collectionMatches = collection.equals(collectionName) || collection.equals(collectionId);
-            if (!collectionMatches) {
-                return false;
-            }
-            return wildcard || recordId.equals(changedRecordId);
-        }
-
-        public String filter() {
-            return query.get("filter");
-        }
-
-        private static Map<String, String> parseQuery(String query) {
-            Map<String, String> values = new LinkedHashMap<>();
-            if (query == null || query.isBlank()) {
-                return values;
-            }
-            for (String pair : query.split("&")) {
-                if (pair.isBlank()) {
-                    continue;
-                }
-                int split = pair.indexOf('=');
-                String key = split >= 0 ? pair.substring(0, split) : pair;
-                String value = split >= 0 ? pair.substring(split + 1) : "";
-                values.put(decode(key), decode(value));
-            }
-            return values;
-        }
-
-        private static String decode(String value) {
-            return URLDecoder.decode(value, StandardCharsets.UTF_8);
-        }
+    Subscription merge(SubscriptionOptions inherited) {
+      if (inherited == null || (inherited.query().isEmpty() && inherited.headers().isEmpty())) {
+        return this;
+      }
+      Map<String, String> mergedQuery = new LinkedHashMap<>(inherited.query());
+      mergedQuery.putAll(query);
+      Map<String, String> mergedHeaders = new LinkedHashMap<>(inherited.headers());
+      mergedHeaders.putAll(headers);
+      return new Subscription(
+          topic,
+          collection,
+          recordId,
+          wildcard,
+          Map.copyOf(mergedQuery),
+          Map.copyOf(mergedHeaders));
     }
 
-    private final class Client {
-        private final String id;
-        private final OutputStream output;
-        private final String remoteIp;
-        private final CountDownLatch closed = new CountDownLatch(1);
-        private volatile Set<Subscription> subscriptions = Set.of();
-        private volatile RequestPrincipal principal;
-        private volatile boolean subscribed;
-
-        private Client(String id, OutputStream output, String remoteIp) {
-            this.id = id;
-            this.output = output;
-            this.remoteIp = remoteIp == null ? "" : remoteIp;
-        }
-
-        String id() {
-            return id;
-        }
-
-        RequestPrincipal principal() {
-            return principal;
-        }
-
-        Set<Subscription> subscriptions() {
-            return subscriptions;
-        }
-
-        boolean matchesRemoteIp(String candidate) {
-            return remoteIp.isBlank() || Objects.equals(remoteIp, candidate == null ? "" : candidate);
-        }
-
-        void setSubscriptions(Set<Subscription> subscriptions, RequestPrincipal principal) {
-            if (subscribed && this.principal != null && !samePrincipal(this.principal, principal)) {
-                throw new ApiException(403, "Realtime subscription authorization must match the initial subscription request.");
-            }
-            this.subscriptions = Set.copyOf(subscriptions);
-            this.principal = principal;
-            this.subscribed = true;
-        }
-
-        synchronized boolean sendOAuth2Redirect(String candidateIp, Map<String, Object> payload) throws IOException {
-            Subscription oauth2 = subscriptions.stream()
-                    .filter(subscription -> "@oauth2".equals(subscription.topic()))
-                    .findFirst()
-                    .orElse(null);
-            if (oauth2 == null) {
-                return false;
-            }
-            Set<Subscription> remaining = new LinkedHashSet<>(subscriptions);
-            remaining.remove(oauth2);
-            subscriptions = Set.copyOf(remaining);
-            if (!matchesRemoteIp(candidateIp)) {
-                return false;
-            }
-            send("@oauth2", payload, null);
-            return true;
-        }
-
-        private boolean samePrincipal(RequestPrincipal left, RequestPrincipal right) {
-            if (left == null || right == null) {
-                return left == right;
-            }
-            return left.superuser() == right.superuser()
-                    && Objects.equals(left.id(), right.id())
-                    && Objects.equals(left.collectionId(), right.collectionId())
-                    && Objects.equals(left.collectionName(), right.collectionName());
-        }
-
-        boolean awaitHeartbeat() {
-            try {
-                return !closed.await(HEARTBEAT_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
-        }
-
-        synchronized void send(String event, Object data, String id) throws IOException {
-            if (id != null && !id.isBlank()) {
-                output.write(("id: " + id + "\n").getBytes(StandardCharsets.UTF_8));
-            }
-            output.write(("event: " + event + "\n").getBytes(StandardCharsets.UTF_8));
-            output.write(("data: " + mapper.writeValueAsString(data) + "\n\n").getBytes(StandardCharsets.UTF_8));
-            output.flush();
-        }
-
-        synchronized void comment(String message) throws IOException {
-            output.write((": " + message + "\n\n").getBytes(StandardCharsets.UTF_8));
-            output.flush();
-        }
-
-        void close() {
-            closed.countDown();
-            try {
-                output.close();
-            } catch (IOException ignored) {
-                // connection already closed
-            }
-        }
+    boolean matches(String collectionName, String collectionId, String changedRecordId) {
+      boolean collectionMatches =
+          collection.equals(collectionName) || collection.equals(collectionId);
+      if (!collectionMatches) {
+        return false;
+      }
+      return wildcard || recordId.equals(changedRecordId);
     }
+
+    public String filter() {
+      return query.get("filter");
+    }
+
+    private static Map<String, String> parseQuery(String query) {
+      Map<String, String> values = new LinkedHashMap<>();
+      if (query == null || query.isBlank()) {
+        return values;
+      }
+      for (String pair : query.split("&")) {
+        if (pair.isBlank()) {
+          continue;
+        }
+        int split = pair.indexOf('=');
+        String key = split >= 0 ? pair.substring(0, split) : pair;
+        String value = split >= 0 ? pair.substring(split + 1) : "";
+        values.put(decode(key), decode(value));
+      }
+      return values;
+    }
+
+    private static String decode(String value) {
+      return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+  }
+
+  private final class Client {
+    private final String id;
+    private final OutputStream output;
+    private final String remoteIp;
+    private final CountDownLatch closed = new CountDownLatch(1);
+    private volatile Set<Subscription> subscriptions = Set.of();
+    private volatile RequestPrincipal principal;
+    private volatile boolean subscribed;
+
+    private Client(String id, OutputStream output, String remoteIp) {
+      this.id = id;
+      this.output = output;
+      this.remoteIp = remoteIp == null ? "" : remoteIp;
+    }
+
+    String id() {
+      return id;
+    }
+
+    RequestPrincipal principal() {
+      return principal;
+    }
+
+    Set<Subscription> subscriptions() {
+      return subscriptions;
+    }
+
+    boolean matchesRemoteIp(String candidate) {
+      return remoteIp.isBlank() || Objects.equals(remoteIp, candidate == null ? "" : candidate);
+    }
+
+    void setSubscriptions(Set<Subscription> subscriptions, RequestPrincipal principal) {
+      if (subscribed && this.principal != null && !samePrincipal(this.principal, principal)) {
+        throw new ApiException(
+            403,
+            "Realtime subscription authorization must match the initial subscription request.");
+      }
+      this.subscriptions = Set.copyOf(subscriptions);
+      this.principal = principal;
+      this.subscribed = true;
+    }
+
+    synchronized boolean sendOAuth2Redirect(String candidateIp, Map<String, Object> payload)
+        throws IOException {
+      Subscription oauth2 =
+          subscriptions.stream()
+              .filter(subscription -> "@oauth2".equals(subscription.topic()))
+              .findFirst()
+              .orElse(null);
+      if (oauth2 == null) {
+        return false;
+      }
+      Set<Subscription> remaining = new LinkedHashSet<>(subscriptions);
+      remaining.remove(oauth2);
+      subscriptions = Set.copyOf(remaining);
+      if (!matchesRemoteIp(candidateIp)) {
+        return false;
+      }
+      send("@oauth2", payload, null);
+      return true;
+    }
+
+    private boolean samePrincipal(RequestPrincipal left, RequestPrincipal right) {
+      if (left == null || right == null) {
+        return left == right;
+      }
+      return left.superuser() == right.superuser()
+          && Objects.equals(left.id(), right.id())
+          && Objects.equals(left.collectionId(), right.collectionId())
+          && Objects.equals(left.collectionName(), right.collectionName());
+    }
+
+    boolean awaitHeartbeat() {
+      try {
+        return !closed.await(HEARTBEAT_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
+
+    synchronized void send(String event, Object data, String id) throws IOException {
+      if (id != null && !id.isBlank()) {
+        output.write(("id: " + id + "\n").getBytes(StandardCharsets.UTF_8));
+      }
+      output.write(("event: " + event + "\n").getBytes(StandardCharsets.UTF_8));
+      output.write(
+          ("data: " + mapper.writeValueAsString(data) + "\n\n").getBytes(StandardCharsets.UTF_8));
+      output.flush();
+    }
+
+    synchronized void comment(String message) throws IOException {
+      output.write((": " + message + "\n\n").getBytes(StandardCharsets.UTF_8));
+      output.flush();
+    }
+
+    void close() {
+      closed.countDown();
+      try {
+        output.close();
+      } catch (IOException ignored) {
+        // connection already closed
+      }
+    }
+  }
 }

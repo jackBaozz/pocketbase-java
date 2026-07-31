@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
+import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.AuthCollectionFields;
 import io.github.jackbaozz.pocketbase.server.internal.AuthRecordMutationSupport;
 import io.github.jackbaozz.pocketbase.server.internal.AuthSystemCollections;
@@ -13,22 +13,18 @@ import io.github.jackbaozz.pocketbase.server.internal.FieldTypeMapping;
 import io.github.jackbaozz.pocketbase.server.internal.FieldValidator;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
-import io.github.jackbaozz.pocketbase.server.internal.RecordFieldResolverSupport;
-import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
-import io.github.jackbaozz.pocketbase.server.internal.RecordInputProtection;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
+import io.github.jackbaozz.pocketbase.server.internal.RecordFieldResolverSupport;
+import io.github.jackbaozz.pocketbase.server.internal.RecordInputProtection;
+import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator;
 import io.github.jackbaozz.pocketbase.server.internal.RuleRequestContext;
-import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
 import io.github.jackbaozz.pocketbase.server.internal.SearchFieldValidationSupport;
+import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
+import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
-import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
-import org.jooq.Field;
-import org.jooq.impl.DSL;
-import org.jooq.exception.DataAccessException;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,1243 +40,1300 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.jooq.Field;
+import org.jooq.exception.DataAccessException;
+import org.jooq.impl.DSL;
 
 public class RecordRepository extends BaseRepository {
-    private static final String SUPERUSERS = "_superusers";
+  private static final String SUPERUSERS = "_superusers";
 
-    private final CollectionRepository collectionRepository;
-    private final RecordProcessor.StoreContext storeContext;
-    private final Path storageDir;
-    private volatile RealtimeHub realtimeHub;
+  private final CollectionRepository collectionRepository;
+  private final RecordProcessor.StoreContext storeContext;
+  private final Path storageDir;
+  private volatile RealtimeHub realtimeHub;
 
-    public RecordRepository(JooqDatabase database, ObjectMapper mapper, CollectionRepository collectionRepository, RecordProcessor.StoreContext storeContext, Path dataDir) {
-        super(database, mapper);
-        this.collectionRepository = collectionRepository;
-        this.storeContext = storeContext;
-        this.storageDir = dataDir.resolve("storage");
+  public RecordRepository(
+      JooqDatabase database,
+      ObjectMapper mapper,
+      CollectionRepository collectionRepository,
+      RecordProcessor.StoreContext storeContext,
+      Path dataDir) {
+    super(database, mapper);
+    this.collectionRepository = collectionRepository;
+    this.storeContext = storeContext;
+    this.storageDir = dataDir.resolve("storage");
+  }
+
+  public void setRealtimeHub(RealtimeHub realtimeHub) {
+    this.realtimeHub = realtimeHub;
+  }
+
+  public Map<String, Object> getRecord(
+      String collection, String id, Map<String, String> query, RequestPrincipal principal) {
+    return getRecord(collection, id, RuleRequestContext.of(query, Map.of()), principal);
+  }
+
+  public Map<String, Object> getRecord(
+      String collection, String id, RuleRequestContext request, RequestPrincipal principal) {
+    collectionRepository.requireCollectionExists(collection);
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    requireSuperuserRecordsAccess(colSchema, principal);
+
+    Map<String, Object> raw = getRawRecord(colSchema, id);
+    if (raw == null) {
+      throw new ApiException(404, "Record not found.");
     }
-
-    public void setRealtimeHub(RealtimeHub realtimeHub) {
-        this.realtimeHub = realtimeHub;
+    if (!storeContext.canView(colSchema, raw, request, principal)) {
+      throw new ApiException(404, "Record not found.");
     }
+    return RecordProcessor.process(
+        storeContext,
+        colSchema,
+        raw,
+        principal != null && principal.superuser(),
+        request,
+        principal);
+  }
 
-    public Map<String, Object> getRecord(String collection, String id, Map<String, String> query, RequestPrincipal principal) {
-        return getRecord(collection, id, RuleRequestContext.of(query, Map.of()), principal);
+  public Map<String, Object> getRawRecord(CollectionSchema collection, String id) {
+    return getRawRecordByField(collection, "id", id);
+  }
+
+  public Map<String, Object> getRawRecordByField(
+      CollectionSchema collection, String field, Object value) {
+    try {
+      org.jooq.Record record =
+          database
+              .dsl()
+              .select(recordSelectFields(collection))
+              .from(qt(tableName(collection)))
+              .where(qf(field).eq(value))
+              .fetchOne();
+      return record == null ? null : normalizeStoredRecord(collection, record.intoMap());
+    } catch (DataAccessException e) {
+      return null;
     }
+  }
 
-    public Map<String, Object> getRecord(
-            String collection,
-            String id,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        collectionRepository.requireCollectionExists(collection);
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        requireSuperuserRecordsAccess(colSchema, principal);
-
-        Map<String, Object> raw = getRawRecord(colSchema, id);
-        if (raw == null) {
-            throw new ApiException(404, "Record not found.");
-        }
-        if (!storeContext.canView(colSchema, raw, request, principal)) {
-            throw new ApiException(404, "Record not found.");
-        }
-        return RecordProcessor.process(
-                storeContext,
-                colSchema,
-                raw,
-                principal != null && principal.superuser(),
-                request,
-                principal
-        );
+  public List<Map<String, Object>> listRawRecords(CollectionSchema collection) {
+    try {
+      return database
+          .dsl()
+          .select(recordSelectFields(collection))
+          .from(qt(tableName(collection)))
+          .fetch()
+          .map(record -> normalizeStoredRecord(collection, record.intoMap()));
+    } catch (DataAccessException e) {
+      return List.of();
     }
+  }
 
-    public Map<String, Object> getRawRecord(CollectionSchema collection, String id) {
-        return getRawRecordByField(collection, "id", id);
+  public Map<String, Object> normalizeStoredRecord(
+      CollectionSchema collection, Map<String, Object> record) {
+    if (record == null) {
+      return null;
     }
-
-    public Map<String, Object> getRawRecordByField(CollectionSchema collection, String field, Object value) {
-        try {
-            org.jooq.Record record = database.dsl()
-                    .select(recordSelectFields(collection))
-                    .from(qt(tableName(collection)))
-                    .where(qf(field).eq(value))
-                    .fetchOne();
-            return record == null ? null : normalizeStoredRecord(collection, record.intoMap());
-        } catch (DataAccessException e) {
-            return null;
-        }
+    Map<String, Object> normalized = new LinkedHashMap<>(record);
+    for (FieldSchema field : collection.fields) {
+      if (!normalized.containsKey(field.name)) {
+        continue;
+      }
+      normalized.put(field.name, normalizeStoredFieldValue(field, normalized.get(field.name)));
     }
+    return normalized;
+  }
 
-    public List<Map<String, Object>> listRawRecords(CollectionSchema collection) {
-        try {
-            return database.dsl()
-                    .select(recordSelectFields(collection))
-                    .from(qt(tableName(collection)))
-                    .fetch()
-                    .map(record -> normalizeStoredRecord(collection, record.intoMap()));
-        } catch (DataAccessException e) {
-            return List.of();
-        }
+  public Map<String, Object> listRecords(
+      String collection, Map<String, String> query, RequestPrincipal principal) {
+    return listRecords(collection, RuleRequestContext.of(query, Map.of()), principal);
+  }
+
+  public Map<String, Object> listRecords(
+      String collection, RuleRequestContext request, RequestPrincipal principal) {
+    Map<String, String> query = request.query();
+    collectionRepository.requireCollectionExists(collection);
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    requireSuperuserRecordsAccess(colSchema, principal);
+    SearchQuerySupport.Parameters search = SearchQuerySupport.parse(query);
+    SearchQuerySupport.rejectSuperuserOnlyRuleFields(query, principal);
+    SearchFieldValidationSupport.validateRecords(storeContext, colSchema, search, principal);
+
+    String filter = search.filter();
+
+    List<Map<String, Object>> authorized = new ArrayList<>();
+    boolean includeHidden = principal != null && principal.superuser();
+    int rowId = 0;
+    for (org.jooq.Record record : database
+        .dsl()
+        .select(recordSelectFields(colSchema))
+        .from(qt(tableName(colSchema)))
+        .where(DSL.trueCondition())
+        .fetch()) {
+      Map<String, Object> raw = normalizeStoredRecord(colSchema, record.intoMap());
+      if (!canList(colSchema, raw, request, principal)) {
+        continue;
+      }
+      if (filter != null
+          && !filter.isBlank()
+          && !RuleEvaluator.matches(
+              filter,
+              RecordFieldResolverSupport.context(
+                  storeContext,
+                  colSchema,
+                  raw,
+                  null,
+                  request,
+                  "GET",
+                  principal,
+                  includeHidden,
+                  !includeHidden))) {
+        continue;
+      }
+      raw.put("@rowid", ++rowId);
+      authorized.add(raw);
     }
+    SearchQuerySupport.sortMaps(
+        authorized,
+        search.sort(),
+        "created",
+        (record, path) -> RecordFieldResolverSupport.resolveSortValue(
+            storeContext,
+            colSchema,
+            record,
+            path,
+            request,
+            principal,
+            includeHidden,
+            !includeHidden));
 
-    public Map<String, Object> normalizeStoredRecord(CollectionSchema collection, Map<String, Object> record) {
-        if (record == null) {
-            return null;
-        }
-        Map<String, Object> normalized = new LinkedHashMap<>(record);
-        for (FieldSchema field : collection.fields) {
-            if (!normalized.containsKey(field.name)) {
-                continue;
-            }
-            normalized.put(field.name, normalizeStoredFieldValue(field, normalized.get(field.name)));
-        }
-        return normalized;
+    int total = authorized.size();
+    int from = search.fromIndex(total);
+    int to = Math.min(total, from + search.perPage());
+    List<Map<String, Object>> pageItems =
+        authorized.subList(from, to).stream()
+            .map(
+                raw -> RecordProcessor.process(
+                    storeContext, colSchema, raw, includeHidden, request, principal))
+            .toList();
+    return SearchQuerySupport.result(search, total, pageItems);
+  }
+
+  public Map<String, Object> createRecord(
+      String collection,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      Map<String, String> query,
+      RequestPrincipal principal) {
+    return createRecord(collection, body, files, RuleRequestContext.of(query, Map.of()), principal);
+  }
+
+  public Map<String, Object> createRecord(
+      String collection,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      RuleRequestContext request,
+      RequestPrincipal principal) {
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    requireSuperuserRecordsAccess(colSchema, principal);
+    if ("view".equals(colSchema.type)) {
+      throw new ApiException(400, "View collections are read-only.");
     }
-
-    public Map<String, Object> listRecords(String collection, Map<String, String> query, RequestPrincipal principal) {
-        return listRecords(collection, RuleRequestContext.of(query, Map.of()), principal);
+    if (body == null || !body.isObject()) {
+      throw new ApiException(
+          400,
+          "Record payload must be a JSON object.",
+          ApiErrors.invalidField("body", "Request body must be a JSON object."));
     }
-
-    public Map<String, Object> listRecords(
-            String collection,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        Map<String, String> query = request.query();
-        collectionRepository.requireCollectionExists(collection);
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        requireSuperuserRecordsAccess(colSchema, principal);
-        SearchQuerySupport.Parameters search = SearchQuerySupport.parse(query);
-        SearchQuerySupport.rejectSuperuserOnlyRuleFields(query, principal);
-        SearchFieldValidationSupport.validateRecords(storeContext, colSchema, search, principal);
-
-        String filter = search.filter();
-
-        List<Map<String, Object>> authorized = new ArrayList<>();
-        boolean includeHidden = principal != null && principal.superuser();
-        int rowId = 0;
-        for (org.jooq.Record record : database.dsl()
-                .select(recordSelectFields(colSchema))
-                .from(qt(tableName(colSchema)))
-                .where(DSL.trueCondition())
-                .fetch()) {
-            Map<String, Object> raw = normalizeStoredRecord(colSchema, record.intoMap());
-            if (!canList(colSchema, raw, request, principal)) {
-                continue;
-            }
-            if (filter != null && !filter.isBlank() && !RuleEvaluator.matches(
-                    filter,
-                    RecordFieldResolverSupport.context(
-                            storeContext,
-                            colSchema,
-                            raw,
-                            null,
-                            request,
-                            "GET",
-                            principal,
-                            includeHidden,
-                            !includeHidden
-                    )
-            )) {
-                continue;
-            }
-            raw.put("@rowid", ++rowId);
-            authorized.add(raw);
-        }
-        SearchQuerySupport.sortMaps(authorized, search.sort(), "created", (record, path) ->
-                RecordFieldResolverSupport.resolveSortValue(
-                        storeContext,
-                        colSchema,
-                        record,
-                        path,
-                        request,
-                        principal,
-                        includeHidden,
-                        !includeHidden
-                ));
-
-        int total = authorized.size();
-        int from = search.fromIndex(total);
-        int to = Math.min(total, from + search.perPage());
-        List<Map<String, Object>> pageItems = authorized.subList(from, to).stream()
-                .map(raw -> RecordProcessor.process(
-                        storeContext,
-                        colSchema,
-                        raw,
-                        includeHidden,
-                        request,
-                        principal
-                ))
-                .toList();
-        return SearchQuerySupport.result(search, total, pageItems);
+    if ((principal == null || !principal.superuser()) && colSchema.createRule == null) {
+      throw new ApiException(403, "Only superusers can create records in this collection.");
     }
+    JsonNode writableBody = RecordInputProtection.writableBody(colSchema, body, principal);
+    Map<String, List<UploadedFile>> writableFiles =
+        RecordInputProtection.writableFiles(colSchema, files, principal);
 
-    public Map<String, Object> createRecord(String collection, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
-        return createRecord(collection, body, files, RuleRequestContext.of(query, Map.of()), principal);
-    }
-
-    public Map<String, Object> createRecord(
-            String collection,
-            JsonNode body,
-            Map<String, List<UploadedFile>> files,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        requireSuperuserRecordsAccess(colSchema, principal);
-        if ("view".equals(colSchema.type)) {
-            throw new ApiException(400, "View collections are read-only.");
-        }
-        if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Record payload must be a JSON object.",
-                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
-        }
-        if ((principal == null || !principal.superuser()) && colSchema.createRule == null) {
-            throw new ApiException(403, "Only superusers can create records in this collection.");
-        }
-        JsonNode writableBody = RecordInputProtection.writableBody(colSchema, body, principal);
-        Map<String, List<UploadedFile>> writableFiles = RecordInputProtection.writableFiles(colSchema, files, principal);
-
-        Map<String, Object> errors = new LinkedHashMap<>();
-        Map<String, Object> recordValues = new LinkedHashMap<>();
-        JsonNode effectiveBody = bodyWithFileMarkers(colSchema, writableBody, writableFiles);
-        for (FieldSchema field : colSchema.fields) {
-            if (AuthCollectionFields.isManagedRecordField(field.name)
-                    || AuthSystemCollections.isManagedField(field.name)) {
-                continue;
-            }
-            JsonNode val = effectiveBody.get(field.name);
-            if (val == null || val.isMissingNode()) {
-                val = mapper.nullNode();
-            }
-            Object normalized = FieldValidator.normalizeFieldValue(mapper, field, val, false, errors, (col, targetId) -> {
+    Map<String, Object> errors = new LinkedHashMap<>();
+    Map<String, Object> recordValues = new LinkedHashMap<>();
+    JsonNode effectiveBody = bodyWithFileMarkers(colSchema, writableBody, writableFiles);
+    for (FieldSchema field : colSchema.fields) {
+      if (AuthCollectionFields.isManagedRecordField(field.name)
+          || AuthSystemCollections.isManagedField(field.name)) {
+        continue;
+      }
+      JsonNode val = effectiveBody.get(field.name);
+      if (val == null || val.isMissingNode()) {
+        val = mapper.nullNode();
+      }
+      Object normalized =
+          FieldValidator.normalizeFieldValue(
+              mapper,
+              field,
+              val,
+              false,
+              errors,
+              (col, targetId) -> {
                 try {
-                    getRecord(col, targetId, request, principal);
-                    return true;
+                  getRecord(col, targetId, request, principal);
+                  return true;
                 } catch (ApiException e) {
-                    return false;
+                  return false;
                 }
-            });
-            if (normalized != FieldValidator.Unchanged.INSTANCE && normalized != null) {
-                recordValues.put(field.name, normalized);
-            }
-        }
-        if (!errors.isEmpty()) {
-            throw new ApiException(400, "Failed to create record.", errors);
-        }
-        FileChanges fileChanges = prepareFileChanges(colSchema, recordValues, writableFiles, writableBody, null);
-        recordValues.putAll(fileChanges.fieldValues());
-        enforceUniqueFields(colSchema, recordValues, null, errors);
-        if (!errors.isEmpty()) {
-            throw new ApiException(400, "Failed to create record.", errors);
-        }
-
-        if ("auth".equals(colSchema.type)) {
-            recordValues.putIfAbsent("emailVisibility", false);
-            if (SUPERUSERS.equals(colSchema.name)) {
-                recordValues.put("verified", true);
-            } else {
-                recordValues.putIfAbsent("verified", false);
-            }
-            recordValues.putIfAbsent("tokenKey", IdGenerator.secret());
-        }
-
-        String id = body.has("id") ? body.get("id").asText() : IdGenerator.id();
-        String now = Instant.now().toString();
-        Map<String, Object> candidate = new LinkedHashMap<>(recordValues);
-        candidate.put("id", id);
-        candidate.put("created", now);
-        candidate.put("updated", now);
-        Map<String, Object> manageCandidate = new LinkedHashMap<>(candidate);
-        if ("auth".equals(colSchema.type)) {
-            manageCandidate.put("verified", false);
-        }
-        validateAuthSystemRecord(colSchema, candidate, null);
-        boolean manageAccess = AuthRecordMutationSupport.hasManageAccess(
-                colSchema,
-                manageCandidate,
-                bodyMap(body),
-                request,
-                "POST",
-                principal,
-                storeContext
-        );
-        AuthRecordMutationSupport.validate(colSchema, null, recordValues, body, manageAccess, "password");
-        if (SUPERUSERS.equals(colSchema.name)) {
-            recordValues.put("verified", true);
-        }
-        candidate.putAll(recordValues);
-        requireCreateRule(colSchema, candidate, request, principal);
-
-        List<String> fields = new ArrayList<>();
-        List<Object> values = new ArrayList<>();
-
-        fields.add("id");
-        values.add(id);
-        fields.add("created");
-        values.add(now);
-        fields.add("updated");
-        values.add(now);
-
-        for (Map.Entry<String, Object> entry : physicalRecordValues(colSchema, recordValues).entrySet()) {
-            if (!"id".equals(entry.getKey())) {
-                fields.add(entry.getKey());
-                values.add(toStoredValue(entry.getValue()));
-            }
-        }
-
-        try {
-            List<Field<Object>> insertFields = fields.stream().map(this::qf).toList();
-            database.dsl()
-                    .insertInto(qt(tableName(colSchema)))
-                    .columns(insertFields)
-                    .values(values)
-                    .execute();
-        } catch (DataAccessException e) {
-            handleSqlConstraintException(e, "Failed to create record.");
-            throw new ApiException(400, "Failed to create record: " + e.getMessage());
-        }
-        writeFileChanges(colSchema, Map.of("id", id), fileChanges);
-        publishRealtime(colSchema, "create", getRawRecord(colSchema, id));
-
-        Map<String, Object> created = getRawRecord(colSchema, id);
-        return RecordProcessor.process(
-                storeContext,
-                colSchema,
-                created,
-                principal != null && principal.superuser(),
-                request,
-                principal
-        );
+              });
+      if (normalized != FieldValidator.Unchanged.INSTANCE && normalized != null) {
+        recordValues.put(field.name, normalized);
+      }
+    }
+    if (!errors.isEmpty()) {
+      throw new ApiException(400, "Failed to create record.", errors);
+    }
+    FileChanges fileChanges =
+        prepareFileChanges(colSchema, recordValues, writableFiles, writableBody, null);
+    recordValues.putAll(fileChanges.fieldValues());
+    enforceUniqueFields(colSchema, recordValues, null, errors);
+    if (!errors.isEmpty()) {
+      throw new ApiException(400, "Failed to create record.", errors);
     }
 
-    public Map<String, Object> updateRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
-        return updateRecord(collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+    if ("auth".equals(colSchema.type)) {
+      recordValues.putIfAbsent("emailVisibility", false);
+      if (SUPERUSERS.equals(colSchema.name)) {
+        recordValues.put("verified", true);
+      } else {
+        recordValues.putIfAbsent("verified", false);
+      }
+      recordValues.putIfAbsent("tokenKey", IdGenerator.secret());
     }
 
-    public Map<String, Object> updateRecord(
-            String collection,
-            String id,
-            JsonNode body,
-            Map<String, List<UploadedFile>> files,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        requireSuperuserRecordsAccess(colSchema, principal);
-        if ("view".equals(colSchema.type)) {
-            throw new ApiException(400, "View collections are read-only.");
-        }
-        if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Record payload must be a JSON object.",
-                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
-        }
-        Map<String, Object> existing = getRawRecord(colSchema, id);
-        if (existing == null) {
-            throw new ApiException(404, "Record not found.");
-        }
-        requireRecordRule(colSchema, colSchema.updateRule, existing, bodyMap(body), request, "PATCH", principal);
-        JsonNode writableBody = RecordInputProtection.writableBody(colSchema, body, principal);
-        Map<String, List<UploadedFile>> writableFiles = RecordInputProtection.writableFiles(colSchema, files, principal);
+    String id = body.has("id") ? body.get("id").asText() : IdGenerator.id();
+    String now = Instant.now().toString();
+    Map<String, Object> candidate = new LinkedHashMap<>(recordValues);
+    candidate.put("id", id);
+    candidate.put("created", now);
+    candidate.put("updated", now);
+    Map<String, Object> manageCandidate = new LinkedHashMap<>(candidate);
+    if ("auth".equals(colSchema.type)) {
+      manageCandidate.put("verified", false);
+    }
+    validateAuthSystemRecord(colSchema, candidate, null);
+    boolean manageAccess =
+        AuthRecordMutationSupport.hasManageAccess(
+            colSchema, manageCandidate, bodyMap(body), request, "POST", principal, storeContext);
+    AuthRecordMutationSupport.validate(
+        colSchema, null, recordValues, body, manageAccess, "password");
+    if (SUPERUSERS.equals(colSchema.name)) {
+      recordValues.put("verified", true);
+    }
+    candidate.putAll(recordValues);
+    requireCreateRule(colSchema, candidate, request, principal);
 
-        Map<String, Object> errors = new LinkedHashMap<>();
-        Map<String, Object> recordValues = new LinkedHashMap<>();
-        JsonNode effectiveBody = bodyWithFileMarkers(colSchema, writableBody, writableFiles);
-        for (FieldSchema field : colSchema.fields) {
-            if (AuthCollectionFields.isManagedRecordField(field.name)
-                    || AuthSystemCollections.isManagedField(field.name)) {
-                continue;
-            }
-            if (!effectiveBody.has(field.name)) {
-                continue;
-            }
-            JsonNode val = effectiveBody.get(field.name);
-            if (val == null || val.isMissingNode()) {
-                val = mapper.nullNode();
-            }
-            Object normalized = FieldValidator.normalizeFieldValue(mapper, field, val, true, errors, (col, targetId) -> {
+    List<String> fields = new ArrayList<>();
+    List<Object> values = new ArrayList<>();
+
+    fields.add("id");
+    values.add(id);
+    fields.add("created");
+    values.add(now);
+    fields.add("updated");
+    values.add(now);
+
+    for (Map.Entry<String, Object> entry : physicalRecordValues(colSchema, recordValues).entrySet()) {
+      if (!"id".equals(entry.getKey())) {
+        fields.add(entry.getKey());
+        values.add(toStoredValue(entry.getValue()));
+      }
+    }
+
+    try {
+      List<Field<Object>> insertFields = fields.stream().map(this::qf).toList();
+      database
+          .dsl()
+          .insertInto(qt(tableName(colSchema)))
+          .columns(insertFields)
+          .values(values)
+          .execute();
+    } catch (DataAccessException e) {
+      handleSqlConstraintException(e, "Failed to create record.");
+      throw new ApiException(400, "Failed to create record: " + e.getMessage());
+    }
+    writeFileChanges(colSchema, Map.of("id", id), fileChanges);
+    publishRealtime(colSchema, "create", getRawRecord(colSchema, id));
+
+    Map<String, Object> created = getRawRecord(colSchema, id);
+    return RecordProcessor.process(
+        storeContext,
+        colSchema,
+        created,
+        principal != null && principal.superuser(),
+        request,
+        principal);
+  }
+
+  public Map<String, Object> updateRecord(
+      String collection,
+      String id,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      Map<String, String> query,
+      RequestPrincipal principal) {
+    return updateRecord(
+        collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+  }
+
+  public Map<String, Object> updateRecord(
+      String collection,
+      String id,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      RuleRequestContext request,
+      RequestPrincipal principal) {
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    requireSuperuserRecordsAccess(colSchema, principal);
+    if ("view".equals(colSchema.type)) {
+      throw new ApiException(400, "View collections are read-only.");
+    }
+    if (body == null || !body.isObject()) {
+      throw new ApiException(
+          400,
+          "Record payload must be a JSON object.",
+          ApiErrors.invalidField("body", "Request body must be a JSON object."));
+    }
+    Map<String, Object> existing = getRawRecord(colSchema, id);
+    if (existing == null) {
+      throw new ApiException(404, "Record not found.");
+    }
+    requireRecordRule(
+        colSchema, colSchema.updateRule, existing, bodyMap(body), request, "PATCH", principal);
+    JsonNode writableBody = RecordInputProtection.writableBody(colSchema, body, principal);
+    Map<String, List<UploadedFile>> writableFiles =
+        RecordInputProtection.writableFiles(colSchema, files, principal);
+
+    Map<String, Object> errors = new LinkedHashMap<>();
+    Map<String, Object> recordValues = new LinkedHashMap<>();
+    JsonNode effectiveBody = bodyWithFileMarkers(colSchema, writableBody, writableFiles);
+    for (FieldSchema field : colSchema.fields) {
+      if (AuthCollectionFields.isManagedRecordField(field.name)
+          || AuthSystemCollections.isManagedField(field.name)) {
+        continue;
+      }
+      if (!effectiveBody.has(field.name)) {
+        continue;
+      }
+      JsonNode val = effectiveBody.get(field.name);
+      if (val == null || val.isMissingNode()) {
+        val = mapper.nullNode();
+      }
+      Object normalized =
+          FieldValidator.normalizeFieldValue(
+              mapper,
+              field,
+              val,
+              true,
+              errors,
+              (col, targetId) -> {
                 try {
-                    getRecord(col, targetId, request, principal);
-                    return true;
+                  getRecord(col, targetId, request, principal);
+                  return true;
                 } catch (ApiException e) {
-                    return false;
+                  return false;
                 }
-            });
-            if (normalized != FieldValidator.Unchanged.INSTANCE && normalized != null) {
-                recordValues.put(field.name, normalized);
-            }
-        }
-        if (!errors.isEmpty()) {
-            throw new ApiException(400, "Failed to update record.", errors);
-        }
-        boolean manageAccess = AuthRecordMutationSupport.hasManageAccess(
-                colSchema,
-                existing,
-                bodyMap(body),
-                request,
-                "PATCH",
-                principal,
-                storeContext
-        );
-        AuthRecordMutationSupport.validate(colSchema, existing, recordValues, body, manageAccess, "password");
-        FileChanges fileChanges = prepareFileChanges(colSchema, recordValues, writableFiles, writableBody, existing);
-        recordValues.putAll(fileChanges.fieldValues());
-        Map<String, Object> candidate = new LinkedHashMap<>(existing);
-        candidate.putAll(recordValues);
-        validateAuthSystemRecord(colSchema, candidate, id);
-        enforceUniqueFields(colSchema, recordValues, id, errors);
-        if (!errors.isEmpty()) {
-            throw new ApiException(400, "Failed to update record.", errors);
-        }
-
-        boolean passwordChanged = "auth".equals(colSchema.type) && recordValues.containsKey("password");
-        boolean emailChanged = "auth".equals(colSchema.type)
-                && recordValues.containsKey("email")
-                && !Objects.equals(existing.get("email"), recordValues.get("email"));
-        if (passwordChanged || emailChanged) {
-            recordValues.put("tokenKey", IdGenerator.secret());
-        }
-        if (SUPERUSERS.equals(colSchema.name)) {
-            recordValues.put("verified", true);
-        }
-
-        String now = Instant.now().toString();
-        List<String> fields = new ArrayList<>();
-        List<Object> values = new ArrayList<>();
-
-        for (Map.Entry<String, Object> entry : physicalRecordValues(colSchema, recordValues).entrySet()) {
-            if (!"id".equals(entry.getKey())) {
-                fields.add(entry.getKey());
-                values.add(toStoredValue(entry.getValue()));
-            }
-        }
-
-        fields.add("updated");
-        values.add(now);
-
-        try {
-            Map<Field<Object>, Object> updates = new LinkedHashMap<>();
-            for (int i = 0; i < fields.size(); i++) {
-                updates.put(qf(fields.get(i)), values.get(i));
-            }
-            database.dsl()
-                    .update(qt(tableName(colSchema)))
-                    .set(updates)
-                    .where(qfs("id").eq(id))
-                    .execute();
-        } catch (DataAccessException e) {
-            handleSqlConstraintException(e, "Failed to update record.");
-            throw new ApiException(400, "Failed to update record: " + e.getMessage());
-        }
-        if (passwordChanged || emailChanged) {
-            deleteAuthSecurityState(colSchema.id, id);
-        }
-        writeFileChanges(colSchema, Map.of("id", id), fileChanges);
-        publishRealtime(colSchema, "update", getRawRecord(colSchema, id));
-
-        Map<String, Object> updated = getRawRecord(colSchema, id);
-        return RecordProcessor.process(
-                storeContext,
-                colSchema,
-                updated,
-                principal != null && principal.superuser(),
-                request,
-                principal
-        );
+              });
+      if (normalized != FieldValidator.Unchanged.INSTANCE && normalized != null) {
+        recordValues.put(field.name, normalized);
+      }
+    }
+    if (!errors.isEmpty()) {
+      throw new ApiException(400, "Failed to update record.", errors);
+    }
+    boolean manageAccess =
+        AuthRecordMutationSupport.hasManageAccess(
+            colSchema, existing, bodyMap(body), request, "PATCH", principal, storeContext);
+    AuthRecordMutationSupport.validate(
+        colSchema, existing, recordValues, body, manageAccess, "password");
+    FileChanges fileChanges =
+        prepareFileChanges(colSchema, recordValues, writableFiles, writableBody, existing);
+    recordValues.putAll(fileChanges.fieldValues());
+    Map<String, Object> candidate = new LinkedHashMap<>(existing);
+    candidate.putAll(recordValues);
+    validateAuthSystemRecord(colSchema, candidate, id);
+    enforceUniqueFields(colSchema, recordValues, id, errors);
+    if (!errors.isEmpty()) {
+      throw new ApiException(400, "Failed to update record.", errors);
     }
 
-    public Map<String, Object> upsertRecord(String collection, String id, JsonNode body, Map<String, List<UploadedFile>> files, Map<String, String> query, RequestPrincipal principal) {
-        return upsertRecord(collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+    boolean passwordChanged = "auth".equals(colSchema.type) && recordValues.containsKey("password");
+    boolean emailChanged =
+        "auth".equals(colSchema.type)
+            && recordValues.containsKey("email")
+            && !Objects.equals(existing.get("email"), recordValues.get("email"));
+    if (passwordChanged || emailChanged) {
+      recordValues.put("tokenKey", IdGenerator.secret());
+    }
+    if (SUPERUSERS.equals(colSchema.name)) {
+      recordValues.put("verified", true);
     }
 
-    public Map<String, Object> upsertRecord(
-            String collection,
-            String id,
-            JsonNode body,
-            Map<String, List<UploadedFile>> files,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        if (body == null || !body.isObject()) {
-            throw new ApiException(400, "Record payload must be a JSON object.",
-                    ApiErrors.invalidField("body", "Request body must be a JSON object."));
-        }
-        CollectionSchema collectionSchema = collectionRepository.getCollectionSchema(collection);
-        boolean exists = false;
-        try {
-            exists = database.dsl().fetchExists(
-                    database.dsl().selectOne().from(qt(tableName(collectionSchema))).where(qfs("id").eq(id))
-            );
-        } catch (Exception ignored) {
-        }
-        if (exists) {
-            return updateRecord(collection, id, body, files, request, principal);
-        } else {
-            if (body != null && body.isObject()) {
-                ((com.fasterxml.jackson.databind.node.ObjectNode) body).put("id", id);
-            }
-            return createRecord(collection, body, files, request, principal);
-        }
+    String now = Instant.now().toString();
+    List<String> fields = new ArrayList<>();
+    List<Object> values = new ArrayList<>();
+
+    for (Map.Entry<String, Object> entry : physicalRecordValues(colSchema, recordValues).entrySet()) {
+      if (!"id".equals(entry.getKey())) {
+        fields.add(entry.getKey());
+        values.add(toStoredValue(entry.getValue()));
+      }
     }
 
-    public void deleteRecord(String collection, String id, RequestPrincipal principal) {
-        deleteRecord(collection, id, RuleRequestContext.empty(), principal);
+    fields.add("updated");
+    values.add(now);
+
+    try {
+      Map<Field<Object>, Object> updates = new LinkedHashMap<>();
+      for (int i = 0; i < fields.size(); i++) {
+        updates.put(qf(fields.get(i)), values.get(i));
+      }
+      database
+          .dsl()
+          .update(qt(tableName(colSchema)))
+          .set(updates)
+          .where(qfs("id").eq(id))
+          .execute();
+    } catch (DataAccessException e) {
+      handleSqlConstraintException(e, "Failed to update record.");
+      throw new ApiException(400, "Failed to update record: " + e.getMessage());
     }
-
-    public void deleteRecord(
-            String collection,
-            String id,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        collectionRepository.requireCollectionExists(collection);
-        CollectionSchema schema = collectionRepository.getCollectionSchema(collection);
-        requireSuperuserRecordsAccess(schema, principal);
-        Map<String, Object> existing = getRawRecord(schema, id);
-        if (existing == null) {
-            throw new ApiException(404, "Record not found.");
-        }
-        requireRecordRule(schema, schema.deleteRule, existing, Map.of(), request, "DELETE", principal);
-        if (SUPERUSERS.equals(schema.name) && database.dsl().fetchCount(qt(SUPERUSERS)) <= 1) {
-            throw new ApiException(400, "You can't delete the only existing superuser.");
-        }
-        try {
-            database.dsl()
-                    .deleteFrom(qt(tableName(schema)))
-                    .where(qfs("id").eq(id))
-                    .execute();
-        } catch (DataAccessException e) {
-            throw new ApiException(400, "Failed to delete record: " + e.getMessage());
-        }
-        if ("auth".equals(schema.type)) {
-            deleteAuthRecordDependents(schema.id, id);
-        }
-        publishRealtime(schema, "delete", existing);
+    if (passwordChanged || emailChanged) {
+      deleteAuthSecurityState(colSchema.id, id);
     }
+    writeFileChanges(colSchema, Map.of("id", id), fileChanges);
+    publishRealtime(colSchema, "update", getRawRecord(colSchema, id));
 
-    /**
-     * Find a record in an auth collection by email address.
-     * Returns null if no record is found (does not throw).
-     */
-    public Map<String, Object> findRecordByEmail(String collection, String email) {
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        if (!"auth".equals(colSchema.type)) {
-            throw new ApiException(400, "The collection is not an auth collection.");
-        }
-        return getRawRecordByField(colSchema, "email", email);
+    Map<String, Object> updated = getRawRecord(colSchema, id);
+    return RecordProcessor.process(
+        storeContext,
+        colSchema,
+        updated,
+        principal != null && principal.superuser(),
+        request,
+        principal);
+  }
+
+  public Map<String, Object> upsertRecord(
+      String collection,
+      String id,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      Map<String, String> query,
+      RequestPrincipal principal) {
+    return upsertRecord(
+        collection, id, body, files, RuleRequestContext.of(query, Map.of()), principal);
+  }
+
+  public Map<String, Object> upsertRecord(
+      String collection,
+      String id,
+      JsonNode body,
+      Map<String, List<UploadedFile>> files,
+      RuleRequestContext request,
+      RequestPrincipal principal) {
+    if (body == null || !body.isObject()) {
+      throw new ApiException(
+          400,
+          "Record payload must be a JSON object.",
+          ApiErrors.invalidField("body", "Request body must be a JSON object."));
     }
-
-    /**
-     * Update specific fields on a record. Used for auth action mutations
-     * (password reset, verification, email change, token key rotation).
-     */
-    public void updateFields(String collection, String recordId, Map<String, Object> fields) {
-        CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
-        try {
-            Map<Field<Object>, Object> updates = new LinkedHashMap<>();
-            for (Map.Entry<String, Object> entry : fields.entrySet()) {
-                updates.put(qf(entry.getKey()), toStoredValue(entry.getValue()));
-            }
-            database.dsl()
-                    .update(qt(tableName(colSchema)))
-                    .set(updates)
-                    .where(qfs("id").eq(recordId))
-                    .execute();
-            if ("auth".equals(colSchema.type)
-                    && (fields.containsKey("password") || fields.containsKey("tokenKey"))) {
-                deleteAuthSecurityState(colSchema.id, recordId);
-            }
-        } catch (DataAccessException e) {
-            throw new ApiException(400, "Failed to update record: " + e.getMessage());
-        }
+    CollectionSchema collectionSchema = collectionRepository.getCollectionSchema(collection);
+    boolean exists = false;
+    try {
+      exists =
+          database
+              .dsl()
+              .fetchExists(
+                  database
+                      .dsl()
+                      .selectOne()
+                      .from(qt(tableName(collectionSchema)))
+                      .where(qfs("id").eq(id)));
+    } catch (Exception ignored) {
     }
-
-    private void deleteAuthOrigins(String collectionId, String recordId) {
-        database.dsl().deleteFrom(qt("_authOrigins"))
-                .where(qfs("collectionRef").eq(collectionId))
-                .and(qfs("recordRef").eq(recordId))
-                .execute();
+    if (exists) {
+      return updateRecord(collection, id, body, files, request, principal);
+    } else {
+      if (body != null && body.isObject()) {
+        ((com.fasterxml.jackson.databind.node.ObjectNode) body).put("id", id);
+      }
+      return createRecord(collection, body, files, request, principal);
     }
+  }
 
-    private void deleteAuthSecurityState(String collectionId, String recordId) {
-        deleteAuthOrigins(collectionId, recordId);
-        deleteSystemRecords("_mfas", collectionId, recordId);
-        deleteSystemRecords("_otps", collectionId, recordId);
+  public void deleteRecord(String collection, String id, RequestPrincipal principal) {
+    deleteRecord(collection, id, RuleRequestContext.empty(), principal);
+  }
+
+  public void deleteRecord(
+      String collection, String id, RuleRequestContext request, RequestPrincipal principal) {
+    collectionRepository.requireCollectionExists(collection);
+    CollectionSchema schema = collectionRepository.getCollectionSchema(collection);
+    requireSuperuserRecordsAccess(schema, principal);
+    Map<String, Object> existing = getRawRecord(schema, id);
+    if (existing == null) {
+      throw new ApiException(404, "Record not found.");
     }
-
-    private void deleteAuthRecordDependents(String collectionId, String recordId) {
-        deleteAuthSecurityState(collectionId, recordId);
-        deleteSystemRecords("_externalAuths", collectionId, recordId);
+    requireRecordRule(schema, schema.deleteRule, existing, Map.of(), request, "DELETE", principal);
+    if (SUPERUSERS.equals(schema.name) && database.dsl().fetchCount(qt(SUPERUSERS)) <= 1) {
+      throw new ApiException(400, "You can't delete the only existing superuser.");
     }
-
-    private void deleteSystemRecords(String table, String collectionId, String recordId) {
-        database.dsl().deleteFrom(qt(table))
-                .where(qfs("collectionRef").eq(collectionId))
-                .and(qfs("recordRef").eq(recordId))
-                .execute();
+    try {
+      database.dsl().deleteFrom(qt(tableName(schema))).where(qfs("id").eq(id)).execute();
+    } catch (DataAccessException e) {
+      throw new ApiException(400, "Failed to delete record: " + e.getMessage());
     }
-
-    private JsonNode bodyWithFileMarkers(
-            CollectionSchema collection,
-            JsonNode body,
-            Map<String, List<UploadedFile>> files
-    ) {
-        ObjectNode copy = body != null && body.isObject() ? body.deepCopy() : mapper.createObjectNode();
-        if (files == null || files.isEmpty()) {
-            return copy;
-        }
-        for (FieldSchema field : collection.fields) {
-            if (!"file".equals(normalizeType(field.type))) {
-                continue;
-            }
-            if (!copy.has(field.name) && !filesFor(files, field.name).isEmpty()) {
-                copy.put(field.name, "__uploaded__");
-            }
-        }
-        return copy;
+    if ("auth".equals(schema.type)) {
+      deleteAuthRecordDependents(schema.id, id);
     }
+    publishRealtime(schema, "delete", existing);
+  }
 
-    private List<Field<Object>> recordSelectFields(CollectionSchema collection) {
-        Set<String> names = new LinkedHashSet<>();
-        names.add("id");
-        if ("view".equals(collection.type)) {
-            for (FieldSchema field : collection.fields) {
-                names.add(field.name);
-            }
-            return names.stream().map(this::qf).toList();
-        }
-        if ("_superusers".equals(collection.name)) {
-            names.add("email");
-            names.add("passwordHash");
-            names.add("tokenKey");
-            names.add("emailVisibility");
-            names.add("verified");
-            names.add("created");
-            names.add("updated");
-            return names.stream().map(this::qf).toList();
-        }
-        names.add("created");
-        names.add("updated");
-        for (FieldSchema field : collection.fields) {
-            names.add(field.name);
-        }
-        if ("auth".equals(collection.type)) {
-            names.add("tokenKey");
-        }
-        return names.stream().map(this::qf).toList();
+  /**
+   * Find a record in an auth collection by email address. Returns null if no record is found (does
+   * not throw).
+   */
+  public Map<String, Object> findRecordByEmail(String collection, String email) {
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    if (!"auth".equals(colSchema.type)) {
+      throw new ApiException(400, "The collection is not an auth collection.");
     }
+    return getRawRecordByField(colSchema, "email", email);
+  }
 
-    private FileChanges prepareFileChanges(
-            CollectionSchema collection,
-            Map<String, Object> values,
-            Map<String, List<UploadedFile>> files,
-            JsonNode body,
-            Map<String, Object> existing
-    ) {
-        Map<String, Object> fieldValues = new LinkedHashMap<>();
-        Map<String, UploadedFile> writes = new LinkedHashMap<>();
-        Map<String, List<String>> removals = new LinkedHashMap<>();
-        Map<String, List<UploadedFile>> safeFiles = files == null ? Map.of() : files;
-
-        for (FieldSchema field : collection.fields) {
-            if (!"file".equals(normalizeType(field.type))) {
-                continue;
-            }
-            List<String> current = existing == null ? List.of() : fileList(existing.get(field.name));
-            List<String> next = new ArrayList<>(current);
-            List<String> removeNames = requestedFileRemovals(field, body);
-            if (!removeNames.isEmpty()) {
-                next.removeIf(removeNames::contains);
-                removals.put(field.name, removeNames);
-            }
-
-            List<UploadedFile> replaceUploads = filesFor(safeFiles, field.name);
-            List<UploadedFile> appendUploads = filesFor(safeFiles, field.name + "+");
-            boolean replace = !replaceUploads.isEmpty();
-            if (replace) {
-                removals.put(field.name, current);
-                next.clear();
-            }
-
-            List<String> uploadedNames = new ArrayList<>();
-            for (UploadedFile file : merge(replaceUploads, appendUploads)) {
-                validateUploadedFile(field, file);
-                String storedName = storedFilename(file.originalFilename());
-                uploadedNames.add(storedName);
-                writes.put(storedName, file);
-            }
-            next.addAll(uploadedNames);
-
-            if (values.containsKey(field.name) && uploadedNames.isEmpty() && removeNames.isEmpty()) {
-                next = fileList(values.get(field.name));
-            }
-            int maxSelect = maxSelect(field);
-            if (maxSelect > 0 && next.size() > maxSelect) {
-                String message = "Too many files uploaded for field `" + field.name + "`.";
-                throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
-            }
-            if (replace || !appendUploads.isEmpty() || !removeNames.isEmpty()) {
-                fieldValues.put(field.name, fileFieldValue(field, next));
-            }
-        }
-        return new FileChanges(fieldValues, writes, removals);
+  /**
+   * Update specific fields on a record. Used for auth action mutations (password reset,
+   * verification, email change, token key rotation).
+   */
+  public void updateFields(String collection, String recordId, Map<String, Object> fields) {
+    CollectionSchema colSchema = collectionRepository.getCollectionSchema(collection);
+    try {
+      Map<Field<Object>, Object> updates = new LinkedHashMap<>();
+      for (Map.Entry<String, Object> entry : fields.entrySet()) {
+        updates.put(qf(entry.getKey()), toStoredValue(entry.getValue()));
+      }
+      database
+          .dsl()
+          .update(qt(tableName(colSchema)))
+          .set(updates)
+          .where(qfs("id").eq(recordId))
+          .execute();
+      if ("auth".equals(colSchema.type)
+          && (fields.containsKey("password") || fields.containsKey("tokenKey"))) {
+        deleteAuthSecurityState(colSchema.id, recordId);
+      }
+    } catch (DataAccessException e) {
+      throw new ApiException(400, "Failed to update record: " + e.getMessage());
     }
+  }
 
-    private void writeFileChanges(CollectionSchema collection, Map<String, Object> record, FileChanges changes) {
-        if (changes.isEmpty()) {
-            return;
+  private void deleteAuthOrigins(String collectionId, String recordId) {
+    database
+        .dsl()
+        .deleteFrom(qt("_authOrigins"))
+        .where(qfs("collectionRef").eq(collectionId))
+        .and(qfs("recordRef").eq(recordId))
+        .execute();
+  }
+
+  private void deleteAuthSecurityState(String collectionId, String recordId) {
+    deleteAuthOrigins(collectionId, recordId);
+    deleteSystemRecords("_mfas", collectionId, recordId);
+    deleteSystemRecords("_otps", collectionId, recordId);
+  }
+
+  private void deleteAuthRecordDependents(String collectionId, String recordId) {
+    deleteAuthSecurityState(collectionId, recordId);
+    deleteSystemRecords("_externalAuths", collectionId, recordId);
+  }
+
+  private void deleteSystemRecords(String table, String collectionId, String recordId) {
+    database
+        .dsl()
+        .deleteFrom(qt(table))
+        .where(qfs("collectionRef").eq(collectionId))
+        .and(qfs("recordRef").eq(recordId))
+        .execute();
+  }
+
+  private JsonNode bodyWithFileMarkers(
+      CollectionSchema collection, JsonNode body, Map<String, List<UploadedFile>> files) {
+    ObjectNode copy = body != null && body.isObject() ? body.deepCopy() : mapper.createObjectNode();
+    if (files == null || files.isEmpty()) {
+      return copy;
+    }
+    for (FieldSchema field : collection.fields) {
+      if (!"file".equals(normalizeType(field.type))) {
+        continue;
+      }
+      if (!copy.has(field.name) && !filesFor(files, field.name).isEmpty()) {
+        copy.put(field.name, "__uploaded__");
+      }
+    }
+    return copy;
+  }
+
+  private List<Field<Object>> recordSelectFields(CollectionSchema collection) {
+    Set<String> names = new LinkedHashSet<>();
+    names.add("id");
+    if ("view".equals(collection.type)) {
+      for (FieldSchema field : collection.fields) {
+        names.add(field.name);
+      }
+      return names.stream().map(this::qf).toList();
+    }
+    if ("_superusers".equals(collection.name)) {
+      names.add("email");
+      names.add("passwordHash");
+      names.add("tokenKey");
+      names.add("emailVisibility");
+      names.add("verified");
+      names.add("created");
+      names.add("updated");
+      return names.stream().map(this::qf).toList();
+    }
+    names.add("created");
+    names.add("updated");
+    for (FieldSchema field : collection.fields) {
+      names.add(field.name);
+    }
+    if ("auth".equals(collection.type)) {
+      names.add("tokenKey");
+    }
+    return names.stream().map(this::qf).toList();
+  }
+
+  private FileChanges prepareFileChanges(
+      CollectionSchema collection,
+      Map<String, Object> values,
+      Map<String, List<UploadedFile>> files,
+      JsonNode body,
+      Map<String, Object> existing) {
+    Map<String, Object> fieldValues = new LinkedHashMap<>();
+    Map<String, UploadedFile> writes = new LinkedHashMap<>();
+    Map<String, List<String>> removals = new LinkedHashMap<>();
+    Map<String, List<UploadedFile>> safeFiles = files == null ? Map.of() : files;
+
+    for (FieldSchema field : collection.fields) {
+      if (!"file".equals(normalizeType(field.type))) {
+        continue;
+      }
+      List<String> current = existing == null ? List.of() : fileList(existing.get(field.name));
+      List<String> next = new ArrayList<>(current);
+      List<String> removeNames = requestedFileRemovals(field, body);
+      if (!removeNames.isEmpty()) {
+        next.removeIf(removeNames::contains);
+        removals.put(field.name, removeNames);
+      }
+
+      List<UploadedFile> replaceUploads = filesFor(safeFiles, field.name);
+      List<UploadedFile> appendUploads = filesFor(safeFiles, field.name + "+");
+      boolean replace = !replaceUploads.isEmpty();
+      if (replace) {
+        removals.put(field.name, current);
+        next.clear();
+      }
+
+      List<String> uploadedNames = new ArrayList<>();
+      for (UploadedFile file : merge(replaceUploads, appendUploads)) {
+        validateUploadedFile(field, file);
+        String storedName = storedFilename(file.originalFilename());
+        uploadedNames.add(storedName);
+        writes.put(storedName, file);
+      }
+      next.addAll(uploadedNames);
+
+      if (values.containsKey(field.name) && uploadedNames.isEmpty() && removeNames.isEmpty()) {
+        next = fileList(values.get(field.name));
+      }
+      int maxSelect = maxSelect(field);
+      if (maxSelect > 0 && next.size() > maxSelect) {
+        String message = "Too many files uploaded for field `" + field.name + "`.";
+        throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
+      }
+      if (replace || !appendUploads.isEmpty() || !removeNames.isEmpty()) {
+        fieldValues.put(field.name, fileFieldValue(field, next));
+      }
+    }
+    return new FileChanges(fieldValues, writes, removals);
+  }
+
+  private void writeFileChanges(
+      CollectionSchema collection, Map<String, Object> record, FileChanges changes) {
+    if (changes.isEmpty()) {
+      return;
+    }
+    String recordId = String.valueOf(record.get("id"));
+    Path recordDir = storageDir.resolve(collection.id).resolve(recordId).normalize();
+    List<Path> written = new ArrayList<>();
+    try {
+      Files.createDirectories(recordDir);
+      for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
+        Path target = recordDir.resolve(entry.getKey()).normalize();
+        if (!target.startsWith(recordDir)) {
+          throw new ApiException(
+              400,
+              "Invalid upload filename.",
+              ApiErrors.invalidField("file", "Invalid upload filename."));
         }
-        String recordId = String.valueOf(record.get("id"));
-        Path recordDir = storageDir.resolve(collection.id).resolve(recordId).normalize();
-        List<Path> written = new ArrayList<>();
-        try {
-            Files.createDirectories(recordDir);
-            for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
-                Path target = recordDir.resolve(entry.getKey()).normalize();
-                if (!target.startsWith(recordDir)) {
-                    throw new ApiException(400, "Invalid upload filename.",
-                            ApiErrors.invalidField("file", "Invalid upload filename."));
-                }
-                Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
-                written.add(target);
-            }
-            if (!written.isEmpty()) {
-                database.onRollback(() -> written.forEach(path -> {
-                    try {
-                        Files.deleteIfExists(path);
-                    } catch (IOException e) {
-                        throw new IllegalStateException("failed to rollback uploaded file " + path, e);
-                    }
-                }));
-            }
-            for (List<String> names : changes.removals().values()) {
-                for (String name : names) {
-                    Files.deleteIfExists(recordDir.resolve(name).normalize());
-                }
-            }
-        } catch (IOException e) {
-            for (Path path : written) {
-                try {
+        Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
+        written.add(target);
+      }
+      if (!written.isEmpty()) {
+        database.onRollback(
+            () -> written.forEach(
+                path -> {
+                  try {
                     Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                }
+                  } catch (IOException e) {
+                    throw new IllegalStateException(
+                        "failed to rollback uploaded file " + path, e);
+                  }
+                }));
+      }
+      for (List<String> names : changes.removals().values()) {
+        for (String name : names) {
+          Files.deleteIfExists(recordDir.resolve(name).normalize());
+        }
+      }
+    } catch (IOException e) {
+      for (Path path : written) {
+        try {
+          Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+        }
+      }
+      throw new IllegalStateException("failed to write uploaded files", e);
+    }
+  }
+
+  private Object fileFieldValue(FieldSchema field, List<String> names) {
+    return maxSelect(field) == 1 ? (names.isEmpty() ? "" : names.get(0)) : new ArrayList<>(names);
+  }
+
+  private List<String> fileList(Object value) {
+    if (value == null) {
+      return new ArrayList<>();
+    }
+    if (value instanceof Collection<?> collection) {
+      return collection.stream()
+          .map(String::valueOf)
+          .filter(item -> !item.isBlank())
+          .collect(Collectors.toCollection(ArrayList::new));
+    }
+    String text = String.valueOf(value);
+    if (text.isBlank()) {
+      return new ArrayList<>();
+    }
+    return new ArrayList<>(List.of(text));
+  }
+
+  private List<String> requestedFileRemovals(FieldSchema field, JsonNode body) {
+    if (body == null || !body.isObject()) {
+      return List.of();
+    }
+    JsonNode value = body.get(field.name + "-");
+    if (value == null || value.isNull()) {
+      return List.of();
+    }
+    if (value.isArray()) {
+      List<String> names = new ArrayList<>();
+      value.forEach(
+          item -> {
+            if (!item.asText().isBlank()) {
+              names.add(item.asText());
             }
-            throw new IllegalStateException("failed to write uploaded files", e);
-        }
+          });
+      return names;
     }
+    return value.asText().isBlank() ? List.of() : List.of(value.asText());
+  }
 
-    private Object fileFieldValue(FieldSchema field, List<String> names) {
-        return maxSelect(field) == 1 ? (names.isEmpty() ? "" : names.get(0)) : new ArrayList<>(names);
+  private List<UploadedFile> filesFor(Map<String, List<UploadedFile>> files, String field) {
+    List<UploadedFile> values = files.get(field);
+    return values == null ? List.of() : values;
+  }
+
+  private List<UploadedFile> merge(List<UploadedFile> left, List<UploadedFile> right) {
+    if (left.isEmpty()) {
+      return right;
     }
-
-    private List<String> fileList(Object value) {
-        if (value == null) {
-            return new ArrayList<>();
-        }
-        if (value instanceof Collection<?> collection) {
-            return collection.stream()
-                    .map(String::valueOf)
-                    .filter(item -> !item.isBlank())
-                    .collect(Collectors.toCollection(ArrayList::new));
-        }
-        String text = String.valueOf(value);
-        if (text.isBlank()) {
-            return new ArrayList<>();
-        }
-        return new ArrayList<>(List.of(text));
+    if (right.isEmpty()) {
+      return left;
     }
+    List<UploadedFile> merged = new ArrayList<>(left);
+    merged.addAll(right);
+    return merged;
+  }
 
-    private List<String> requestedFileRemovals(FieldSchema field, JsonNode body) {
-        if (body == null || !body.isObject()) {
-            return List.of();
-        }
-        JsonNode value = body.get(field.name + "-");
-        if (value == null || value.isNull()) {
-            return List.of();
-        }
-        if (value.isArray()) {
-            List<String> names = new ArrayList<>();
-            value.forEach(item -> {
-                if (!item.asText().isBlank()) {
-                    names.add(item.asText());
-                }
-            });
-            return names;
-        }
-        return value.asText().isBlank() ? List.of() : List.of(value.asText());
+  private int maxSelect(FieldSchema field) {
+    if (field.maxSelect != null) {
+      return Math.max(1, field.maxSelect);
     }
-
-    private List<UploadedFile> filesFor(Map<String, List<UploadedFile>> files, String field) {
-        List<UploadedFile> values = files.get(field);
-        return values == null ? List.of() : values;
+    if (field.maxFiles != null) {
+      return Math.max(1, field.maxFiles);
     }
-
-    private List<UploadedFile> merge(List<UploadedFile> left, List<UploadedFile> right) {
-        if (left.isEmpty()) {
-            return right;
-        }
-        if (right.isEmpty()) {
-            return left;
-        }
-        List<UploadedFile> merged = new ArrayList<>(left);
-        merged.addAll(right);
-        return merged;
+    JsonNode maxSelect = field.options == null ? null : field.options.get("maxSelect");
+    if (maxSelect == null) {
+      maxSelect = field.options == null ? null : field.options.get("maxFiles");
     }
-
-    private int maxSelect(FieldSchema field) {
-        if (field.maxSelect != null) {
-            return Math.max(1, field.maxSelect);
-        }
-        if (field.maxFiles != null) {
-            return Math.max(1, field.maxFiles);
-        }
-        JsonNode maxSelect = field.options == null ? null : field.options.get("maxSelect");
-        if (maxSelect == null) {
-            maxSelect = field.options == null ? null : field.options.get("maxFiles");
-        }
-        if (maxSelect != null && maxSelect.canConvertToInt()) {
-            return Math.max(1, maxSelect.asInt());
-        }
-        return 1;
+    if (maxSelect != null && maxSelect.canConvertToInt()) {
+      return Math.max(1, maxSelect.asInt());
     }
+    return 1;
+  }
 
-    private void validateUploadedFile(FieldSchema field, UploadedFile file) {
-        long maxSize = maxSize(field);
-        if (maxSize > 0 && file.bytes().length > maxSize) {
-            String message = "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.";
-            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
-        }
-        List<String> mimeTypes = mimeTypes(field);
-        if (!mimeTypes.isEmpty() && mimeTypes.stream().noneMatch(pattern -> matchesMimeType(pattern, file.contentType()))) {
-            String message = "File `" + file.originalFilename() + "` MIME type is not allowed for field `" + field.name + "`.";
-            throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
-        }
+  private void validateUploadedFile(FieldSchema field, UploadedFile file) {
+    long maxSize = maxSize(field);
+    if (maxSize > 0 && file.bytes().length > maxSize) {
+      String message =
+          "File `" + file.originalFilename() + "` exceeds maxSize for field `" + field.name + "`.";
+      throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
     }
-
-    private long maxSize(FieldSchema field) {
-        if (field.maxSize != null) {
-            return Math.max(0L, field.maxSize);
-        }
-        JsonNode value = field.options == null ? null : field.options.get("maxSize");
-        return value != null && value.canConvertToLong() ? Math.max(0L, value.asLong()) : 0L;
+    List<String> mimeTypes = mimeTypes(field);
+    if (!mimeTypes.isEmpty()
+        && mimeTypes.stream().noneMatch(pattern -> matchesMimeType(pattern, file.contentType()))) {
+      String message =
+          "File `"
+              + file.originalFilename()
+              + "` MIME type is not allowed for field `"
+              + field.name
+              + "`.";
+      throw new ApiException(400, message, ApiErrors.invalidField(field.name, message));
     }
+  }
 
-    private List<String> mimeTypes(FieldSchema field) {
-        if (field.mimeTypes != null && !field.mimeTypes.isEmpty()) {
-            return field.mimeTypes.stream()
-                    .filter(value -> value != null && !value.isBlank())
-                    .map(value -> value.trim().toLowerCase(Locale.ROOT))
-                    .collect(Collectors.toCollection(ArrayList::new));
-        }
-        JsonNode value = field.options == null ? null : field.options.get("mimeTypes");
-        if (value == null || value.isNull()) {
-            return List.of();
-        }
-        List<String> out = new ArrayList<>();
-        if (value.isArray()) {
-            value.forEach(item -> {
-                String text = item.asText("").trim().toLowerCase(Locale.ROOT);
-                if (!text.isBlank()) {
-                    out.add(text);
-                }
-            });
-        } else {
-            String text = value.asText("").trim().toLowerCase(Locale.ROOT);
+  private long maxSize(FieldSchema field) {
+    if (field.maxSize != null) {
+      return Math.max(0L, field.maxSize);
+    }
+    JsonNode value = field.options == null ? null : field.options.get("maxSize");
+    return value != null && value.canConvertToLong() ? Math.max(0L, value.asLong()) : 0L;
+  }
+
+  private List<String> mimeTypes(FieldSchema field) {
+    if (field.mimeTypes != null && !field.mimeTypes.isEmpty()) {
+      return field.mimeTypes.stream()
+          .filter(value -> value != null && !value.isBlank())
+          .map(value -> value.trim().toLowerCase(Locale.ROOT))
+          .collect(Collectors.toCollection(ArrayList::new));
+    }
+    JsonNode value = field.options == null ? null : field.options.get("mimeTypes");
+    if (value == null || value.isNull()) {
+      return List.of();
+    }
+    List<String> out = new ArrayList<>();
+    if (value.isArray()) {
+      value.forEach(
+          item -> {
+            String text = item.asText("").trim().toLowerCase(Locale.ROOT);
             if (!text.isBlank()) {
-                out.add(text);
+              out.add(text);
             }
-        }
-        return out;
+          });
+    } else {
+      String text = value.asText("").trim().toLowerCase(Locale.ROOT);
+      if (!text.isBlank()) {
+        out.add(text);
+      }
+    }
+    return out;
+  }
+
+  private boolean matchesMimeType(String pattern, String contentType) {
+    String actual =
+        contentType == null ? "" : contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+    if (actual.isBlank()) {
+      return false;
+    }
+    if ("*/*".equals(pattern) || "*".equals(pattern)) {
+      return true;
+    }
+    if (pattern.endsWith("/*")) {
+      return actual.startsWith(pattern.substring(0, pattern.length() - 1));
+    }
+    return actual.equals(pattern);
+  }
+
+  private String storedFilename(String original) {
+    String sanitized = sanitizeFilename(original);
+    int dot = sanitized.lastIndexOf('.');
+    String name = dot > 0 ? sanitized.substring(0, dot) : sanitized;
+    String extension = dot > 0 ? sanitized.substring(dot) : "";
+    return name + "_" + IdGenerator.suffix() + extension;
+  }
+
+  private String sanitizeFilename(String original) {
+    String file =
+        original == null || original.isBlank()
+            ? "file"
+            : Path.of(original).getFileName().toString();
+    String sanitized = file.replaceAll("[^A-Za-z0-9._-]", "_").replaceAll("_+", "_");
+    if (sanitized.isBlank() || ".".equals(sanitized) || "..".equals(sanitized)) {
+      return "file";
+    }
+    return sanitized.length() > 80 ? sanitized.substring(sanitized.length() - 80) : sanitized;
+  }
+
+  private Object toStoredValue(Object value) {
+    if (value instanceof Boolean b) {
+      // PostgreSQL has a native boolean type and rejects the SQLite/MySQL
+      // integer representation (0/1) when values are bound through JDBC.
+      // Keep the existing representation for the other engines, where the
+      // schema and historical data use integer-backed booleans.
+      return database.engine() == JooqDatabase.Engine.POSTGRES ? b : (b ? 1 : 0);
+    }
+    if (value instanceof Number) {
+      return value;
+    }
+    if (value instanceof String) {
+      return value;
+    }
+    if (value instanceof List<?> || value instanceof Map<?, ?>) {
+      try {
+        return mapper.writeValueAsString(value);
+      } catch (Exception e) {
+        return null;
+      }
+    }
+    if (value == null) {
+      return null;
+    }
+    return value.toString();
+  }
+
+  private String normalizeType(String type) {
+    return type == null ? "text" : type.toLowerCase(Locale.ROOT).trim();
+  }
+
+  private boolean canList(
+      CollectionSchema collection,
+      Map<String, Object> record,
+      RuleRequestContext request,
+      RequestPrincipal principal) {
+    if (principal != null && principal.superuser()) {
+      return true;
+    }
+    return collection.listRule != null
+        && RuleEvaluator.matches(
+            collection.listRule,
+            RecordFieldResolverSupport.context(
+                storeContext, collection, record, null, request, "GET", principal, true, false));
+  }
+
+  private Object normalizeStoredFieldValue(FieldSchema field, Object value) {
+    if (value == null) {
+      return null;
+    }
+    String type = normalizeType(field.type);
+    if ("bool".equals(type) || "boolean".equals(type)) {
+      if (value instanceof Boolean bool) {
+        return bool;
+      }
+      if (value instanceof Number number) {
+        return number.intValue() != 0;
+      }
+      return Boolean.parseBoolean(String.valueOf(value));
+    }
+    if ("json".equals(type) || "geopoint".equals(type)) {
+      return parseJsonStoredValue(value, false);
+    }
+    if (FieldTypeMapping.isJsonStoredType(type)) {
+      return parseJsonStoredValue(value, maxSelect(field) > 1);
+    }
+    return value;
+  }
+
+  private Object parseJsonStoredValue(Object value, boolean arrayOnly) {
+    if (!(value instanceof String text)) {
+      return value;
+    }
+    String trimmed = text.trim();
+    if (trimmed.isBlank()) {
+      return value;
+    }
+    if (arrayOnly && !trimmed.startsWith("[")) {
+      return value;
+    }
+    if (!arrayOnly
+        && !(trimmed.startsWith("{")
+            || trimmed.startsWith("[")
+            || "null".equals(trimmed)
+            || "true".equalsIgnoreCase(trimmed)
+            || "false".equalsIgnoreCase(trimmed)
+            || isJsonNumber(trimmed))) {
+      return value;
+    }
+    try {
+      return mapper.readValue(trimmed, Object.class);
+    } catch (IOException e) {
+      return value;
+    }
+  }
+
+  private boolean isJsonNumber(String value) {
+    if (value.isBlank()) {
+      return false;
+    }
+    if (!Character.isDigit(value.charAt(0)) && value.charAt(0) != '-') {
+      return false;
+    }
+    try {
+      Double.parseDouble(value);
+      return true;
+    } catch (NumberFormatException e) {
+      return false;
+    }
+  }
+
+  private void requireCreateRule(
+      CollectionSchema collection,
+      Map<String, Object> record,
+      RuleRequestContext request,
+      RequestPrincipal principal) {
+    if (principal != null && principal.superuser()) {
+      return;
+    }
+    if (collection.createRule == null) {
+      throw new ApiException(403, "Only superusers can create records in this collection.");
+    }
+    if (!RuleEvaluator.matches(
+        collection.createRule,
+        RecordFieldResolverSupport.context(
+            storeContext, collection, record, record, request, "POST", principal, true, false))) {
+      throw new ApiException(400, "The record failed the collection create rule.");
+    }
+  }
+
+  private void requireRecordRule(
+      CollectionSchema collection,
+      String rule,
+      Map<String, Object> record,
+      Map<String, Object> body,
+      RuleRequestContext request,
+      String method,
+      RequestPrincipal principal) {
+    if (principal != null && principal.superuser()) {
+      return;
+    }
+    if (rule == null) {
+      throw new ApiException(403, "Only superusers can modify this record.");
+    }
+    if (!RuleEvaluator.matches(
+        rule,
+        RecordFieldResolverSupport.context(
+            storeContext, collection, record, body, request, method, principal, true, false))) {
+      throw new ApiException(404, "Record not found.");
+    }
+  }
+
+  private void requireSuperuserRecordsAccess(
+      CollectionSchema collection, RequestPrincipal principal) {
+    if (SUPERUSERS.equals(collection.name) && (principal == null || !principal.superuser())) {
+      throw new ApiException(403, "Only superusers can access this collection.");
+    }
+  }
+
+  private void validateAuthSystemRecord(
+      CollectionSchema collection, Map<String, Object> candidate, String currentId) {
+    if (!AuthSystemCollections.contains(collection.name)) {
+      return;
+    }
+    String collectionRef = String.valueOf(candidate.getOrDefault("collectionRef", ""));
+    String recordRef = String.valueOf(candidate.getOrDefault("recordRef", ""));
+    CollectionSchema authCollection;
+    try {
+      authCollection = collectionRepository.getCollectionSchema(collectionRef);
+    } catch (ApiException e) {
+      authCollection = null;
+    }
+    if (authCollection == null || !"auth".equals(authCollection.type)) {
+      throw new ApiException(
+          400,
+          "Failed to validate record.",
+          ApiErrors.fieldError(
+              "collectionRef",
+              "validation_invalid_value",
+              "Missing or invalid auth collection reference."));
+    }
+    if (getRawRecord(authCollection, recordRef) == null) {
+      throw new ApiException(
+          400,
+          "Failed to validate record.",
+          ApiErrors.fieldError(
+              "recordRef",
+              "validation_invalid_value",
+              "Missing or invalid auth record reference."));
     }
 
-    private boolean matchesMimeType(String pattern, String contentType) {
-        String actual = contentType == null ? "" : contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
-        if (actual.isBlank()) {
-            return false;
-        }
-        if ("*/*".equals(pattern) || "*".equals(pattern)) {
-            return true;
-        }
-        if (pattern.endsWith("/*")) {
-            return actual.startsWith(pattern.substring(0, pattern.length() - 1));
-        }
-        return actual.equals(pattern);
-    }
-
-    private String storedFilename(String original) {
-        String sanitized = sanitizeFilename(original);
-        int dot = sanitized.lastIndexOf('.');
-        String name = dot > 0 ? sanitized.substring(0, dot) : sanitized;
-        String extension = dot > 0 ? sanitized.substring(dot) : "";
-        return name + "_" + IdGenerator.suffix() + extension;
-    }
-
-    private String sanitizeFilename(String original) {
-        String file = original == null || original.isBlank() ? "file" : Path.of(original).getFileName().toString();
-        String sanitized = file.replaceAll("[^A-Za-z0-9._-]", "_").replaceAll("_+", "_");
-        if (sanitized.isBlank() || ".".equals(sanitized) || "..".equals(sanitized)) {
-            return "file";
-        }
-        return sanitized.length() > 80 ? sanitized.substring(sanitized.length() - 80) : sanitized;
-    }
-
-    private Object toStoredValue(Object value) {
-        if (value instanceof Boolean b) {
-            // PostgreSQL has a native boolean type and rejects the SQLite/MySQL
-            // integer representation (0/1) when values are bound through JDBC.
-            // Keep the existing representation for the other engines, where the
-            // schema and historical data use integer-backed booleans.
-            return database.engine() == JooqDatabase.Engine.POSTGRES ? b : (b ? 1 : 0);
-        }
-        if (value instanceof Number) {
-            return value;
-        }
-        if (value instanceof String) {
-            return value;
-        }
-        if (value instanceof List<?> || value instanceof Map<?, ?>) {
-            try {
-                return mapper.writeValueAsString(value);
-            } catch (Exception e) {
-                return null;
-            }
-        }
-        if (value == null) {
-            return null;
-        }
-        return value.toString();
-    }
-
-    private String normalizeType(String type) {
-        return type == null ? "text" : type.toLowerCase(Locale.ROOT).trim();
-    }
-
-    private boolean canList(
-            CollectionSchema collection,
-            Map<String, Object> record,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        if (principal != null && principal.superuser()) {
-            return true;
-        }
-        return collection.listRule != null && RuleEvaluator.matches(
-                collection.listRule,
-                RecordFieldResolverSupport.context(
-                        storeContext,
-                        collection,
-                        record,
-                        null,
-                        request,
-                        "GET",
-                        principal,
-                        true,
-                        false
-                )
-        );
-    }
-
-    private Object normalizeStoredFieldValue(FieldSchema field, Object value) {
-        if (value == null) {
-            return null;
-        }
-        String type = normalizeType(field.type);
-        if ("bool".equals(type) || "boolean".equals(type)) {
-            if (value instanceof Boolean bool) {
-                return bool;
-            }
-            if (value instanceof Number number) {
-                return number.intValue() != 0;
-            }
-            return Boolean.parseBoolean(String.valueOf(value));
-        }
-        if ("json".equals(type) || "geopoint".equals(type)) {
-            return parseJsonStoredValue(value, false);
-        }
-        if (FieldTypeMapping.isJsonStoredType(type)) {
-            return parseJsonStoredValue(value, maxSelect(field) > 1);
-        }
-        return value;
-    }
-
-    private Object parseJsonStoredValue(Object value, boolean arrayOnly) {
-        if (!(value instanceof String text)) {
-            return value;
-        }
-        String trimmed = text.trim();
-        if (trimmed.isBlank()) {
-            return value;
-        }
-        if (arrayOnly && !trimmed.startsWith("[")) {
-            return value;
-        }
-        if (!arrayOnly && !(trimmed.startsWith("{") || trimmed.startsWith("[") || "null".equals(trimmed)
-                || "true".equalsIgnoreCase(trimmed) || "false".equalsIgnoreCase(trimmed) || isJsonNumber(trimmed))) {
-            return value;
-        }
-        try {
-            return mapper.readValue(trimmed, Object.class);
-        } catch (IOException e) {
-            return value;
-        }
-    }
-
-    private boolean isJsonNumber(String value) {
-        if (value.isBlank()) {
-            return false;
-        }
-        if (!Character.isDigit(value.charAt(0)) && value.charAt(0) != '-') {
-            return false;
-        }
-        try {
-            Double.parseDouble(value);
-            return true;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    private void requireCreateRule(
-            CollectionSchema collection,
-            Map<String, Object> record,
-            RuleRequestContext request,
-            RequestPrincipal principal
-    ) {
-        if (principal != null && principal.superuser()) {
-            return;
-        }
-        if (collection.createRule == null) {
-            throw new ApiException(403, "Only superusers can create records in this collection.");
-        }
-        if (!RuleEvaluator.matches(
-                collection.createRule,
-                RecordFieldResolverSupport.context(
-                        storeContext,
-                        collection,
-                        record,
-                        record,
-                        request,
-                        "POST",
-                        principal,
-                        true,
-                        false
-                )
-        )) {
-            throw new ApiException(400, "The record failed the collection create rule.");
-        }
-    }
-
-    private void requireRecordRule(
-            CollectionSchema collection,
-            String rule,
-            Map<String, Object> record,
-            Map<String, Object> body,
-            RuleRequestContext request,
-            String method,
-            RequestPrincipal principal
-    ) {
-        if (principal != null && principal.superuser()) {
-            return;
-        }
-        if (rule == null) {
-            throw new ApiException(403, "Only superusers can modify this record.");
-        }
-        if (!RuleEvaluator.matches(
-                rule,
-                RecordFieldResolverSupport.context(
-                        storeContext,
-                        collection,
-                        record,
-                        body,
-                        request,
-                        method,
-                        principal,
-                        true,
-                        false
-                )
-        )) {
-            throw new ApiException(404, "Record not found.");
-        }
-    }
-
-    private void requireSuperuserRecordsAccess(CollectionSchema collection, RequestPrincipal principal) {
-        if (SUPERUSERS.equals(collection.name) && (principal == null || !principal.superuser())) {
-            throw new ApiException(403, "Only superusers can access this collection.");
-        }
-    }
-
-    private void validateAuthSystemRecord(CollectionSchema collection, Map<String, Object> candidate, String currentId) {
-        if (!AuthSystemCollections.contains(collection.name)) {
-            return;
-        }
-        String collectionRef = String.valueOf(candidate.getOrDefault("collectionRef", ""));
-        String recordRef = String.valueOf(candidate.getOrDefault("recordRef", ""));
-        CollectionSchema authCollection;
-        try {
-            authCollection = collectionRepository.getCollectionSchema(collectionRef);
-        } catch (ApiException e) {
-            authCollection = null;
-        }
-        if (authCollection == null || !"auth".equals(authCollection.type)) {
-            throw new ApiException(400, "Failed to validate record.",
-                    ApiErrors.fieldError(
-                            "collectionRef",
-                            "validation_invalid_value",
-                            "Missing or invalid auth collection reference."
-                    ));
-        }
-        if (getRawRecord(authCollection, recordRef) == null) {
-            throw new ApiException(400, "Failed to validate record.",
-                    ApiErrors.fieldError(
-                            "recordRef",
-                            "validation_invalid_value",
-                            "Missing or invalid auth record reference."
-                    ));
-        }
-
-        org.jooq.Condition duplicate = switch (collection.name) {
-            case AuthSystemCollections.AUTH_ORIGINS -> qfs("collectionRef").eq(collectionRef)
-                    .and(qfs("recordRef").eq(recordRef))
-                    .and(qfs("fingerprint").eq(String.valueOf(candidate.getOrDefault("fingerprint", ""))));
-            case AuthSystemCollections.EXTERNAL_AUTHS -> qfs("collectionRef").eq(collectionRef)
-                    .and(qfs("recordRef").eq(recordRef))
-                    .and(qfs("provider").eq(String.valueOf(candidate.getOrDefault("provider", ""))))
-                    .or(qfs("collectionRef").eq(collectionRef)
-                            .and(qfs("provider").eq(String.valueOf(candidate.getOrDefault("provider", ""))))
-                            .and(qfs("providerId").eq(String.valueOf(candidate.getOrDefault("providerId", "")))));
-            default -> null;
+    org.jooq.Condition duplicate =
+        switch (collection.name) {
+          case AuthSystemCollections.AUTH_ORIGINS ->
+            qfs("collectionRef")
+                .eq(collectionRef)
+                .and(qfs("recordRef").eq(recordRef))
+                .and(
+                    qfs("fingerprint")
+                        .eq(String.valueOf(candidate.getOrDefault("fingerprint", ""))));
+          case AuthSystemCollections.EXTERNAL_AUTHS ->
+            qfs("collectionRef")
+                .eq(collectionRef)
+                .and(qfs("recordRef").eq(recordRef))
+                .and(qfs("provider").eq(String.valueOf(candidate.getOrDefault("provider", ""))))
+                .or(
+                    qfs("collectionRef")
+                        .eq(collectionRef)
+                        .and(
+                            qfs("provider")
+                                .eq(String.valueOf(candidate.getOrDefault("provider", ""))))
+                        .and(
+                            qfs("providerId")
+                                .eq(String.valueOf(candidate.getOrDefault("providerId", "")))));
+          default -> null;
         };
-        if (duplicate == null) {
-            return;
-        }
-        if (currentId != null) {
-            duplicate = duplicate.and(qfs("id").ne(currentId));
-        }
-        if (database.dsl().fetchExists(database.dsl().selectOne().from(qt(tableName(collection))).where(duplicate))) {
-            throw new ApiException(400, "Failed to validate record.",
-                    ApiErrors.fieldError(
-                            "recordRef",
-                            "validation_not_unique",
-                            "The system auth record already exists."
-                    ));
-        }
+    if (duplicate == null) {
+      return;
     }
-
-    private Map<String, Object> physicalRecordValues(CollectionSchema collection, Map<String, Object> values) {
-        if (!SUPERUSERS.equals(collection.name) || !values.containsKey("password")) {
-            return values;
-        }
-        Map<String, Object> physical = new LinkedHashMap<>(values);
-        Object passwordHash = physical.remove("password");
-        physical.put("passwordHash", passwordHash);
-        return physical;
+    if (currentId != null) {
+      duplicate = duplicate.and(qfs("id").ne(currentId));
     }
-
-    private Map<String, Object> bodyMap(JsonNode body) {
-        if (body == null || !body.isObject()) {
-            return Map.of();
-        }
-        return mapper.convertValue(body, new TypeReference<Map<String, Object>>() {});
+    if (database
+        .dsl()
+        .fetchExists(database.dsl().selectOne().from(qt(tableName(collection))).where(duplicate))) {
+      throw new ApiException(
+          400,
+          "Failed to validate record.",
+          ApiErrors.fieldError(
+              "recordRef", "validation_not_unique", "The system auth record already exists."));
     }
+  }
 
-    private void publishRealtime(CollectionSchema collection, String action, Map<String, Object> record) {
-        RealtimeHub hub = realtimeHub;
-        if (hub == null || record == null) {
-            return;
-        }
-        String recordId = String.valueOf(record.get("id"));
-        hub.publish(collection.name, collection.id, recordId, action, (subscription, principal) -> {
-            if (!canReceiveRealtime(collection, record, subscription, principal)) {
-                return null;
-            }
-            return RecordProcessor.process(
-                    storeContext,
-                    collection,
-                    record,
-                    principal != null && principal.superuser(),
-                    RuleRequestContext.of(
-                            subscription.query(),
-                            subscription.headers(),
-                            RuleRequestContext.REALTIME
-                    ),
-                    principal
-            );
+  private Map<String, Object> physicalRecordValues(
+      CollectionSchema collection, Map<String, Object> values) {
+    if (!SUPERUSERS.equals(collection.name) || !values.containsKey("password")) {
+      return values;
+    }
+    Map<String, Object> physical = new LinkedHashMap<>(values);
+    Object passwordHash = physical.remove("password");
+    physical.put("passwordHash", passwordHash);
+    return physical;
+  }
+
+  private Map<String, Object> bodyMap(JsonNode body) {
+    if (body == null || !body.isObject()) {
+      return Map.of();
+    }
+    return mapper.convertValue(body, new TypeReference<Map<String, Object>>() {
+    });
+  }
+
+  private void publishRealtime(
+      CollectionSchema collection, String action, Map<String, Object> record) {
+    RealtimeHub hub = realtimeHub;
+    if (hub == null || record == null) {
+      return;
+    }
+    String recordId = String.valueOf(record.get("id"));
+    hub.publish(
+        collection.name,
+        collection.id,
+        recordId,
+        action,
+        (subscription, principal) -> {
+          if (!canReceiveRealtime(collection, record, subscription, principal)) {
+            return null;
+          }
+          return RecordProcessor.process(
+              storeContext,
+              collection,
+              record,
+              principal != null && principal.superuser(),
+              RuleRequestContext.of(
+                  subscription.query(), subscription.headers(), RuleRequestContext.REALTIME),
+              principal);
         });
-    }
+  }
 
-    private boolean canReceiveRealtime(
-            CollectionSchema collection,
-            Map<String, Object> record,
-            RealtimeHub.Subscription subscription,
-            RequestPrincipal principal
-    ) {
-        RuleRequestContext request = RuleRequestContext.of(
-                subscription.query(),
-                subscription.headers(),
-                RuleRequestContext.REALTIME
-        );
-        boolean allowed = subscription.wildcard()
-                ? canList(collection, record, request, principal)
-                : storeContext.canView(collection, record, request, principal);
-        if (!allowed) {
-            return false;
+  private boolean canReceiveRealtime(
+      CollectionSchema collection,
+      Map<String, Object> record,
+      RealtimeHub.Subscription subscription,
+      RequestPrincipal principal) {
+    RuleRequestContext request =
+        RuleRequestContext.of(
+            subscription.query(), subscription.headers(), RuleRequestContext.REALTIME);
+    boolean allowed =
+        subscription.wildcard()
+            ? canList(collection, record, request, principal)
+            : storeContext.canView(collection, record, request, principal);
+    if (!allowed) {
+      return false;
+    }
+    String filter = subscription.filter();
+    return filter == null
+        || filter.isBlank()
+        || RuleEvaluator.matches(
+            filter,
+            RecordFieldResolverSupport.context(
+                storeContext,
+                collection,
+                record,
+                null,
+                request,
+                "GET",
+                principal,
+                principal != null && principal.superuser(),
+                principal == null || !principal.superuser()));
+  }
+
+  private record FileChanges(
+      Map<String, Object> fieldValues,
+      Map<String, UploadedFile> writes,
+      Map<String, List<String>> removals) {
+    boolean isEmpty() {
+      return fieldValues.isEmpty() && writes.isEmpty() && removals.isEmpty();
+    }
+  }
+
+  private void enforceUniqueFields(
+      CollectionSchema collection,
+      Map<String, Object> recordValues,
+      String currentRecordId,
+      Map<String, Object> errors) {
+    for (FieldSchema field : collection.fields) {
+      if (!field.unique || !recordValues.containsKey(field.name)) {
+        continue;
+      }
+      Object value = recordValues.get(field.name);
+      if (value == null || String.valueOf(value).isBlank()) {
+        continue;
+      }
+      try {
+        var condition = qf(field.name).eq(toStoredValue(value));
+        if (currentRecordId != null) {
+          condition = condition.and(qfs("id").ne(currentRecordId));
         }
-        String filter = subscription.filter();
-        return filter == null || filter.isBlank()
-                || RuleEvaluator.matches(
-                filter,
-                RecordFieldResolverSupport.context(
-                        storeContext,
-                        collection,
-                        record,
-                        null,
-                        request,
-                        "GET",
-                        principal,
-                        principal != null && principal.superuser(),
-                        principal == null || !principal.superuser()
-                )
-        );
-    }
-
-    private record FileChanges(
-            Map<String, Object> fieldValues,
-            Map<String, UploadedFile> writes,
-            Map<String, List<String>> removals
-    ) {
-        boolean isEmpty() {
-            return fieldValues.isEmpty() && writes.isEmpty() && removals.isEmpty();
+        boolean exists =
+            database
+                .dsl()
+                .fetchExists(
+                    database.dsl().selectOne().from(qt(tableName(collection))).where(condition));
+        if (exists) {
+          errors.put(
+              field.name,
+              ApiErrors.validationError(
+                  "validation_not_unique", ApiErrors.MESSAGE_VALUE_MUST_BE_UNIQUE));
         }
+      } catch (DataAccessException e) {
+        throw new ApiException(400, "Failed to validate unique field: " + field.name);
+      }
     }
+  }
 
-    private void enforceUniqueFields(CollectionSchema collection, Map<String, Object> recordValues, String currentRecordId, Map<String, Object> errors) {
-        for (FieldSchema field : collection.fields) {
-            if (!field.unique || !recordValues.containsKey(field.name)) {
-                continue;
-            }
-            Object value = recordValues.get(field.name);
-            if (value == null || String.valueOf(value).isBlank()) {
-                continue;
-            }
-            try {
-                var condition = qf(field.name).eq(toStoredValue(value));
-                if (currentRecordId != null) {
-                    condition = condition.and(qfs("id").ne(currentRecordId));
-                }
-                boolean exists = database.dsl().fetchExists(
-                        database.dsl().selectOne().from(qt(tableName(collection))).where(condition)
-                );
-                if (exists) {
-                    errors.put(field.name, ApiErrors.validationError("validation_not_unique", ApiErrors.MESSAGE_VALUE_MUST_BE_UNIQUE));
-                }
-            } catch (DataAccessException e) {
-                throw new ApiException(400, "Failed to validate unique field: " + field.name);
-            }
-        }
-    }
-
-    private String tableName(CollectionSchema collection) {
-        return collectionRepository.physicalTableName(collection);
-    }
+  private String tableName(CollectionSchema collection) {
+    return collectionRepository.physicalTableName(collection);
+  }
 }

@@ -3,7 +3,6 @@ package io.github.jackbaozz.pocketbase.server.internal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
-
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,351 +11,490 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Implements auth action flows (password reset, verification, email change)
- * for the relational storage engine. Uses JWT tokens with embedded claims
- * to carry request state, matching the official PocketBase approach.
+ * Implements auth action flows (password reset, verification, email change) for the relational
+ * storage engine. Uses JWT tokens with embedded claims to carry request state, matching the
+ * official PocketBase approach.
  */
 public final class AuthProcessor {
 
-    private AuthProcessor() {}
+  private AuthProcessor() {
+  }
 
-    public static Map<String, Object> authRefresh(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, RequestPrincipal principal) {
-        if (principal == null || !principal.collectionName().equals(collection)) {
-            throw new ApiException(401, "Missing or invalid auth token.");
-        }
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        if (colSchema == null) {
-            throw new ApiException(401, "Auth collection not found.");
-        }
-        Map<String, Object> record = ctx.getRecord(colSchema, principal.id());
-        if (record == null) {
-            throw new ApiException(401, "Auth record no longer exists.");
-        }
-
-        Map<String, Object> claims = Map.of(
-                "sub", principal.id(),
-                "email", record.getOrDefault("email", ""),
-                "type", colSchema.system ? "superuser" : "auth",
-                "collectionId", colSchema.id,
-                "collectionName", colSchema.name,
-                "tokenType", "auth",
-                "tokenKey", record.getOrDefault("tokenKey", "")
-        );
-        String token = tokenService.create(
-                claims,
-                tokenDuration(colSchema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION),
-                tokenSigningSecret(colSchema.authToken, record.get("tokenKey"))
-        );
-        return Map.of("token", token, "record", record);
+  public static Map<String, Object> authRefresh(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      RequestPrincipal principal) {
+    if (principal == null || !principal.collectionName().equals(collection)) {
+      throw new ApiException(401, "Missing or invalid auth token.");
+    }
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    if (colSchema == null) {
+      throw new ApiException(401, "Auth collection not found.");
+    }
+    Map<String, Object> record = ctx.getRecord(colSchema, principal.id());
+    if (record == null) {
+      throw new ApiException(401, "Auth record no longer exists.");
     }
 
-    public static Map<String, Object> authMethods(RecordProcessor.StoreContext ctx, String collection) {
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        if (colSchema == null) {
-            throw new ApiException(404, "Collection not found.");
-        }
-        List<Map<String, Object>> providers = new ArrayList<>();
-        if (colSchema.oauth2 != null && colSchema.oauth2.enabled) {
-            for (CollectionSchema.OAuth2ProviderConfig pc : colSchema.oauth2.providers) {
-                Map<String, Object> provider = new LinkedHashMap<>();
-                String name = pc.name == null ? "" : pc.name;
-                provider.put("name", name);
-                provider.put("displayName", name);
-                provider.put("authURL", pc.authURL == null ? "" : pc.authURL + "?state=state");
-                provider.put("clientId", pc.clientId == null ? "" : pc.clientId);
-                provider.put("codeVerifier", IdGenerator.id());
-                provider.put("codeChallenge", IdGenerator.id());
-                providers.add(provider);
-            }
-        }
-        boolean passwordEnabled = colSchema.passwordAuth != null && colSchema.passwordAuth.enabled;
-        List<String> identityFields = colSchema.passwordAuth != null && colSchema.passwordAuth.identityFields != null
-                ? colSchema.passwordAuth.identityFields
-                : List.of("email");
-        return Map.of(
-                "password", Map.of("enabled", passwordEnabled, "identityFields", identityFields),
-                "emailPassword", passwordEnabled && identityFields.contains("email"),
-                "usernamePassword", passwordEnabled && identityFields.contains("username"),
-                "otp", Map.of(
-                        "enabled", colSchema.otp != null && colSchema.otp.enabled,
-                        "duration", colSchema.otp != null ? colSchema.otp.duration : 180,
-                        "length", colSchema.otp != null ? colSchema.otp.length : 8
-                ),
-                "mfa", Map.of(
-                        "enabled", colSchema.mfa != null && colSchema.mfa.enabled,
-                        "duration", colSchema.mfa != null ? colSchema.mfa.duration : 600
-                ),
-                "oauth2", Map.of("enabled", colSchema.oauth2 != null && colSchema.oauth2.enabled, "providers", providers),
-                "authProviders", providers
-        );
+    Map<String, Object> claims =
+        Map.of(
+            "sub",
+            principal.id(),
+            "email",
+            record.getOrDefault("email", ""),
+            "type",
+            colSchema.system ? "superuser" : "auth",
+            "collectionId",
+            colSchema.id,
+            "collectionName",
+            colSchema.name,
+            "tokenType",
+            "auth",
+            "tokenKey",
+            record.getOrDefault("tokenKey", ""));
+    String token =
+        tokenService.create(
+            claims,
+            tokenDuration(colSchema.authToken, CollectionSchema.DEFAULT_AUTH_TOKEN_DURATION),
+            tokenSigningSecret(colSchema.authToken, record.get("tokenKey")));
+    return Map.of("token", token, "record", record);
+  }
+
+  public static Map<String, Object> authMethods(
+      RecordProcessor.StoreContext ctx, String collection) {
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    if (colSchema == null) {
+      throw new ApiException(404, "Collection not found.");
+    }
+    List<Map<String, Object>> providers = new ArrayList<>();
+    if (colSchema.oauth2 != null && colSchema.oauth2.enabled) {
+      for (CollectionSchema.OAuth2ProviderConfig pc : colSchema.oauth2.providers) {
+        Map<String, Object> provider = new LinkedHashMap<>();
+        String name = pc.name == null ? "" : pc.name;
+        provider.put("name", name);
+        provider.put("displayName", name);
+        provider.put("authURL", pc.authURL == null ? "" : pc.authURL + "?state=state");
+        provider.put("clientId", pc.clientId == null ? "" : pc.clientId);
+        provider.put("codeVerifier", IdGenerator.id());
+        provider.put("codeChallenge", IdGenerator.id());
+        providers.add(provider);
+      }
+    }
+    boolean passwordEnabled = colSchema.passwordAuth != null && colSchema.passwordAuth.enabled;
+    List<String> identityFields =
+        colSchema.passwordAuth != null && colSchema.passwordAuth.identityFields != null
+            ? colSchema.passwordAuth.identityFields
+            : List.of("email");
+    return Map.of(
+        "password", Map.of("enabled", passwordEnabled, "identityFields", identityFields),
+        "emailPassword", passwordEnabled && identityFields.contains("email"),
+        "usernamePassword", passwordEnabled && identityFields.contains("username"),
+        "otp",
+        Map.of(
+            "enabled", colSchema.otp != null && colSchema.otp.enabled,
+            "duration", colSchema.otp != null ? colSchema.otp.duration : 180,
+            "length", colSchema.otp != null ? colSchema.otp.length : 8),
+        "mfa",
+        Map.of(
+            "enabled",
+            colSchema.mfa != null && colSchema.mfa.enabled,
+            "duration",
+            colSchema.mfa != null ? colSchema.mfa.duration : 600),
+        "oauth2",
+        Map.of(
+            "enabled",
+            colSchema.oauth2 != null && colSchema.oauth2.enabled,
+            "providers",
+            providers),
+        "authProviders", providers);
+  }
+
+  // ── Password Reset ──────────────────────────────────────────────────
+
+  public static String requestPasswordReset(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    CollectionSchema colSchema = requireAuthCollection(ctx, collection);
+    String email = requireEmail(body);
+
+    Map<String, Object> record = ctx.findRecordByEmail(colSchema, email);
+    if (record != null) {
+      ensureTokenKey(ctx, colSchema, record);
+      return createAuthToken(
+          tokenService,
+          colSchema,
+          record,
+          "passwordReset",
+          Map.of(),
+          tokenDuration(
+              colSchema.passwordResetToken,
+              CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION));
+    }
+    // Always return 204 to avoid email enumeration
+    return null;
+  }
+
+  public static void confirmPasswordReset(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    String token = requireText(body, "token");
+    Map<String, Object> claims =
+        verifyActionToken(
+            tokenService, token, "passwordReset", requireAuthCollection(ctx, collection));
+
+    String recordId = String.valueOf(claims.get("sub"));
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    Map<String, Object> record = ctx.getRecord(colSchema, recordId);
+    if (record == null
+        || !SecuritySupport.constantTimeEquals(
+            String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
+      throw invalidOrExpiredToken();
     }
 
-    // ── Password Reset ──────────────────────────────────────────────────
-
-    public static String requestPasswordReset(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body) {
-        CollectionSchema colSchema = requireAuthCollection(ctx, collection);
-        String email = requireEmail(body);
-
-        Map<String, Object> record = ctx.findRecordByEmail(colSchema, email);
-        if (record != null) {
-            ensureTokenKey(ctx, colSchema, record);
-            return createAuthToken(tokenService, colSchema, record, "passwordReset", Map.of(),
-                    tokenDuration(colSchema.passwordResetToken, CollectionSchema.DEFAULT_PASSWORD_RESET_TOKEN_DURATION));
-        }
-        // Always return 204 to avoid email enumeration
-        return null;
+    String password = requireText(body, "password");
+    String passwordConfirm = requireText(body, "passwordConfirm");
+    if (!password.equals(passwordConfirm)) {
+      throw new ApiException(
+          400,
+          "passwordConfirm does not match password.",
+          ApiErrors.invalidField("passwordConfirm", "Passwords do not match."));
+    }
+    if (password.length() < 8) {
+      throw new ApiException(
+          400,
+          "Password must be at least 8 characters.",
+          ApiErrors.invalidField("password", "Password must be at least 8 characters."));
     }
 
-    public static void confirmPasswordReset(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body) {
-        String token = requireText(body, "token");
-        Map<String, Object> claims = verifyActionToken(tokenService, token, "passwordReset", requireAuthCollection(ctx, collection));
+    String passwordField = passwordField(colSchema);
+    ctx.updateRecordField(
+        colSchema,
+        recordId,
+        Map.of(
+            passwordField,
+            PasswordHasher.hash(password),
+            "verified",
+            true,
+            "tokenKey",
+            IdGenerator.secret()));
+  }
 
-        String recordId = String.valueOf(claims.get("sub"));
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        Map<String, Object> record = ctx.getRecord(colSchema, recordId);
-        if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw invalidOrExpiredToken();
-        }
+  // ── Verification ─────────────────────────────────────────────────────
 
-        String password = requireText(body, "password");
-        String passwordConfirm = requireText(body, "passwordConfirm");
-        if (!password.equals(passwordConfirm)) {
-            throw new ApiException(400, "passwordConfirm does not match password.",
-                    ApiErrors.invalidField("passwordConfirm", "Passwords do not match."));
-        }
-        if (password.length() < 8) {
-            throw new ApiException(400, "Password must be at least 8 characters.",
-                    ApiErrors.invalidField("password", "Password must be at least 8 characters."));
-        }
+  public static String requestVerification(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    CollectionSchema colSchema = requireAuthCollection(ctx, collection);
+    String email = requireEmail(body);
 
-        String passwordField = passwordField(colSchema);
-        ctx.updateRecordField(colSchema, recordId, Map.of(
-                passwordField, PasswordHasher.hash(password),
-                "verified", true,
-                "tokenKey", IdGenerator.secret()
-        ));
+    Map<String, Object> record = ctx.findRecordByEmail(colSchema, email);
+    if (record != null && !truthy(record.get("verified"))) {
+      ensureTokenKey(ctx, colSchema, record);
+      return createAuthToken(
+          tokenService,
+          colSchema,
+          record,
+          "verification",
+          Map.of(),
+          tokenDuration(
+              colSchema.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION));
+    }
+    return null;
+  }
+
+  public static void confirmVerification(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    String token = requireText(body, "token");
+    Map<String, Object> claims =
+        verifyActionToken(
+            tokenService, token, "verification", requireAuthCollection(ctx, collection));
+
+    String recordId = String.valueOf(claims.get("sub"));
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    Map<String, Object> record = ctx.getRecord(colSchema, recordId);
+    if (record == null
+        || !SecuritySupport.constantTimeEquals(
+            String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
+      throw invalidOrExpiredToken();
     }
 
-    // ── Verification ─────────────────────────────────────────────────────
+    ctx.updateRecordField(colSchema, recordId, Map.of("verified", true));
+  }
 
-    public static String requestVerification(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body) {
-        CollectionSchema colSchema = requireAuthCollection(ctx, collection);
-        String email = requireEmail(body);
+  // ── Email Change ─────────────────────────────────────────────────────
 
-        Map<String, Object> record = ctx.findRecordByEmail(colSchema, email);
-        if (record != null && !truthy(record.get("verified"))) {
-            ensureTokenKey(ctx, colSchema, record);
-            return createAuthToken(tokenService, colSchema, record, "verification", Map.of(),
-                    tokenDuration(colSchema.verificationToken, CollectionSchema.DEFAULT_VERIFICATION_TOKEN_DURATION));
-        }
-        return null;
+  public static String requestEmailChange(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body,
+      RequestPrincipal principal) {
+    CollectionSchema colSchema = requireAuthCollection(ctx, collection);
+    if (principal == null) {
+      throw new ApiException(401, "Missing or invalid auth token.");
+    }
+    if (principal.superuser() || !principal.collectionName().equals(collection)) {
+      throw new ApiException(403, "Auth record token required.");
     }
 
-    public static void confirmVerification(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body) {
-        String token = requireText(body, "token");
-        Map<String, Object> claims = verifyActionToken(tokenService, token, "verification", requireAuthCollection(ctx, collection));
-
-        String recordId = String.valueOf(claims.get("sub"));
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        Map<String, Object> record = ctx.getRecord(colSchema, recordId);
-        if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw invalidOrExpiredToken();
-        }
-
-        ctx.updateRecordField(colSchema, recordId, Map.of("verified", true));
+    Map<String, Object> record = ctx.getRecord(colSchema, principal.id());
+    if (record == null) {
+      throw new ApiException(401, "Auth record no longer exists.");
     }
 
-    // ── Email Change ─────────────────────────────────────────────────────
-
-    public static String requestEmailChange(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body, RequestPrincipal principal) {
-        CollectionSchema colSchema = requireAuthCollection(ctx, collection);
-        if (principal == null) {
-            throw new ApiException(401, "Missing or invalid auth token.");
-        }
-        if (principal.superuser() || !principal.collectionName().equals(collection)) {
-            throw new ApiException(403, "Auth record token required.");
-        }
-
-        Map<String, Object> record = ctx.getRecord(colSchema, principal.id());
-        if (record == null) {
-            throw new ApiException(401, "Auth record no longer exists.");
-        }
-
-        String newEmail = requireText(body, "newEmail").trim().toLowerCase();
-        if (!newEmail.contains("@")) {
-            throw new ApiException(400, "Invalid email format.",
-                    Map.of("newEmail", Map.of("code", "validation_invalid_email", "message", "Must be a valid email address.")));
-        }
-
-        // Check email availability
-        Map<String, Object> existing = ctx.findRecordByEmail(colSchema, newEmail);
-        if (existing != null && !String.valueOf(existing.get("id")).equals(principal.id())) {
-            throw new ApiException(400, "New email address is already in use.",
-                    Map.of("newEmail", Map.of("code", "validation_not_unique", "message", "New email address is already in use.")));
-        }
-
-        ensureTokenKey(ctx, colSchema, record);
-        return createAuthToken(tokenService, colSchema, record, "emailChange", Map.of("newEmail", newEmail),
-                tokenDuration(colSchema.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION));
+    String newEmail = requireText(body, "newEmail").trim().toLowerCase();
+    if (!newEmail.contains("@")) {
+      throw new ApiException(
+          400,
+          "Invalid email format.",
+          Map.of(
+              "newEmail",
+              Map.of(
+                  "code",
+                  "validation_invalid_email",
+                  "message",
+                  "Must be a valid email address.")));
     }
 
-    public static void confirmEmailChange(RecordProcessor.StoreContext ctx, TokenService tokenService, String collection, JsonNode body) {
-        String token = requireText(body, "token");
-        Map<String, Object> claims = verifyActionToken(tokenService, token, "emailChange", requireAuthCollection(ctx, collection));
-
-        String recordId = String.valueOf(claims.get("sub"));
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        Map<String, Object> record = ctx.getRecord(colSchema, recordId);
-        if (record == null || !SecuritySupport.constantTimeEquals(String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-            throw invalidOrExpiredToken();
-        }
-
-        String password = requireText(body, "password");
-        String passwordField = passwordField(colSchema);
-        if (!PasswordHasher.verifyOrDummy(password, String.valueOf(record.get(passwordField)))) {
-            throw new ApiException(400, "Invalid password.", ApiErrors.invalidField("password", "Invalid password."));
-        }
-
-        String newEmail = String.valueOf(claims.getOrDefault("newEmail", ""));
-        if (!newEmail.contains("@")) {
-            throw new ApiException(400, "Invalid new email address.",
-                    ApiErrors.invalidField("newEmail", "Invalid new email address."));
-        }
-
-        ctx.updateRecordField(colSchema, recordId, Map.of(
-                "email", newEmail,
-                "verified", true,
-                "tokenKey", IdGenerator.secret()
-        ));
+    // Check email availability
+    Map<String, Object> existing = ctx.findRecordByEmail(colSchema, newEmail);
+    if (existing != null && !String.valueOf(existing.get("id")).equals(principal.id())) {
+      throw new ApiException(
+          400,
+          "New email address is already in use.",
+          Map.of(
+              "newEmail",
+              Map.of(
+                  "code",
+                  "validation_not_unique",
+                  "message",
+                  "New email address is already in use.")));
     }
 
-    // ── OAuth2 ───────────────────────────────────────────────────────────
+    ensureTokenKey(ctx, colSchema, record);
+    return createAuthToken(
+        tokenService,
+        colSchema,
+        record,
+        "emailChange",
+        Map.of("newEmail", newEmail),
+        tokenDuration(
+            colSchema.emailChangeToken, CollectionSchema.DEFAULT_EMAIL_CHANGE_TOKEN_DURATION));
+  }
 
-    public static Map<String, Object> authWithOAuth2(RecordProcessor.StoreContext ctx, ObjectMapper mapper, TokenService tokenService, String collection, JsonNode body) {
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        if (colSchema == null || colSchema.oauth2 == null || !colSchema.oauth2.enabled) {
-            throw new ApiException(403, "The collection is not configured to allow OAuth2 authentication.");
-        }
-        String providerName = body.has("provider") ? body.get("provider").asText() : null;
-        if (providerName == null || providerName.isBlank()) {
-            throw new ApiException(400, "Failed to authenticate.", ApiErrors.requiredField("provider"));
-        }
+  public static void confirmEmailChange(
+      RecordProcessor.StoreContext ctx,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    String token = requireText(body, "token");
+    Map<String, Object> claims =
+        verifyActionToken(
+            tokenService, token, "emailChange", requireAuthCollection(ctx, collection));
 
-        colSchema.oauth2.providers.stream()
-                .filter(item -> providerName.equalsIgnoreCase(item.name))
-                .findFirst()
-                .orElseThrow(() -> new ApiException(400, "Failed to authenticate.",
-                        ApiErrors.invalidField("provider", "Provider is missing or is not enabled.")));
-
-        throw new ApiException(400, "OAuth2 simulated failure for SQLite MVP parity tests.");
+    String recordId = String.valueOf(claims.get("sub"));
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    Map<String, Object> record = ctx.getRecord(colSchema, recordId);
+    if (record == null
+        || !SecuritySupport.constantTimeEquals(
+            String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
+      throw invalidOrExpiredToken();
     }
 
-    // ── Internal helpers ─────────────────────────────────────────────────
-
-    private static CollectionSchema requireAuthCollection(RecordProcessor.StoreContext ctx, String collection) {
-        CollectionSchema colSchema = ctx.getCollection(collection);
-        if (colSchema == null || !"auth".equals(colSchema.type)) {
-            throw new ApiException(400, "The collection is not an auth collection.");
-        }
-        return colSchema;
+    String password = requireText(body, "password");
+    String passwordField = passwordField(colSchema);
+    if (!PasswordHasher.verifyOrDummy(password, String.valueOf(record.get(passwordField)))) {
+      throw new ApiException(
+          400, "Invalid password.", ApiErrors.invalidField("password", "Invalid password."));
     }
 
-    private static Map<String, Object> verifyActionToken(TokenService tokenService, String token, String expectedType, CollectionSchema collection) {
-        Map<String, Object> claims = tokenService.verify(token, tokenClaims -> tokenSigningSecret(tokenConfigForAction(expectedType, collection), tokenClaims.get("tokenKey")))
-                .orElseThrow(AuthProcessor::invalidOrExpiredToken);
-        if (!expectedType.equals(claims.get("tokenType"))) {
-            throw invalidOrExpiredToken();
-        }
-        if (!Objects.equals(collection.name, claims.get("collectionName")) && !Objects.equals(collection.id, claims.get("collectionId"))) {
-            throw invalidOrExpiredToken();
-        }
-        return claims;
+    String newEmail = String.valueOf(claims.getOrDefault("newEmail", ""));
+    if (!newEmail.contains("@")) {
+      throw new ApiException(
+          400,
+          "Invalid new email address.",
+          ApiErrors.invalidField("newEmail", "Invalid new email address."));
     }
 
-    private static ApiException invalidOrExpiredToken() {
-        return new ApiException(400, "Invalid or expired token.",
-                ApiErrors.invalidField("token", "Invalid or expired token."));
+    ctx.updateRecordField(
+        colSchema,
+        recordId,
+        Map.of("email", newEmail, "verified", true, "tokenKey", IdGenerator.secret()));
+  }
+
+  // ── OAuth2 ───────────────────────────────────────────────────────────
+
+  public static Map<String, Object> authWithOAuth2(
+      RecordProcessor.StoreContext ctx,
+      ObjectMapper mapper,
+      TokenService tokenService,
+      String collection,
+      JsonNode body) {
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    if (colSchema == null || colSchema.oauth2 == null || !colSchema.oauth2.enabled) {
+      throw new ApiException(
+          403, "The collection is not configured to allow OAuth2 authentication.");
+    }
+    String providerName = body.has("provider") ? body.get("provider").asText() : null;
+    if (providerName == null || providerName.isBlank()) {
+      throw new ApiException(400, "Failed to authenticate.", ApiErrors.requiredField("provider"));
     }
 
-    private static String createAuthToken(TokenService tokenService, CollectionSchema collection, Map<String, Object> record, String tokenType, Map<String, Object> extraClaims, Duration ttl) {
-        Map<String, Object> claims = new LinkedHashMap<>();
-        claims.put("sub", record.get("id"));
-        claims.put("collectionId", collection.id);
-        claims.put("collectionName", collection.name);
-        claims.put("type", "auth");
-        claims.put("email", record.get("email"));
-        claims.put("tokenType", tokenType);
-        claims.put("tokenKey", record.get("tokenKey"));
-        if (extraClaims != null) {
-            claims.putAll(extraClaims);
-        }
-        return tokenService.create(claims, ttl, tokenSigningSecret(tokenConfigForAction(tokenType, collection), record.get("tokenKey")));
-    }
+    colSchema.oauth2.providers.stream()
+        .filter(item -> providerName.equalsIgnoreCase(item.name))
+        .findFirst()
+        .orElseThrow(
+            () -> new ApiException(
+                400,
+                "Failed to authenticate.",
+                ApiErrors.invalidField("provider", "Provider is missing or is not enabled.")));
 
-    private static void ensureTokenKey(RecordProcessor.StoreContext ctx, CollectionSchema collection, Map<String, Object> record) {
-        Object tokenKey = record.get("tokenKey");
-        if (tokenKey == null || String.valueOf(tokenKey).isBlank()) {
-            String newKey = IdGenerator.secret();
-            ctx.updateRecordField(collection, String.valueOf(record.get("id")), Map.of("tokenKey", newKey));
-            record.put("tokenKey", newKey);
-        }
-    }
+    throw new ApiException(400, "OAuth2 simulated failure for SQLite MVP parity tests.");
+  }
 
-    private static String passwordField(CollectionSchema colSchema) {
-        // In PocketBase, auth collections use "password" as the field name
-        return "password";
-    }
+  // ── Internal helpers ─────────────────────────────────────────────────
 
-    private static String requireEmail(JsonNode body) {
-        if (body == null || !body.has("email") || body.get("email").isNull()) {
-            throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField("email"));
-        }
-        String email = body.get("email").asText().trim().toLowerCase();
-        if (email.isEmpty()) {
-            throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField("email"));
-        }
-        return email;
+  private static CollectionSchema requireAuthCollection(
+      RecordProcessor.StoreContext ctx, String collection) {
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    if (colSchema == null || !"auth".equals(colSchema.type)) {
+      throw new ApiException(400, "The collection is not an auth collection.");
     }
+    return colSchema;
+  }
 
-    private static String requireText(JsonNode body, String field) {
-        if (body == null || !body.has(field) || body.get(field).isNull()) {
-            throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField(field));
-        }
-        String value = body.get(field).asText();
-        if (value.isBlank()) {
-            throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField(field));
-        }
-        return value;
+  private static Map<String, Object> verifyActionToken(
+      TokenService tokenService, String token, String expectedType, CollectionSchema collection) {
+    Map<String, Object> claims =
+        tokenService
+            .verify(
+                token,
+                tokenClaims -> tokenSigningSecret(
+                    tokenConfigForAction(expectedType, collection),
+                    tokenClaims.get("tokenKey")))
+            .orElseThrow(AuthProcessor::invalidOrExpiredToken);
+    if (!expectedType.equals(claims.get("tokenType"))) {
+      throw invalidOrExpiredToken();
     }
+    if (!Objects.equals(collection.name, claims.get("collectionName"))
+        && !Objects.equals(collection.id, claims.get("collectionId"))) {
+      throw invalidOrExpiredToken();
+    }
+    return claims;
+  }
 
-    private static boolean truthy(Object value) {
-        if (value == null) return false;
-        if (value instanceof Boolean b) return b;
-        if (value instanceof Number n) return n.intValue() != 0;
-        return Boolean.parseBoolean(String.valueOf(value));
-    }
+  private static ApiException invalidOrExpiredToken() {
+    return new ApiException(
+        400,
+        "Invalid or expired token.",
+        ApiErrors.invalidField("token", "Invalid or expired token."));
+  }
 
-    private static CollectionSchema.TokenConfig tokenConfigForAction(String tokenType, CollectionSchema collection) {
-        if (collection == null || tokenType == null) {
-            return null;
-        }
-        return switch (tokenType) {
-            case "passwordReset" -> collection.passwordResetToken;
-            case "verification" -> collection.verificationToken;
-            case "emailChange" -> collection.emailChangeToken;
-            case "file" -> collection.fileToken;
-            default -> collection.authToken;
-        };
+  private static String createAuthToken(
+      TokenService tokenService,
+      CollectionSchema collection,
+      Map<String, Object> record,
+      String tokenType,
+      Map<String, Object> extraClaims,
+      Duration ttl) {
+    Map<String, Object> claims = new LinkedHashMap<>();
+    claims.put("sub", record.get("id"));
+    claims.put("collectionId", collection.id);
+    claims.put("collectionName", collection.name);
+    claims.put("type", "auth");
+    claims.put("email", record.get("email"));
+    claims.put("tokenType", tokenType);
+    claims.put("tokenKey", record.get("tokenKey"));
+    if (extraClaims != null) {
+      claims.putAll(extraClaims);
     }
+    return tokenService.create(
+        claims,
+        ttl,
+        tokenSigningSecret(tokenConfigForAction(tokenType, collection), record.get("tokenKey")));
+  }
 
-    private static String tokenSigningSecret(CollectionSchema.TokenConfig config, Object tokenKeyValue) {
-        String tokenKey = tokenKeyValue == null ? "" : String.valueOf(tokenKeyValue).trim();
-        String secret = config == null || config.secret == null ? "" : config.secret.trim();
-        return tokenKey + secret;
+  private static void ensureTokenKey(
+      RecordProcessor.StoreContext ctx, CollectionSchema collection, Map<String, Object> record) {
+    Object tokenKey = record.get("tokenKey");
+    if (tokenKey == null || String.valueOf(tokenKey).isBlank()) {
+      String newKey = IdGenerator.secret();
+      ctx.updateRecordField(
+          collection, String.valueOf(record.get("id")), Map.of("tokenKey", newKey));
+      record.put("tokenKey", newKey);
     }
+  }
 
-    private static Duration tokenDuration(CollectionSchema.TokenConfig config, long fallbackSeconds) {
-        long seconds = config == null || config.duration <= 0 ? fallbackSeconds : config.duration;
-        return Duration.ofSeconds(seconds);
+  private static String passwordField(CollectionSchema colSchema) {
+    // In PocketBase, auth collections use "password" as the field name
+    return "password";
+  }
+
+  private static String requireEmail(JsonNode body) {
+    if (body == null || !body.has("email") || body.get("email").isNull()) {
+      throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField("email"));
     }
+    String email = body.get("email").asText().trim().toLowerCase();
+    if (email.isEmpty()) {
+      throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField("email"));
+    }
+    return email;
+  }
+
+  private static String requireText(JsonNode body, String field) {
+    if (body == null || !body.has(field) || body.get(field).isNull()) {
+      throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField(field));
+    }
+    String value = body.get(field).asText();
+    if (value.isBlank()) {
+      throw new ApiException(400, "Failed to submit request.", ApiErrors.requiredField(field));
+    }
+    return value;
+  }
+
+  private static boolean truthy(Object value) {
+    if (value == null)
+      return false;
+    if (value instanceof Boolean b)
+      return b;
+    if (value instanceof Number n)
+      return n.intValue() != 0;
+    return Boolean.parseBoolean(String.valueOf(value));
+  }
+
+  private static CollectionSchema.TokenConfig tokenConfigForAction(
+      String tokenType, CollectionSchema collection) {
+    if (collection == null || tokenType == null) {
+      return null;
+    }
+    return switch (tokenType) {
+      case "passwordReset" -> collection.passwordResetToken;
+      case "verification" -> collection.verificationToken;
+      case "emailChange" -> collection.emailChangeToken;
+      case "file" -> collection.fileToken;
+      default -> collection.authToken;
+    };
+  }
+
+  private static String tokenSigningSecret(
+      CollectionSchema.TokenConfig config, Object tokenKeyValue) {
+    String tokenKey = tokenKeyValue == null ? "" : String.valueOf(tokenKeyValue).trim();
+    String secret = config == null || config.secret == null ? "" : config.secret.trim();
+    return tokenKey + secret;
+  }
+
+  private static Duration tokenDuration(CollectionSchema.TokenConfig config, long fallbackSeconds) {
+    long seconds = config == null || config.duration <= 0 ? fallbackSeconds : config.duration;
+    return Duration.ofSeconds(seconds);
+  }
 }

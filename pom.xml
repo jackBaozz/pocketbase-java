@@ -56,8 +56,46 @@
         <maven.javadoc.plugin.version>3.8.0</maven.javadoc.plugin.version>
         <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
         <native.maven.plugin.version>0.10.6</native.maven.plugin.version>
+        <spotless.version>2.44.5</spotless.version>
         <main.class>io.github.jackbaozz.pocketbase.server.PocketBaseServer</main.class>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>aliyun-public</id>
+            <name>Aliyun Public</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>
@@ -97,6 +135,13 @@
             <artifactId>HikariCP</artifactId>
             <version>5.1.0</version>
         </dependency>
+        <!-- Testcontainers core (provides DockerImageName, JdbcDatabaseContainer, etc.) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Testcontainers for Integration Testing -->
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -116,7 +161,7 @@
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
-        
+
         <!-- Playwright for Admin UI Tests -->
         <dependency>
             <groupId>com.microsoft.playwright</groupId>
@@ -173,6 +218,11 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven.surefire.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>com.diffplug.spotless</groupId>
+                    <artifactId>spotless-maven-plugin</artifactId>
+                    <version>${spotless.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -265,6 +315,29 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <!--
+              Code style: style/eclipse-java-formatter.xml (aligned with style/intellij-java.xml).
+              Manual only — not bound to verify/package, so normal builds stay unchanged.
+                mvn spotless:check   # fail if unformatted
+                mvn spotless:apply   # rewrite sources in place
+            -->
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <configuration>
+                    <java>
+                        <includes>
+                            <include>src/main/java/**/*.java</include>
+                            <include>src/test/java/**/*.java</include>
+                        </includes>
+                        <eclipse>
+                            <file>${project.basedir}/style/eclipse-java-formatter.xml</file>
+                        </eclipse>
+                        <trimTrailingWhitespace/>
+                        <endWithNewline/>
+                    </java>
+                </configuration>
             </plugin>
         </plugins>
     </build>
