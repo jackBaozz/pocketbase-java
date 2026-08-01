@@ -4,6 +4,7 @@ import {
   CheckSquare2,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock3,
   Code2,
   Columns3,
@@ -58,6 +59,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { IndexManager } from "./components/IndexManager";
 import type { ConfirmRequest } from "./components/ConfirmDialog";
 import { RecordFieldControl } from "./components/RecordFieldControl";
+import { RefreshButton } from "./components/RefreshButton";
 import { FileFieldControl } from "./components/FileFieldControl";
 import { PasswordInput } from "./components/PasswordInput";
 import { AuthRecordActions } from "./components/AuthRecordActions";
@@ -3256,6 +3258,7 @@ function CollectionSidebar(props: CollectionSidebarProps) {
               pinnedNames={props.pinnedNames}
               onSelect={props.onSelect}
               onTogglePinned={props.onTogglePinned}
+              collapsible
             />
           )}
         </nav>
@@ -3284,28 +3287,57 @@ type CollectionGroupProps = {
   pinnedNames: string[];
   onSelect: (collection: CollectionSchema) => void;
   onTogglePinned: (collection: CollectionSchema) => void;
+  collapsible?: boolean;
 };
 
 function CollectionGroup(props: CollectionGroupProps) {
   const { t } = useTranslation();
+  const [collapsed, setCollapsed] = useState(false);
+  const expanded = !props.collapsible || !collapsed;
   return (
-    <section className="sidebar-group">
-      <div className="sidebar-section-title">{props.title}</div>
-      {props.collections.map((collection) => {
-        const pinned = props.pinnedNames.includes(collection.name);
-        return (
-          <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
-            <button className="collection-nav-main" onClick={() => props.onSelect(collection)} title={collection.name}>
-              <span className="nav-icon">
-                {collection.type === "auth" ? <Shield size={16} /> : <Database size={16} />}
-              </span>
-              <span className="nav-text">
-                <strong>{collection.name}</strong>
-              </span>
-            </button>
-            <button
-              className="icon-button pin-button"
-              onClick={() => props.onTogglePinned(collection)}
+    <section className={`sidebar-group${expanded ? "" : " collapsed"}`}>
+      {props.collapsible ? (
+        <button
+          className="sidebar-section-title sidebar-group-toggle"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? t("collections.collapse_group", { name: props.title, defaultValue: "Collapse {{name}}" })
+              : t("collections.expand_group", { name: props.title, defaultValue: "Expand {{name}}" })
+          }
+        >
+          <span>{props.title}</span>
+          <ChevronUp size={14} className="sidebar-group-chevron" />
+        </button>
+      ) : (
+        <div className="sidebar-section-title">{props.title}</div>
+      )}
+      <div className="sidebar-group-body">
+        <div className="sidebar-group-items">
+          {props.collections.map((collection) => {
+            const pinned = props.pinnedNames.includes(collection.name);
+            return (
+              <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
+                <button
+                  className="collection-nav-main"
+                  onClick={() => {
+                    if (props.collapsible) setCollapsed(false);
+                    props.onSelect(collection);
+                  }}
+                  title={collection.name}
+                >
+                  <span className="nav-icon">
+                    {/* Official PB uses ri-group-line for auth collections (users/group icon). */}
+                    {collection.type === "auth" ? <Users size={16} /> : <Database size={16} />}
+                  </span>
+                  <span className="nav-text">
+                    <strong>{collection.name}</strong>
+                  </span>
+                </button>
+                <button
+                  className="icon-button pin-button"
+                  onClick={() => props.onTogglePinned(collection)}
               title={pinned ? t("actions.unpin_collection", "Unpin collection") : t("actions.pin_collection", "Pin collection")}
               aria-label={pinned ? t("actions.unpin_collection", "Unpin collection") : t("actions.pin_collection", "Pin collection")}
             >
@@ -3314,6 +3346,8 @@ function CollectionGroup(props: CollectionGroupProps) {
           </div>
         );
       })}
+        </div>
+      </div>
     </section>
   );
 }
@@ -3588,41 +3622,48 @@ function RecordsView(props: RecordsViewProps) {
   return (
     <section className="records-page">
       <header className="page-header records-page-header">
-        <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
-          <span>{t("nav.collections")}</span>
-          <span title={props.collection.name}>{props.collection.name}</span>
-        </nav>
-        <div className="page-header-secondary-btns">
+        {/* Official layout: breadcrumb + settings/refresh on the left; API preview + New record on the right. */}
+        <div className="page-header-left">
+          <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
+            <span>{t("nav.collections")}</span>
+            <span title={props.collection.name}>{props.collection.name}</span>
+          </nav>
+          <div className="page-header-inline-btns">
+            {!props.hideControls && (
+              <button
+                className="icon-button page-circle"
+                onClick={props.onEditCollection}
+                title={t("collections.collection_settings", "Collection settings")}
+                aria-label={t("collections.collection_settings", "Collection settings")}
+              >
+                <Settings size={17} />
+              </button>
+            )}
+            <RefreshButton
+              className="icon-button page-circle"
+              refreshSuggested={props.refreshSuggested}
+              onClick={props.onRefresh}
+              title={t("actions.refresh_records", "Refresh records")}
+            />
+          </div>
+        </div>
+        <div className="page-header-right">
           <button
-            className="icon-button page-circle"
+            type="button"
+            className="subtle outline-button page-header-api-btn"
             onClick={props.onApiPreview}
-            title={t("collections.api_preview", "API Preview")}
-            aria-label={t("collections.api_preview", "API Preview")}
+            title={t("collections.api_preview", "API preview")}
           >
-            <Code2 size={17} />
+            <Code2 size={16} />
+            <span>{t("collections.api_preview", "API preview")}</span>
           </button>
-          {!props.hideControls && (
-            <button className="icon-button page-circle" onClick={props.onEditCollection} title={t("collections.collection_settings", "Collection settings")} aria-label={t("collections.collection_settings", "Collection settings")}>
-              <Settings size={17} />
+          {canCreateRecord && (
+            <button type="button" className="primary new-record-btn" onClick={props.onNew}>
+              <Plus size={16} />
+              <span>{t("actions.new_record", "New record")}</span>
             </button>
           )}
-          <button
-            className={`icon-button page-circle${props.refreshSuggested ? " refresh-suggested" : ""}`}
-            onClick={props.onRefresh}
-            title={t("actions.refresh_records", "Refresh records")}
-            aria-label={t("actions.refresh_records", "Refresh records")}
-          >
-            <RefreshCw size={17} />
-          </button>
         </div>
-        {canCreateRecord && (
-          <div className="page-header-primary-btns">
-            <button className="primary new-record-btn" onClick={props.onNew}>
-              <Plus size={16} />
-              <span>{t("actions.add_record")}</span>
-            </button>
-          </div>
-        )}
       </header>
 
       <div className="records-searchbar-row">
@@ -4201,9 +4242,7 @@ function BackupView(props: BackupViewProps) {
         section={t("settings.nav.backups", "Backups")}
         actions={
           <>
-            <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_backups", "Refresh backups")} aria-label={t("actions.refresh_backups", "Refresh backups")}>
-              <RefreshCw size={17} />
-            </button>
+            <RefreshButton className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_backups", "Refresh backups")} />
             <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} disabled={operationBusy || props.loading} title={t("actions.upload_backup", "Upload backup")} aria-label={t("actions.upload_backup", "Upload backup")}>
               <Upload size={17} />
             </button>
@@ -4527,9 +4566,7 @@ function CronsView(props: CronsViewProps) {
       <SettingsPageHeader
         section={t("settings.nav.crons", "Crons")}
         actions={
-          <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_crons", "Refresh crons")} aria-label={t("actions.refresh_crons", "Refresh crons")}>
-            <RefreshCw size={17} />
-          </button>
+          <RefreshButton className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_crons", "Refresh crons")} />
         }
       />
       <section className="surface crons-surface">
@@ -4767,9 +4804,7 @@ function SettingsView(props: SettingsViewProps) {
         section={t("settings.nav.application", "Application")}
         actions={
           <>
-          <button className="icon-button" onClick={props.onRefresh} title={t("actions.refresh_settings", "Refresh settings")} aria-label={t("actions.refresh_settings", "Refresh settings")}>
-            <RefreshCw size={17} />
-          </button>
+          <RefreshButton className="icon-button" onClick={props.onRefresh} title={t("actions.refresh_settings", "Refresh settings")} />
           <button className="primary" onClick={props.onSave} disabled={props.loading}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
@@ -5797,10 +5832,9 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
                 <span>{t("transfer.selected_count", { count: selectedExportCollections.length, defaultValue: "{{count}} selected" })}</span>
               </div>
               <div className="top-actions">
-                <button className="subtle" onClick={props.onExport}>
-                  <RefreshCw size={16} />
+                <RefreshButton className="subtle" iconSize={16} onClick={props.onExport} title={t("actions.refresh", "Refresh")}>
                   {t("actions.refresh", "Refresh")}
-                </button>
+                </RefreshButton>
                 <button className="subtle" onClick={() => props.onCopy(selectedExportJson)} disabled={selectedExportCollections.length === 0}>
                   <Copy size={16} />
                   {t("actions.copy_json", "Copy JSON")}
@@ -6447,9 +6481,7 @@ function LogsView(props: LogsViewProps) {
         <button className="icon-button page-circle" onClick={props.onOpenSettings} title={t("settings.logs_title", "Logs")} aria-label={t("settings.logs_title", "Logs")}>
           <Settings size={17} />
         </button>
-        <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_logs", "Refresh logs")} aria-label={t("actions.refresh_logs", "Refresh logs")}>
-          <RefreshCw size={17} />
-        </button>
+        <RefreshButton className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_logs", "Refresh logs")} />
         <div className="searchbar logs-searchbar">
           <Search size={17} />
           <input
@@ -7092,7 +7124,7 @@ function CollectionModal({
             {[
               { id: "base", label: t("collections.type_base", "Base"), icon: Database },
               { id: "view", label: t("collections.type_view", "View"), icon: Code2 },
-              { id: "auth", label: t("collections.type_auth", "Auth"), icon: Shield }
+              { id: "auth", label: t("collections.type_auth", "Auth"), icon: Users }
             ].map((option) => {
               const Icon = option.icon;
               return (

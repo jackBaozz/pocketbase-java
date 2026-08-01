@@ -330,6 +330,8 @@
     "id": "ID",
     "type": "Тип",
     "system": "Системная",
+    "expand_group": "Развернуть {{name}}",
+    "collapse_group": "Свернуть {{name}}",
     "required": "обязательное",
     "unique": "уникальное",
     "hidden": "скрытое",

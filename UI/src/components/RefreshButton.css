@@ -1,0 +1,12 @@
+.refresh-button-icon {
+  animation: refresh-button-spin 0.7s cubic-bezier(0.4, 0.2, 0.2, 1);
+}
+
+@keyframes refresh-button-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

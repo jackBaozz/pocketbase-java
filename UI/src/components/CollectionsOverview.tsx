@@ -1,4 +1,4 @@
-import { Database, GitBranch, Shield, X } from "lucide-react";
+import { Database, GitBranch, Users, X } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useModalInteraction } from "./useModalInteraction";
@@ -80,7 +80,7 @@ export function CollectionsOverview({ collections, onClose, onSelect }: Collecti
 
         <section className="collections-overview-graph" aria-label={t("parity.collection.erd", "Entity relationship diagram")}>
           {collections.map((collection) => {
-            const Icon = collection.type === "auth" ? Shield : Database;
+            const Icon = collection.type === "auth" ? Users : Database;
             const outgoing = relations.filter((relation) => relation.source.id === collection.id);
             return (
               <article className="overview-collection-card" key={collection.id}>

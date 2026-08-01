@@ -330,6 +330,8 @@
     "id": "ID",
     "type": "类型",
     "system": "系统",
+    "expand_group": "展开 {{name}}",
+    "collapse_group": "折叠 {{name}}",
     "required": "必填",
     "unique": "唯一",
     "hidden": "隐藏",

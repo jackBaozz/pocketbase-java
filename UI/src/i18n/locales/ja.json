@@ -330,6 +330,8 @@
     "id": "ID",
     "type": "タイプ",
     "system": "システム",
+    "expand_group": "{{name}} を展開する",
+    "collapse_group": "{{name}} を折りたたむ",
     "required": "必須",
     "unique": "一意",
     "hidden": "非表示",

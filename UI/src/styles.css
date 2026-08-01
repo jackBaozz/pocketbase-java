@@ -502,6 +502,47 @@ h2 {
   margin-bottom: 14px;
 }
 
+.sidebar-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--surfaceTxtHintColor);
+}
+
+.sidebar-group-toggle:hover,
+.sidebar-group-toggle:focus-visible {
+  color: var(--surfaceTxtColor);
+}
+
+.sidebar-group-chevron {
+  transition: transform 0.2s ease;
+}
+
+.sidebar-group.collapsed .sidebar-group-chevron {
+  transform: rotate(180deg);
+}
+
+.sidebar-group-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.2s ease;
+}
+
+.sidebar-group.collapsed .sidebar-group-body {
+  grid-template-rows: 0fr;
+}
+
+.sidebar-group-items {
+  display: grid;
+  gap: 5px;
+  overflow: hidden;
+}
+
 .sidebar-empty {
   margin: 2px 0 6px;
   color: var(--surfaceTxtHintColor);
@@ -666,20 +707,31 @@ h2 {
 .sidebar-actions .subtle {
   justify-content: flex-start;
   width: 100%;
-  min-height: var(--smBtnHeight);
-  padding-left: 12px;
-  padding-right: 12px;
-  font-size: var(--smFontSize);
+  /* Match records header action buttons (API preview / New record). */
+  height: var(--btnHeight);
+  min-height: var(--btnHeight);
+  padding: 5px 12px;
+  font-size: var(--fontSize);
+  box-sizing: border-box;
 }
 
+/* Official PB outline: transparent + muted ring by default; soft fill on hover.
+   Higher specificity than button.subtle so the filled secondary bg does not win. */
+button.subtle.outline-button,
 .outline-button {
-  border: 2px solid currentColor;
+  border: 2px solid var(--surfaceAlt4Color);
   background: transparent;
+  color: var(--surfaceTxtColor);
 }
 
+button.subtle.outline-button:hover:not(:disabled),
+button.subtle.outline-button:focus-visible,
 .outline-button:hover:not(:disabled),
 .outline-button:focus-visible {
-  background: var(--surfaceAlt2Color);
+  /* Fill matches ring so the button reads as a solid soft chip (official hover). */
+  border-color: var(--surfaceAlt3Color);
+  background: var(--surfaceAlt3Color);
+  color: var(--surfaceTxtColor);
 }
 
 .sidebar-no-results {
@@ -790,6 +842,46 @@ h2 {
   justify-content: flex-end;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* Records page header: left = breadcrumb + inline icon btns; right = labeled actions. */
+.page-header-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.page-header-left .breadcrumbs {
+  flex: 0 1 auto;
+}
+
+.page-header-inline-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.page-header-right {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* API preview keeps default button.subtle height (btnHeight).
+   New record must match it — do not shrink only the primary side. */
+.page-header-right > button.primary,
+.page-header-right .new-record-btn {
+  height: var(--btnHeight);
+  min-height: var(--btnHeight);
+  padding: 5px 20px;
+  font-size: var(--fontSize);
+  box-sizing: border-box;
 }
 
 .page-circle {
@@ -3902,8 +3994,14 @@ td.row-actions .icon-button:last-child {
   }
 
   .page-header-secondary-btns,
-  .page-header-primary-btns {
+  .page-header-primary-btns,
+  .page-header-right {
     justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .page-header-left {
+    flex-wrap: wrap;
   }
 
   .logs-chart-strip {

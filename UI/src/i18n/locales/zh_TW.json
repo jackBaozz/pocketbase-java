@@ -330,6 +330,8 @@
     "id": "ID",
     "type": "類型",
     "system": "系統",
+    "expand_group": "展開 {{name}}",
+    "collapse_group": "摺疊 {{name}}",
     "required": "必填",
     "unique": "唯一",
     "hidden": "隱藏",

@@ -218,6 +218,8 @@
     "id": "ID",
     "type": "Typ",
     "system": "System",
+    "expand_group": "{{name}} erweitern",
+    "collapse_group": "{{name}} einklappen",
     "required": "erforderlich",
     "unique": "eindeutig",
     "hidden": "ausgeblendet",

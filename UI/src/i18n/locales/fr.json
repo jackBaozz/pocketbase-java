@@ -330,6 +330,8 @@
     "id": "ID",
     "type": "Type",
     "system": "Système",
+    "expand_group": "Déplier {{name}}",
+    "collapse_group": "Réduire {{name}}",
     "required": "obligatoire",
     "unique": "unique",
     "hidden": "masqué",
