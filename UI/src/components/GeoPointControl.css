@@ -1,0 +1,69 @@
+.geo-point-control {
+  display: grid;
+  gap: 12px;
+}
+
+.geo-point-coordinates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.geo-point-coordinates label {
+  display: grid;
+  gap: 5px;
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  font-weight: 700;
+}
+
+.geo-point-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.geo-point-help,
+.geo-point-error,
+.geo-point-location-error {
+  margin: 0;
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  line-height: var(--smLineHeight);
+}
+
+.geo-point-error,
+.geo-point-location-error {
+  color: var(--dangerColor);
+}
+
+.geo-point-map-shell {
+  overflow: hidden;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+}
+
+.geo-point-map-canvas {
+  width: 100%;
+  height: 250px;
+  background: var(--surfaceAlt1Color);
+}
+
+.geo-point-map-loading {
+  display: grid;
+  min-height: 250px;
+  place-items: center;
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+}
+
+@media (max-width: 560px) {
+  .geo-point-coordinates {
+    grid-template-columns: 1fr;
+  }
+
+  .geo-point-map-canvas {
+    height: 220px;
+  }
+}

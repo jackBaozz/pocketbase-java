@@ -1,0 +1,73 @@
+.oauth-provider-assistant {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+}
+
+.oauth-provider-assistant > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--accentColor);
+}
+
+.oauth-provider-assistant > header > div {
+  display: grid;
+  gap: 2px;
+  color: var(--surfaceTxtColor);
+}
+
+.oauth-provider-assistant > header span,
+.oauth-provider-assistant-hint,
+.oauth-provider-assistant-message {
+  margin: 0;
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.oauth-provider-assistant-fields {
+  gap: 8px;
+}
+
+.oauth-provider-assistant textarea {
+  min-height: 100px;
+  resize: vertical;
+  font-family: var(--monospaceFontFamily);
+  font-size: 12px;
+}
+
+.oauth-provider-assistant-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.oauth-provider-assistant-actions > label {
+  flex: 1 1 220px;
+}
+
+.oauth-provider-assistant-actions > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.oauth-provider-assistant-message {
+  padding: 7px 8px;
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}
+
+@media (max-width: 560px) {
+  .oauth-provider-assistant-actions > button {
+    width: 100%;
+    justify-content: center;
+  }
+}

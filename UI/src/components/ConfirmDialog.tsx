@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import type { RefObject } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useModalInteraction } from "./useModalInteraction";
 
 export type ConfirmRequest = {
   title: string;
@@ -30,30 +32,26 @@ export function ConfirmDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const canConfirm = !requireText || typed.trim() === requireText;
-
-  useEffect(() => {
-    (requireText ? inputRef.current : confirmRef.current)?.focus();
-  }, [requireText]);
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onResolve(false);
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onResolve]);
+  const initialFocusRef = (requireText ? inputRef : confirmRef) as RefObject<HTMLElement | null>;
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(
+    () => onResolve(false),
+    { initialFocusRef }
+  );
 
   return (
-    <div className="confirm-backdrop" role="presentation" onMouseDown={() => onResolve(false)}>
+    <div
+      className="confirm-backdrop"
+      role="presentation"
+      onMouseDown={onBackdropMouseDown}
+      onMouseUp={onBackdropMouseUp}
+    >
       <section
+        ref={dialogRef}
         className="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-label={title}
-        onMouseDown={(event) => event.stopPropagation()}
+        tabIndex={-1}
       >
         <header className="confirm-header">
           <h3>

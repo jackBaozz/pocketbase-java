@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { ReactNode } from "react";
 import { Check, Copy, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useModalInteraction } from "./useModalInteraction";
 import "./ApiPreview.css";
 
 /* -------------------------------------------------------------------------- */
@@ -1938,6 +1939,7 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
   const [activeId, setActiveId] = useState("list");
   const [sdk, setSdk] = useSdkPreference();
   const bodyRef = useRef<HTMLDivElement>(null);
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose);
 
   const tr = useCallback<Translate>((key, fallback) => t(key, fallback), [t]);
 
@@ -1961,27 +1963,22 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
     bodyRef.current?.scrollTo({ top: 0 });
   }, [active?.id]);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   const disabledHint = t("api_preview.not_enabled", "Not enabled for the collection");
 
   return (
-    <div className="apx-backdrop" role="presentation" onMouseDown={onClose}>
+    <div
+      className="apx-backdrop"
+      role="presentation"
+      onMouseDown={onBackdropMouseDown}
+      onMouseUp={onBackdropMouseUp}
+    >
       <section
+        ref={dialogRef}
         className="apx-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={t("api_preview.title", "API Preview")}
-        onMouseDown={(event) => event.stopPropagation()}
+        tabIndex={-1}
       >
         <aside className="apx-sidebar">
           <div className="apx-brand">

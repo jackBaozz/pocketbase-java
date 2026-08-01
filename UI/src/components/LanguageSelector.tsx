@@ -32,8 +32,10 @@ export const LanguageSelector: React.FC = () => {
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="header-link"
+        className={isOpen ? "header-link active" : "header-link"}
         title={t("language.change", "Change language")}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
         <Globe size={16} />
         <span>{currentLang.label}</span>

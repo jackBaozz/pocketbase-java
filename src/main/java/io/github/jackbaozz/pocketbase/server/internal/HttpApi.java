@@ -1333,11 +1333,18 @@ public final class HttpApi implements HttpHandler {
       throw new ApiException(404, "The requested resource wasn't found.");
     }
     ServedFile served = servedFile(file, collection, recordId, filename, query.get("thumb"));
+    // Record files are supplied by users.  Never allow the browser to infer an active
+    // document type (for example an HTML payload named as an image), and sandbox any
+    // document that a browser still chooses to render inline.
+    exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+    exchange
+        .getResponseHeaders()
+        .set("Content-Security-Policy", "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'");
     HttpFileSupport.serve(
         exchange,
         served.path(),
         served.contentType(),
-        truthy(query.get("download")),
+        truthy(query.get("download")) || !safeInlineFileContentType(served.contentType()),
         headerFilename(filename));
   }
 
@@ -1347,11 +1354,15 @@ public final class HttpApi implements HttpHandler {
     if (thumb == null
         || thumb.isBlank()
         || !store.fileThumbAllowed(collection, recordId, filename, thumb)) {
-      return new ServedFile(file, contentType(filename));
+      return new ServedFile(file, uploadedFileContentType(file, filename));
     }
-    return ThumbnailGenerator.generate(file, filename, thumb)
-        .<ServedFile>map(generated -> new ServedFile(generated.path(), generated.contentType()))
-        .orElseGet(() -> new ServedFile(file, contentType(filename)));
+    var generated = ThumbnailGenerator.generate(file, filename, thumb);
+    if (generated.isPresent()) {
+      var thumbnail = generated.get();
+      return new ServedFile(
+          thumbnail.path(), uploadedFileContentType(thumbnail.path(), thumbnail.contentType()));
+    }
+    return new ServedFile(file, uploadedFileContentType(file, filename));
   }
 
   private void serveBackup(HttpExchange exchange, String path) throws IOException {
@@ -1620,6 +1631,9 @@ public final class HttpApi implements HttpHandler {
 
   private String contentType(String file) {
     String lower = file.toLowerCase();
+    if (lower.endsWith(".html") || lower.endsWith(".htm")) {
+      return "text/html; charset=utf-8";
+    }
     if (lower.endsWith(".png")) {
       return "image/png";
     }
@@ -1632,22 +1646,115 @@ public final class HttpApi implements HttpHandler {
     if (lower.endsWith(".webp")) {
       return "image/webp";
     }
+    if (lower.endsWith(".mp3")) {
+      return "audio/mpeg";
+    }
+    if (lower.endsWith(".ogg")) {
+      return "audio/ogg";
+    }
+    if (lower.endsWith(".wav")) {
+      return "audio/wav";
+    }
+    if (lower.endsWith(".m4a")) {
+      return "audio/mp4";
+    }
+    if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) {
+      return "video/mp4";
+    }
+    if (lower.endsWith(".webm")) {
+      return "video/webm";
+    }
     if (lower.endsWith(".pdf")) {
       return "application/pdf";
     }
     if (lower.endsWith(".txt")) {
       return "text/plain; charset=utf-8";
     }
-    if (file.endsWith(".css")) {
+    if (lower.endsWith(".css")) {
       return "text/css; charset=utf-8";
     }
-    if (file.endsWith(".js")) {
+    if (lower.endsWith(".js")) {
       return "application/javascript; charset=utf-8";
     }
-    if (file.endsWith(".svg")) {
+    if (lower.endsWith(".svg")) {
       return "image/svg+xml";
     }
-    return "text/html; charset=utf-8";
+    return "application/octet-stream";
+  }
+
+  private String uploadedFileContentType(Path file, String filename) throws IOException {
+    String type = filename.contains("/") ? filename : contentType(filename);
+    // SVG, HTML, JavaScript and CSS are active document formats. Files in a record
+    // are untrusted, so expose them as downloads rather than executable same-origin
+    // documents. Binary media is also checked by signature before it is declared
+    // inline-safe, preventing an extension-only MIME spoof.
+    if ("image/svg+xml".equals(type)
+        || type.startsWith("text/html")
+        || type.startsWith("application/javascript")
+        || type.startsWith("text/css")) {
+      return "application/octet-stream";
+    }
+    if (requiresSignature(type) && !matchesFileSignature(file, type)) {
+      return "application/octet-stream";
+    }
+    return type;
+  }
+
+  private boolean safeInlineFileContentType(String type) {
+    return "image/png".equals(type)
+        || "image/jpeg".equals(type)
+        || "image/gif".equals(type)
+        || "image/webp".equals(type)
+        || "application/pdf".equals(type)
+        || type.startsWith("text/plain")
+        || type.startsWith("audio/")
+        || type.startsWith("video/");
+  }
+
+  private boolean requiresSignature(String type) {
+    return "image/png".equals(type)
+        || "image/jpeg".equals(type)
+        || "image/gif".equals(type)
+        || "image/webp".equals(type)
+        || "application/pdf".equals(type);
+  }
+
+  private boolean matchesFileSignature(Path file, String type) throws IOException {
+    byte[] prefix;
+    try (InputStream input = Files.newInputStream(file)) {
+      prefix = input.readNBytes(12);
+    }
+    if ("image/png".equals(type)) {
+      return hasPrefix(prefix, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+    }
+    if ("image/jpeg".equals(type)) {
+      return hasPrefix(prefix, 0xff, 0xd8, 0xff);
+    }
+    if ("image/gif".equals(type)) {
+      return hasPrefix(prefix, 'G', 'I', 'F', '8', '7', 'a')
+          || hasPrefix(prefix, 'G', 'I', 'F', '8', '9', 'a');
+    }
+    if ("image/webp".equals(type)) {
+      return hasPrefix(prefix, 'R', 'I', 'F', 'F')
+          && prefix.length >= 12
+          && prefix[8] == 'W'
+          && prefix[9] == 'E'
+          && prefix[10] == 'B'
+          && prefix[11] == 'P';
+    }
+    return !"application/pdf".equals(type) || hasPrefix(prefix, '%', 'P', 'D', 'F', '-');
+  }
+
+  private boolean hasPrefix(byte[] bytes, int... expected) {
+    if (bytes.length < expected.length) {
+      return false;
+    }
+    for (int index = 0; index < expected.length; index++) {
+      if ((bytes[index] & 0xff) != expected[index]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private boolean truthy(String value) {

@@ -45,6 +45,35 @@
   border: 1px solid var(--surfaceAlt2Color);
   border-radius: var(--borderRadius);
   background: var(--surfaceColor);
+  transition: border-color 0.15s, opacity 0.15s;
+}
+
+.index-row.is-dragging {
+  opacity: 0.48;
+}
+
+.index-row.is-drop-target {
+  border-color: var(--accentColor);
+}
+
+.index-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--surfaceTxtHintColor);
+  cursor: grab;
+  padding: 2px;
+}
+
+.index-drag-handle:active {
+  cursor: grabbing;
+}
+
+.index-drag-handle:hover {
+  color: var(--surfaceTxtColor);
 }
 
 .index-row-main {

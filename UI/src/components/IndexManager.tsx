@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Edit3, Plus, Trash2, X } from "lucide-react";
+import { Edit3, GripVertical, Plus, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import "./IndexManager.css";
 
@@ -76,6 +76,8 @@ type IndexManagerProps = {
 export function IndexManager({ indexes, collectionName, fieldNames, disabled, onChange }: IndexManagerProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<number | null>(null);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [dropTarget, setDropTarget] = useState<number | null>(null);
 
   function openNew() {
     onChange([
@@ -102,6 +104,21 @@ export function IndexManager({ indexes, collectionName, fieldNames, disabled, on
     setEditing(null);
   }
 
+  function move(from: number, to: number) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from === to || from < 0 || to < 0 || from >= indexes.length || to >= indexes.length) return;
+    const next = [...indexes];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onChange(next);
+    setEditing((current) => {
+      if (current === null) return current;
+      if (current === from) return to;
+      if (from < current && current <= to) return current - 1;
+      if (to <= current && current < from) return current + 1;
+      return current;
+    });
+  }
+
   return (
     <div className="index-manager">
       <div className="index-manager-header">
@@ -123,7 +140,45 @@ export function IndexManager({ indexes, collectionName, fieldNames, disabled, on
           {indexes.map((sql, index) => {
             const parsed = parseIndex(sql);
             return (
-              <article className="index-row" key={`${parsed.indexName}-${index}`}>
+              <article
+                className={`index-row${dragging === index ? " is-dragging" : ""}${dropTarget === index ? " is-drop-target" : ""}`}
+                key={`${parsed.indexName}-${index}`}
+                onDragOver={(event) => {
+                  if (disabled || dragging === null || dragging === index) return;
+                  event.preventDefault();
+                  setDropTarget(index);
+                }}
+                onDragLeave={() => {
+                  if (dropTarget === index) setDropTarget(null);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const from = dragging ?? Number.parseInt(event.dataTransfer.getData("text/plain"), 10);
+                  move(from, index);
+                  setDragging(null);
+                  setDropTarget(null);
+                }}
+              >
+                {!disabled && indexes.length > 1 && (
+                  <button
+                    type="button"
+                    className="index-drag-handle"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", String(index));
+                      setDragging(index);
+                    }}
+                    onDragEnd={() => {
+                      setDragging(null);
+                      setDropTarget(null);
+                    }}
+                    title={t("collections.drag_to_reorder", "Drag to reorder")}
+                    aria-label={t("collections.drag_to_reorder", "Drag to reorder")}
+                  >
+                    <GripVertical size={15} />
+                  </button>
+                )}
                 <div className="index-row-main">
                   <span className="index-name">{parsed.indexName || t("collections.unnamed_index", "(unnamed)")}</span>
                   <code className="index-columns">{parsed.columns.join(", ") || "—"}</code>

@@ -1,26 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Search, X } from "lucide-react";
+import { GripVertical, Pencil, Plus, Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useModalInteraction } from "./useModalInteraction";
+import "./RelationPicker.css";
 
-type FieldSchema = {
+export type RelationFieldSchema = {
   name: string;
   type: string;
   hidden?: boolean;
   presentable?: boolean;
 };
 
-type CollectionLike = {
+export type RelationCollection = {
   id: string;
   name: string;
-  fields?: FieldSchema[];
+  type?: string;
+  fields?: RelationFieldSchema[];
 };
 
-type RecordLike = Record<string, unknown> & { id: string };
+export type RelationRecord = Record<string, unknown> & { id: string };
 
 type RecordPage = {
   page: number;
   totalItems: number;
-  items: RecordLike[];
+  items: RelationRecord[];
 };
 
 export type RelationFetcher = (
@@ -34,7 +37,7 @@ const PER_PAGE = 50;
  * Renders a record as the official UI does: the presentable fields joined together,
  * falling back to the first non-empty text-ish field and finally the id.
  */
-export function recordSummary(record: RecordLike, collection?: CollectionLike) {
+export function recordSummary(record: RelationRecord, collection?: RelationCollection) {
   const fields = collection?.fields ?? [];
   const presentable = fields.filter((field) => field.presentable && !field.hidden);
   const source = presentable.length
@@ -56,24 +59,43 @@ export function recordSummary(record: RecordLike, collection?: CollectionLike) {
 }
 
 type RelationPickerProps = {
-  field: FieldSchema & { collectionId?: string; maxSelect?: number };
+  field: RelationFieldSchema & { collectionId?: string; maxSelect?: number };
   value: unknown;
-  collections: CollectionLike[];
+  collections: RelationCollection[];
   fetchRecords: RelationFetcher;
   onChange: (value: unknown) => void;
+  /** Opens a nested record form and receives the server's saved record. */
+  onCreateRecord?: (target: RelationCollection, onSaved: (record: RelationRecord) => void) => void;
+  /** Opens a nested record form for an existing relation record. */
+  onEditRecord?: (target: RelationCollection, id: string, onSaved: (record: RelationRecord) => void) => void;
 };
 
-export function RelationPicker({ field, value, collections, fetchRecords, onChange }: RelationPickerProps) {
+export function RelationPicker({
+  field,
+  value,
+  collections,
+  fetchRecords,
+  onChange,
+  onCreateRecord,
+  onEditRecord
+}: RelationPickerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [items, setItems] = useState<RecordLike[]>([]);
+  const [items, setItems] = useState<RelationRecord[]>([]);
   const [page, setPage] = useState<RecordPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [resolved, setResolved] = useState<Record<string, RecordLike>>({});
+  const [resolved, setResolved] = useState<Record<string, RelationRecord>>({});
+  const [draggedId, setDraggedId] = useState("");
+  const [dropTargetId, setDropTargetId] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attempted = useRef(new Set<string>());
+  const loadRequestId = useRef(0);
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction<HTMLDivElement>(
+    () => setOpen(false),
+    { active: open }
+  );
 
   const target = useMemo(
     () => collections.find((collection) => collection.id === field.collectionId),
@@ -89,24 +111,30 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
 
   const load = useCallback(
     async (nextPage: number, term: string) => {
+      const requestId = ++loadRequestId.current;
       if (!target) return;
       setLoading(true);
       setError("");
       try {
         const data = await fetchRecords(target.name, { page: nextPage, perPage: PER_PAGE, filter: term });
+        if (requestId !== loadRequestId.current) return;
         setPage(data);
         setItems((prev) => (nextPage > 1 ? [...prev, ...data.items] : data.items));
       } catch (err) {
+        if (requestId !== loadRequestId.current) return;
         setError(err instanceof Error ? err.message : String(err));
       } finally {
-        setLoading(false);
+        if (requestId === loadRequestId.current) setLoading(false);
       }
     },
     [fetchRecords, target]
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      loadRequestId.current += 1;
+      return;
+    }
     void load(1, search);
   }, [load, open, search]);
 
@@ -153,7 +181,7 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
     onChange(isMulti ? ids : (ids[0] ?? ""));
   }
 
-  function toggle(record: RecordLike) {
+  function toggle(record: RelationRecord) {
     if (!isMulti) {
       emit([record.id]);
       setOpen(false);
@@ -172,6 +200,48 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => setSearch(term), 250);
   }
+
+  function mergeRelatedRecord(record: RelationRecord) {
+    setResolved((current) => ({ ...current, [record.id]: record }));
+    setItems((current) => current.map((item) => (item.id === record.id ? { ...item, ...record } : item)));
+  }
+
+  function selectCreatedRecord(record: RelationRecord) {
+    mergeRelatedRecord(record);
+    if (!isMulti) {
+      emit([record.id]);
+      return;
+    }
+    const next = selectedIds.includes(record.id) ? selectedIds : [...selectedIds, record.id];
+    emit(next.length > maxSelect ? next.slice(next.length - maxSelect) : next);
+  }
+
+  function startCreate() {
+    if (!target || !onCreateRecord) return;
+    // The nested record editor uses the normal modal layer. Close this picker
+    // first so its higher backdrop cannot mask the editor.
+    setOpen(false);
+    onCreateRecord(target, selectCreatedRecord);
+  }
+
+  function startEdit(id: string) {
+    if (!target || !onEditRecord) return;
+    setOpen(false);
+    onEditRecord(target, id, mergeRelatedRecord);
+  }
+
+  function moveSelected(fromId: string, toId: string) {
+    if (!isMulti || !fromId || fromId === toId) return;
+    const from = selectedIds.indexOf(fromId);
+    const to = selectedIds.indexOf(toId);
+    if (from < 0 || to < 0) return;
+    const next = [...selectedIds];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    emit(next);
+  }
+
+  const canManageRecords = target?.type !== "view" && Boolean(onCreateRecord || onEditRecord);
 
   const hasMore = Boolean(page && items.length < page.totalItems);
 
@@ -201,8 +271,57 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
           <span className="relation-empty">{t("fields.no_records_selected", "No records selected")}</span>
         )}
         {selectedIds.map((id) => (
-          <span key={id} className="relation-chip">
+          <span
+            key={id}
+            className={`relation-chip${draggedId === id ? " is-dragging" : ""}${dropTargetId === id ? " is-drop-target" : ""}`}
+            onDragOver={(event) => {
+              if (!isMulti || !draggedId || draggedId === id) return;
+              event.preventDefault();
+              setDropTargetId(id);
+            }}
+            onDragLeave={() => {
+              if (dropTargetId === id) setDropTargetId("");
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const fromId = draggedId || event.dataTransfer.getData("text/plain");
+              moveSelected(fromId, id);
+              setDraggedId("");
+              setDropTargetId("");
+            }}
+          >
+            {isMulti && selectedIds.length > 1 && (
+              <button
+                type="button"
+                className="relation-chip-drag"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", id);
+                  setDraggedId(id);
+                }}
+                onDragEnd={() => {
+                  setDraggedId("");
+                  setDropTargetId("");
+                }}
+                title={t("collections.drag_to_reorder", "Drag to reorder")}
+                aria-label={t("collections.drag_to_reorder", "Drag to reorder")}
+              >
+                <GripVertical size={13} />
+              </button>
+            )}
             <span className="relation-chip-label">{resolved[id] ? recordSummary(resolved[id], target) : id}</span>
+            {onEditRecord && target.type !== "view" && (
+              <button
+                type="button"
+                className="relation-chip-edit"
+                onClick={() => startEdit(id)}
+                title={t("actions.edit", "Edit")}
+                aria-label={t("actions.edit", "Edit")}
+              >
+                <Pencil size={12} />
+              </button>
+            )}
             <button
               type="button"
               className="relation-chip-remove"
@@ -222,21 +341,32 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
       </button>
 
       {open && (
-        <div className="relation-modal-backdrop" onClick={() => setOpen(false)}>
-          <div className="relation-modal" onClick={(event) => event.stopPropagation()}>
+        <div
+          className="relation-modal-backdrop"
+          role="presentation"
+          onMouseDown={onBackdropMouseDown}
+          onMouseUp={onBackdropMouseUp}
+        >
+          <div ref={dialogRef} className="relation-modal" role="dialog" aria-modal="true" tabIndex={-1}>
             <header className="relation-modal-header">
-              <strong>
-                {t("fields.select_from", { collection: target.name, defaultValue: "Select from {{collection}}" })}
-              </strong>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setOpen(false)}
-                title={t("actions.close", "Close")}
-                aria-label={t("actions.close", "Close")}
-              >
-                <X size={16} />
-              </button>
+              <strong>{t("fields.select_from", { collection: target.name, defaultValue: "Select from {{collection}}" })}</strong>
+              <div className="relation-modal-header-actions">
+                {canManageRecords && onCreateRecord && (
+                  <button type="button" className="subtle compact" onClick={startCreate}>
+                    <Plus size={14} />
+                    {t("actions.new_record", "New record")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setOpen(false)}
+                  title={t("actions.close", "Close")}
+                  aria-label={t("actions.close", "Close")}
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </header>
             <div className="relation-modal-search">
               <Search size={15} />
@@ -265,15 +395,27 @@ export function RelationPicker({ field, value, collections, fetchRecords, onChan
                 items.map((item) => {
                   const active = selectedIds.includes(item.id);
                   return (
-                    <button
-                      type="button"
-                      key={item.id}
-                      className={`relation-option${active ? " active" : ""}`}
-                      onClick={() => toggle(item)}
-                    >
-                      <span className="relation-option-label">{recordSummary(item, target)}</span>
-                      <code>{item.id}</code>
-                    </button>
+                    <div className="relation-option-row" key={item.id}>
+                      <button
+                        type="button"
+                        className={`relation-option${active ? " active" : ""}`}
+                        onClick={() => toggle(item)}
+                      >
+                        <span className="relation-option-label">{recordSummary(item, target)}</span>
+                        <code>{item.id}</code>
+                      </button>
+                      {onEditRecord && target.type !== "view" && (
+                        <button
+                          type="button"
+                          className="icon-button tiny relation-option-edit"
+                          onClick={() => startEdit(item.id)}
+                          title={t("actions.edit", "Edit")}
+                          aria-label={t("actions.edit", "Edit")}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      )}
+                    </div>
                   );
                 })
               )}

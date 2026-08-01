@@ -281,11 +281,60 @@
 
 顺带修复：**设置保存后 UI 与服务端不同步**——后端 PATCH 响应回显的是提交值而非规范化后的存储值（规则去重/排序、secret 脱敏均在存储阶段发生），导致保存后界面显示陈旧。改为保存后重新拉取。
 
+### 第三轮修复（2026-08-01）
+
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **记录 Duplicate** | 复制态复用记录表单，但清除 file 与 autodate 字段；提交时无条件走 `POST /records`，不会 PATCH 源记录；按钮文案改为「创建」。复制 auth 记录时强制输入新的密码，避免无密码的新账号。 | 临时服务实测：源记录 `cp2jcdjp0pb802e` 保持 `Map duplicate`，提交后新增 `ia83ndfvlnvdrfu`（`Map copy verified`），列表从 1 条变为 2 条。 |
+| **View 集合只读预览与安全 JSON** | View 列表仅提供「查看」；弹窗只显示只读 JSON 与 Copy/Download，去除保存与删除。记录 JSON 导出统一剔除 `expand`、password、token 等敏感字段。 | 浏览器实测 View 列表没有新增/编辑/删除动作；预览弹窗仅有关闭、复制 JSON、下载 JSON，点击复制显示「已复制」。 |
+| **geoPoint 字段控件** | 新增 `GeoPointControl`：经纬度输入、范围校验、浏览器定位、OpenStreetMap 外链；`GeoPointMap` 通过 React lazy loading 按需载入 Leaflet，点击地图可回填坐标。 | 浏览器实测地图按需加载、显示选点标记及坐标输入；保存后记录值保持 `{lat, lon}` 结构。 |
+
+### 第四轮修复（2026-08-01，审查回归）
+
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **上传文件的同源 XSS 防护** | `/api/files` 对所有用户上传文件返回 `X-Content-Type-Options: nosniff` 和受限 CSP；SVG/HTML/JS/CSS 与未知类型强制附件下载。PNG/JPEG/GIF/WebP/PDF 仅在文件签名匹配时才可内联。Admin UI 仅直接打开光栅图片，其余文件显式追加 `download=1`。 | `uploadedFilesCannotBeServedAsActiveSameOriginDocuments` 覆盖 SVG 和伪装成 PNG 的 HTML，断言二者均为 `application/octet-stream` + `Content-Disposition: attachment`。 |
+| **草稿与 JSON 的敏感数据清理** | 记录草稿、复制和下载共用递归脱敏器；清理嵌套 `password`、`token`、`secret`、`apiKey` 等 camelCase/snake_case 变体及 `expand`。编辑 auth 记录时补交 `passwordConfirm`，复制态草稿 key 按源记录区分。 | UI 类型检查；读取旧草稿时也会原地清理已有敏感字段。 |
+| **记录列表请求一致性** | Apply 只更新 hash 路由，由路由 effect 统一加载；请求使用 `AbortController` 和 generation 防止过期响应写回。按集合/筛选条件缓存页结果，深链分页并发读取且按页合并；仅集合或查询变化时清空勾选。`RelationPicker` 亦用请求序号拒绝旧搜索结果。 | UI 类型检查 + 构建。 |
+| **字段值与批量操作正确性** | select 字段读取 `maxSelect` 实现多选上限；日期以本地 `datetime-local` 显示、以 UTC 保存；geoPoint 半填/清空会提交 `null`，不再保留旧坐标。文件超限会提示，删除态仍可拖拽排序；impersonate 的 `0` 正确钳制到 60 秒。 | UI 类型检查 + 构建。 |
+| **设置页安全反馈** | S3 自动测试只在当前目标的连接指纹变化后防抖触发，手动/自动结果按请求序号隔离。Superuser IP 预检支持 IPv4/IPv6/CIDR，并拒绝服务端同样拒绝的前导零/十六进制 IPv4 写法。 | UI 类型检查 + 构建。 |
+| **数据外带与交互收尾** | CSV 导出转义公式起始符；搜索历史从 `localStorage` 收缩为当前会话 `sessionStorage`；模态关闭仅在旧焦点仍挂载时恢复。 | UI 类型检查 + 构建。 |
+
+### 第五轮修复与复核（2026-08-01）
+
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **受限富文本与公共文件选择器** | `editor` 字段改为工具栏式 `contenteditable`：粗体/斜体/下划线、链接、列表、引用、代码块、粘贴/拖放白名单清洗；新增跨集合、按文件字段的公共文件选择器，支持搜索、分页及文件字段声明的缩略图尺寸。非图片插入安全链接。 | 临时服务实测：选择 `ui_parity_editor · images` 的 `100x100` 缩略图后，保存值为 `<img src="/api/files/...?...thumb=100x100">`。 |
+| **富文本安全边界** | 只提供未受保护文件给 editor 选择器；Java 当前 file token 为短期查询 token，不能把它持久化到记录正文。编辑器会过滤脚本、事件属性、样式和危险协议，服务端文件响应另有 nosniff/CSP/附件策略。 | 构建 + 文件服务安全回归测试。 |
+| **记录编辑与列表收尾** | 编辑前统一通过 `GET /records/{id}` 取最新记录；列表列头可直接排序，筛选支持历史/Clear；更新行原地合并并保留 relation expand，单删和批量删原地移除；批量删除按每批最多 100 个请求执行，避免无界并发。记录 JSON 面板改接 `CodeEditor`，无效 JSON 会显示错误并禁用保存。 | UI 构建；浏览器实测无效 `{` 显示错误且“保存更改”禁用，Reset 可恢复。 |
+| **Relation 选择器完整工作流** | 多选 relation 的已选 chip 可拖拽排序（顺序原样提交）；选择器内可新建或编辑关联记录，使用现有 Java `POST/PATCH /api/collections/{collection}/records`，嵌套模态不改主 hash 路由，因此不会丢失父记录草稿。新建成功后自动选中，编辑后摘要即时更新。 | UI 类型检查 + 构建。 |
+| **列表投影与列偏好稳定性** | 当本地原地更新可能影响当前 filter/排序时，刷新按钮会高亮提示重新查询；删除导致部分加载页可能有空洞时亦提示。列可见性从 collection/field 名称迁移到 collection id + field id，字段或集合改名后仍可保留偏好；遗留名称键会在 schema 加载后安全迁移。 | UI 类型检查 + 构建。 |
+| **集合字段删除暂存/恢复** | 编辑已有集合时移除字段只进入待删除队列，保存前可按原位置恢复；只有点击保存并确认变更后才会向 Java API 提交字段删除。新建尚未持久化的字段仍可立即移除。 | 临时服务浏览器实测删除 `body` 字段出现恢复区，恢复后回到原字段顺序；UI 构建。 |
+| **索引顺序编辑** | `IndexManager` 的索引行提供独立拖拽手柄、落点反馈和编辑态索引修正；拖拽后的 SQL 数组顺序直接进入集合 PATCH，保留现有 Java `indexes` 数据结构。 | UI 类型检查 + 构建。 |
+| **导入审查与合并模式** | 导入显式提供「合并（保留未导入集合）」和「替换（`deleteMissing=true`）」两种模式，完全复用 Java 已有 `PUT /api/collections/import` 契约。审查弹窗为变更集合提供 Current/Imported 双栏 JSON、字段级 Added/Deleted/Changed/重命名详情；导入失败时审查弹窗保持打开。 | UI 类型检查、9 语言 key 集合校验 + 构建。 |
+| **日志交互复核** | 自定义轻量图表补齐空桶、悬浮提示、窗口平移、拖拽时间范围筛选及双击重置；日志行支持 Shift 范围选择和 JSON 导出；保留设置已迁移到日志页齿轮弹窗。 | UI 构建。 |
+| **设置与全局交互复核** | Trusted proxy 卡片显示 Java `/api/health` 返回的解析 IP 与检测到的 header，并可一键采纳；SQL 结果支持列排序、NULL 标识、CSV 导出和每次增加 250 行的展示；路由更新标题，`BroadcastChannel` 同步集合/设置/主题，侧栏宽度支持拖拽及键盘调整。 | UI 构建。 |
+
+### 第六轮修复（2026-08-01，剩余主链路收尾）
+
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **Relation 多层编辑栈** | relation 内联新建/编辑改为独立编辑器栈：子 relation 再打开时不会覆盖父弹窗；各层草稿与关闭动作按 editor id 隔离，子记录保存后只回填其直接父层。 | UI 类型检查 + 构建。 |
+| **OAuth provider 专属助手** | Apple 调用 Java 既有 `POST /api/settings/apple/generate-client-secret`，私钥只保留在瞬时 React state；OIDC 以无管理员 token 的浏览器 discovery 自动回填标准端点和 PKCE，CORS 拒绝时保留手工输入路径。 | UI 类型检查 + 构建。 |
+| **导入集合 ID 安全替换** | 对“同名同类型但 ID 不同”的导入集合给出显式替换建议；一键操作同步重写 relation 的 `collectionId(s)`（含旧版 `options` 位置），避免导入后关联指向不存在的集合。 | UI 类型检查 + 9 个 locale key 集合校验 + 构建。 |
+| **备份后台提示** | 创建/恢复开始后立即显示进行中提示，继续轮询 `canBackup` 并禁用冲突操作；完成后刷新备份/设置状态。该 UI 适配 Java 的异步状态，不假设 Go 的整页 reload 行为。 | UI 类型检查 + 构建。 |
+| **hideControls 安全模式** | 读取已保存的 `meta.hideControls`：隐藏新建/集合设置/集合导入导出入口，已有记录编辑先锁定保存并要求“Unlock to save”；SQL 控制台在启用后首次执行（包括只读查询）需要确认。新建记录仍可创建，行为与 PocketBase v0.39.9 一致。 | UI 类型检查 + 构建。 |
+| **Accent 与主题色** | 仅接受 `#RRGGBB`，拒绝白字对比度不足的颜色；应用设置页内实时预览，保存设置后同步 `--accentColor` 与 `meta[name=theme-color]`，无效外部配置安全回退到 CSS 默认值。 | UI 类型检查 + 构建。 |
+| **密码显示/隐藏** | 新增可复用 `PasswordInput`，接入登录、认证操作页、记录密码以及 SMTP/S3/备份 S3 密钥输入。可见性仅为组件内瞬时状态，不写入草稿或本地存储。 | UI 类型检查 + 9 个 locale key 集合校验 + 构建。 |
+| **登录重置入口与 OAuth2 回调页** | 超级用户登录页直接跳转到 `#/request-password-reset?collection=_superusers`；Java `/api/oauth2-redirect` 的 success/failure 哈希页会自动尝试关闭授权弹窗，若浏览器禁止关闭则保留可读状态与手动关闭按钮。 | UI 类型检查 + Java 路由契约核对 + 构建。 |
+| **SQL 批处理确认** | 危险关键字不再只检查首词，`SELECT …; DROP …`、CTE 后的写入语句同样会触发确认，避免批量 SQL 绕过原有前缀判断。 | UI 类型检查 + 构建。 |
+
 ### 仍未完成（按剩余价值排序）
 
-1. **auth 记录运营能力** — impersonate 模拟登录、发送验证/密码重置邮件、邮件模板编辑、token 时长与失效控制、OAuth2 外链解绑。
-2. **文件字段完整编辑** — 拖拽上传、已有文件的删除/恢复标记、新旧混排排序、缩略图与预览弹窗。
-3. **URL 状态同步** — filter/sort/分页/记录 id 写入 hash query，支持刷新恢复与深链分享。
-4. **集合层其它** — Truncate、Duplicate、Collections overview（ERD）、view 集合 SQL 试运行预览、auth 集合的 authRule/manageRule。
-5. **日志页余项** — 图表框选缩放与联动、批量选择导出、"包含超管请求"开关、日志设置迁移到日志页齿轮。
-6. **其它体验项** — 自定义 tooltip 体系、模态 ESC/遮罩关闭与层叠管理、搜索历史、S3 自动连通性测试、Superuser IPs 防锁死、Trusted proxy 实时诊断、SQL 结果分页与导出 CSV。
+1. **记录页的非核心细节** — 更完整的行级键盘操作，以及复杂 relation 过滤/摘要规则仍可继续对齐；当前已覆盖多层内联新建/编辑、排序及安全的父草稿保留。
+2. **集合编辑器的深度工作流** — Microsoft/Lark 等 provider 的完整专属字段、OIDC host 冲突检测，以及更丰富的字段编辑细节仍可继续补齐。
+3. **日志和设置的细粒度视觉/状态对齐** — 当前图表实现了可用的框选、平移与提示，但不是官方 uPlot 的像素级实现；个别设置页的视觉/状态细节仍有空间。
+4. **全局细节** — 自绘 tooltip、所有复制控件的原位成功态、更多无障碍快捷键与辅助功能仍有空间。
+5. **明确的 Java 实现边界** — 不机械移植 Go 运行时的动态插件加载（`/_/extensions.js` / server-side JS hooks）和 TinyMCE 插件生态；Java 目前也没有与 PocketBase 品牌资源等价的、受控的 favicon 配置/上传契约。受保护文件不会生成可长期写入 editor HTML 的 URL。若未来需要这些能力，应设计 Java SPI、品牌资源端点或签名 URL 的等价机制，而不是保存会过期的 token。
+
+> 本文仍以 v0.39.9 差异基线为准；上述修复仅关闭已验证或由当前 Java API 支撑的条目，不代表约 100 项原始差异已全部消除。

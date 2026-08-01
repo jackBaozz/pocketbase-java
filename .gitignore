@@ -10,6 +10,7 @@ target/
 *.iml
 .vscode/
 .claude/
+.playwright-cli/
 
 # ==================== OS ====================
 .DS_Store

@@ -1,7 +1,13 @@
-import React from 'react';
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { CodeEditor } from "./CodeEditor";
+import { RichTextEditor } from "./RichTextEditor";
+import type { EditorFileReference } from "./RichTextEditor";
 import { RelationPicker } from "./RelationPicker";
-import type { RelationFetcher } from "./RelationPicker";
+import type { RelationCollection, RelationFetcher, RelationRecord } from "./RelationPicker";
+import { GeoPointControl } from "./GeoPointControl";
+import "./RecordFieldControl.css";
 // Types derived from App.tsx
 type FieldSchema = {
   id?: string;
@@ -26,7 +32,26 @@ type FieldSchema = {
 };
 
 function maxFiles(field: FieldSchema) {
-  return field.maxFiles || (field.type === "relation" ? field.maxSelect || 1 : 1);
+  const direct = field.maxFiles ?? field.maxSelect;
+  const option = Number(field.options?.maxFiles ?? field.options?.maxSelect ?? 1);
+  return Math.max(1, Number(direct ?? option ?? 1));
+}
+
+function toDatetimeLocalValue(value: unknown) {
+  if (typeof value !== "string" || value.trim() === "") return "";
+  const date = new Date(value.replaceAll(" ", "T"));
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
+function fromDatetimeLocalValue(value: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().replace("T", " ");
 }
 
 function fieldInputValue(value: unknown) {
@@ -53,11 +78,114 @@ type RecordFieldControlProps = {
   field: FieldSchema;
   value: unknown;
   onChange: (value: unknown) => void;
+  /** JSON fields keep invalid source text locally; this reports whether it is safe to submit. */
+  onValidityChange?: (fieldName: string, valid: boolean) => void;
+  /** Increments when the parent explicitly resets/restores the record form. */
+  resetVersion?: number;
   collections?: Array<{ id: string; name: string; fields?: FieldSchema[] }>;
   fetchRecords?: RelationFetcher;
+  onCreateRelationRecord?: (target: RelationCollection, onSaved: (record: RelationRecord) => void) => void;
+  onEditRelationRecord?: (target: RelationCollection, id: string, onSaved: (record: RelationRecord) => void) => void;
+  resolveFileUrl?: (reference: EditorFileReference) => string;
 };
 
-export function RecordFieldControl({ field, value, onChange, collections, fetchRecords }: RecordFieldControlProps) {
+function jsonFieldSource(value: unknown) {
+  if (value === undefined) return "";
+  const source = JSON.stringify(value, null, 2);
+  return source === undefined ? "" : source;
+}
+
+function jsonFieldSignature(value: unknown) {
+  if (value === undefined) return "__pbj_undefined__";
+  const source = JSON.stringify(value);
+  return source === undefined ? "__pbj_undefined__" : source;
+}
+
+type JsonFieldControlProps = {
+  field: FieldSchema;
+  value: unknown;
+  meta: ReactNode;
+  onChange: (value: unknown) => void;
+  onValidityChange?: (fieldName: string, valid: boolean) => void;
+  resetVersion?: number;
+};
+
+/**
+ * A JSON field must preserve a half-typed document without ever making that
+ * document part of the record payload.  The parent only receives values that
+ * JSON.parse accepted, so form submission cannot silently store malformed JSON
+ * as an ordinary string.
+ */
+function JsonFieldControl({ field, value, meta, onChange, onValidityChange, resetVersion = 0 }: JsonFieldControlProps) {
+  const { t } = useTranslation();
+  const valueSignature = useMemo(() => jsonFieldSignature(value), [value]);
+  const acceptedSignatureRef = useRef(valueSignature);
+  const [source, setSource] = useState(() => jsonFieldSource(value));
+  const [invalid, setInvalid] = useState(false);
+
+  // Values changed by another control (the full JSON panel, draft restore, or
+  // reset) replace the local source. A valid keystroke records its signature
+  // first, so this does not reformat the editor while someone is typing.
+  useEffect(() => {
+    if (acceptedSignatureRef.current === valueSignature) return;
+    acceptedSignatureRef.current = valueSignature;
+    setSource(jsonFieldSource(value));
+    setInvalid(false);
+  }, [valueSignature]);
+
+  useEffect(() => {
+    acceptedSignatureRef.current = valueSignature;
+    setSource(jsonFieldSource(value));
+    setInvalid(false);
+  }, [resetVersion, valueSignature]);
+
+  useEffect(() => {
+    onValidityChange?.(field.name, !invalid);
+  }, [field.name, invalid, onValidityChange]);
+
+  function updateSource(nextSource: string) {
+    setSource(nextSource);
+    try {
+      const parsed = nextSource.trim() ? JSON.parse(nextSource) : null;
+      acceptedSignatureRef.current = jsonFieldSignature(parsed);
+      setInvalid(false);
+      onChange(parsed);
+    } catch {
+      setInvalid(true);
+    }
+  }
+
+  return (
+    <div className={`record-field-card wide record-json-field${invalid ? " has-invalid-json" : ""}`}>
+      <span>
+        <strong>{field.name}</strong>
+        {meta}
+      </span>
+      <CodeEditor
+        name={field.name}
+        ariaLabel={field.name}
+        language="json"
+        value={source}
+        onChange={updateSource}
+        minHeight={120}
+      />
+      {invalid && <p className="record-json-field-error" role="alert">{t("errors.invalid_json", "Enter valid JSON before saving.")}</p>}
+    </div>
+  );
+}
+
+export function RecordFieldControl({
+  field,
+  value,
+  onChange,
+  onValidityChange,
+  resetVersion,
+  collections,
+  fetchRecords,
+  onCreateRelationRecord,
+  onEditRelationRecord,
+  resolveFileUrl
+}: RecordFieldControlProps) {
   const { t } = useTranslation();
   const commonMeta = (
     <span className="record-field-meta">
@@ -99,27 +227,19 @@ export function RecordFieldControl({ field, value, onChange, collections, fetchR
 
   if (field.type === "json") {
     return (
-      <label className="record-field-card wide">
-        <span>
-          <strong>{field.name}</strong>
-          {commonMeta}
-        </span>
-        <textarea
-          name={field.name}
-          className="compact-textarea"
-          value={value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2)}
-          onChange={(event) => {
-            const raw = event.target.value;
-            try {
-              onChange(raw.trim() ? JSON.parse(raw) : null);
-            } catch {
-              onChange(raw);
-            }
-          }}
-          spellCheck={false}
-        />
-      </label>
+      <JsonFieldControl
+        field={field}
+        value={value}
+        meta={commonMeta}
+        onChange={onChange}
+        onValidityChange={onValidityChange}
+        resetVersion={resetVersion}
+      />
     );
+  }
+
+  if (field.type === "geoPoint" || field.type === "geopoint") {
+    return <GeoPointControl name={field.name} meta={commonMeta} value={value} onChange={onChange} />;
   }
 
   if (field.type === "editor") {
@@ -129,18 +249,20 @@ export function RecordFieldControl({ field, value, onChange, collections, fetchR
           <strong>{field.name}</strong>
           {commonMeta}
         </span>
-        <textarea
+        <RichTextEditor
           name={field.name}
-          className="compact-textarea"
-          value={value === undefined || value === null ? "" : String(value)}
-          onChange={(event) => onChange(event.target.value)}
+          value={value}
+          onChange={onChange}
+          fileCollections={collections}
+          fetchRecords={fetchRecords}
+          resolveFileUrl={resolveFileUrl}
         />
       </label>
     );
   }
 
   if (field.type === "date" || field.type === "autodate") {
-    const dateValue = typeof value === "string" ? value.replace(" ", "T").substring(0, 16) : ""; // YYYY-MM-DDTHH:mm
+    const dateValue = toDatetimeLocalValue(value);
     return (
       <label className="record-field-card">
         <span>
@@ -150,16 +272,11 @@ export function RecordFieldControl({ field, value, onChange, collections, fetchR
         <input
           name={field.name}
           type="datetime-local"
+          step={1}
           value={dateValue}
           disabled={field.type === "autodate"}
           onChange={(event) => {
-            if (event.target.value) {
-              const date = new Date(event.target.value);
-              // PocketBase uses string formats for dates. Using ISO string.
-              onChange(date.toISOString().replace('T', ' '));
-            } else {
-              onChange(null);
-            }
+            onChange(fromDatetimeLocalValue(event.target.value));
           }}
         />
       </label>
@@ -232,6 +349,8 @@ export function RecordFieldControl({ field, value, onChange, collections, fetchR
           value={value}
           collections={collections}
           fetchRecords={fetchRecords}
+          onCreateRecord={onCreateRelationRecord}
+          onEditRecord={onEditRelationRecord}
           onChange={onChange}
         />
       </label>

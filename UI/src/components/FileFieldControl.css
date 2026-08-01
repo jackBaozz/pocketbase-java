@@ -1,0 +1,193 @@
+.file-field-control {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+}
+
+.file-field-control-head,
+.file-field-item,
+.file-preview-dialog > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-field-control-head {
+  justify-content: space-between;
+}
+
+.file-field-control-head > div {
+  display: grid;
+}
+
+.file-field-control-head span,
+.file-field-item em {
+  color: var(--surfaceTxtHintColor);
+  font-size: var(--smFontSize);
+  font-style: normal;
+}
+
+.file-field-upload-button {
+  min-height: var(--smBtnHeight) !important;
+  cursor: pointer;
+}
+
+.file-field-upload-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.file-drop-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--surfaceAlt4Color);
+  border-radius: var(--borderRadius);
+  color: var(--surfaceTxtHintColor);
+  text-align: center;
+}
+
+.file-drop-zone.dragging {
+  border-color: var(--accentColor);
+  background: var(--surfaceAccentColor);
+  color: var(--surfaceTxtColor);
+}
+
+.file-drop-zone em {
+  color: var(--warningColor);
+  font-size: var(--smFontSize);
+}
+
+.file-field-list {
+  display: grid;
+  gap: 6px;
+}
+
+.file-field-item {
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 7px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+}
+
+.file-field-item.pending {
+  border-style: dashed;
+}
+
+.file-field-item.removed {
+  opacity: 0.68;
+  background: var(--surfaceDangerColor);
+}
+
+.file-item-grip {
+  flex: 0 0 auto;
+  color: var(--surfaceTxtHintColor);
+  cursor: grab;
+}
+
+.file-thumbnail,
+.file-thumbnail-icon {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtHintColor);
+  object-fit: cover;
+}
+
+.file-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-item-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.file-item-actions .icon-button,
+.file-field-item .compact {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.file-preview-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--modalOverlayColor);
+}
+
+.file-preview-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(900px, 100%);
+  max-height: min(780px, 100%);
+  padding: 16px;
+  overflow: auto;
+  border-radius: var(--lgBorderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+}
+
+.file-preview-dialog > header {
+  justify-content: space-between;
+}
+
+.file-preview-image,
+.file-preview-media,
+.file-preview-pdf {
+  display: block;
+  width: 100%;
+  max-height: 640px;
+  border: 0;
+  border-radius: var(--borderRadius);
+}
+
+.file-preview-image {
+  height: auto;
+  object-fit: contain;
+}
+
+.file-preview-pdf {
+  height: 640px;
+  background: var(--surfaceAlt1Color);
+}
+
+@media (max-width: 620px) {
+  .file-field-control-head,
+  .file-field-item {
+    align-items: flex-start;
+  }
+
+  .file-field-control-head {
+    flex-direction: column;
+  }
+
+  .file-item-actions {
+    flex-wrap: wrap;
+  }
+}

@@ -13,6 +13,7 @@ import {
   GripVertical,
   FileArchive,
   FileUp,
+  GitBranch,
   HardDrive,
   KeyRound,
   ListFilter,
@@ -55,8 +56,20 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { IndexManager } from "./components/IndexManager";
 import type { ConfirmRequest } from "./components/ConfirmDialog";
 import { RecordFieldControl } from "./components/RecordFieldControl";
+import { FileFieldControl } from "./components/FileFieldControl";
+import { PasswordInput } from "./components/PasswordInput";
+import { AuthRecordActions } from "./components/AuthRecordActions";
+import type { AuthRecordLink, ImpersonationResult } from "./components/AuthRecordActions";
+import { CollectionsOverview } from "./components/CollectionsOverview";
+import { ResizableSidebar, clampSidebarWidth } from "./components/ResizableSidebar";
+import {
+  AppleClientSecretAssistant,
+  OidcDiscoveryAssistant
+} from "./components/OAuthProviderAssistants";
+import type { AppleClientSecretInput } from "./components/OAuthProviderAssistants";
 import { recordSummary } from "./components/RelationPicker";
-import type { RelationFetcher } from "./components/RelationPicker";
+import type { RelationCollection, RelationFetcher, RelationRecord } from "./components/RelationPicker";
+import { useModalInteraction } from "./components/useModalInteraction";
 
 
 type HealthResponse = {
@@ -122,11 +135,28 @@ type OtpConfig = {
   enabled?: boolean;
   duration?: number;
   length?: number;
+  emailTemplate?: EmailTemplate;
 };
 
 type MfaConfig = {
   enabled?: boolean;
   duration?: number;
+  rule?: string | null;
+};
+
+type EmailTemplate = {
+  subject?: string;
+  body?: string;
+};
+
+type TokenConfig = {
+  duration?: number;
+  secret?: string;
+};
+
+type AuthAlertConfig = {
+  enabled?: boolean;
+  emailTemplate?: EmailTemplate;
 };
 
 type OAuth2ProviderConfig = {
@@ -170,6 +200,17 @@ type CollectionSchema = {
   otp?: OtpConfig;
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
+  authAlert?: AuthAlertConfig;
+  authToken?: TokenConfig;
+  passwordResetToken?: TokenConfig;
+  verificationToken?: TokenConfig;
+  emailChangeToken?: TokenConfig;
+  fileToken?: TokenConfig;
+  verificationTemplate?: EmailTemplate;
+  resetPasswordTemplate?: EmailTemplate;
+  confirmEmailChangeTemplate?: EmailTemplate;
+  authRule?: string | null;
+  manageRule?: string | null;
   viewQuery?: string | null;
   indexes?: string[];
   created?: string;
@@ -249,6 +290,17 @@ type LogStat = {
   total: number;
 };
 
+type LogTimeRange = {
+  start: string;
+  end: string;
+};
+
+type LogPageCache = {
+  scope: string;
+  pages: Map<number, ListResponse<LogItem>>;
+  stats: LogStat[] | null;
+};
+
 type CronJob = {
   id: string;
   expression: string;
@@ -264,6 +316,11 @@ type SqlResult = {
   columns?: SqlColumn[];
   rows?: unknown[][];
   affectedRows?: number;
+};
+
+type ViewQueryPreview = {
+  fields: FieldSchema[];
+  sample: Record<string, unknown>[];
 };
 
 type QueryState = {
@@ -292,12 +349,15 @@ type ViewName =
 type AdminRoute = {
   view: ViewName;
   collectionName?: string;
+  params: Record<string, string>;
 };
 
 function adminRouteFromHash(hash: string): AdminRoute | null {
   if (!hash || !hash.startsWith("#/")) return null;
-  const segments = hash
-    .slice(2)
+  const [rawPath, rawQuery = ""] = hash.slice(1).split("?", 2);
+  const params = Object.fromEntries(new URLSearchParams(rawQuery).entries());
+  const segments = rawPath
+    .slice(1)
     .split("/")
     .filter(Boolean)
     .map((segment) => {
@@ -306,9 +366,9 @@ function adminRouteFromHash(hash: string): AdminRoute | null {
       } catch {
         return segment;
       }
-    });
+  });
   if (segments[0] === "logs") {
-    return { view: "logs" };
+    return { view: "logs", params };
   }
   if (segments[0] === "settings") {
     const settingsRoutes: Record<string, ViewName> = {
@@ -324,17 +384,24 @@ function adminRouteFromHash(hash: string): AdminRoute | null {
       import: "import",
       sql: "sql"
     };
-    return { view: settingsRoutes[segments[1] ?? ""] ?? "settings" };
+    return { view: settingsRoutes[segments[1] ?? ""] ?? "settings", params };
   }
   if (segments[0] === "collections") {
-    const collectionName = segments[1];
-    const view = segments[2] === "schema" ? "schema" : "records";
-    return collectionName ? { view, collectionName } : { view: "records" };
+    // Accept the existing path route and the official query form (#/collections?collection=...).
+    const collectionName = params.collection || segments[1];
+    const routeView = params.view || params.tab || segments[2];
+    const view = routeView === "schema" || routeView === "fields" ? "schema" : "records";
+    return collectionName ? { view, collectionName, params } : { view: "records", params };
   }
   return null;
 }
 
-function adminHashFor(view: ViewName, collectionName?: string) {
+function adminHashFor(view: ViewName, collectionName?: string, params: Record<string, string | number | undefined> = {}) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "" && value !== 0) search.set(key, String(value));
+  }
+  const withParams = (base: string) => (search.size ? `${base}?${search.toString()}` : base);
   const settingsRoutes: Partial<Record<ViewName, string>> = {
     settings: "#/settings",
     mail: "#/settings/mail",
@@ -345,10 +412,123 @@ function adminHashFor(view: ViewName, collectionName?: string) {
     import: "#/settings/import-collections",
     sql: "#/settings/sql"
   };
-  if (view === "logs") return "#/logs";
-  if (settingsRoutes[view]) return settingsRoutes[view]!;
+  if (view === "logs") return withParams("#/logs");
+  if (settingsRoutes[view]) return withParams(settingsRoutes[view]!);
   const base = collectionName ? `#/collections/${encodeURIComponent(collectionName)}` : "#/collections";
-  return view === "schema" ? `${base}/schema` : `${base}/records`;
+  return withParams(view === "schema" ? `${base}/schema` : `${base}/records`);
+}
+
+function routeNumber(value: string | undefined, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
+}
+
+function queryFromRoute(params: Record<string, string>): QueryState {
+  return {
+    filter: params.filter ?? "",
+    sort: params.sort || "-created",
+    perPage: routeNumber(params.perPage, 50, 1, 500)
+  };
+}
+
+function recordRouteParams(query: QueryState, page = 1, recordId = "") {
+  return {
+    filter: query.filter || undefined,
+    sort: query.sort === "-created" ? undefined : query.sort,
+    perPage: query.perPage === 50 ? undefined : query.perPage,
+    page: page > 1 ? page : undefined,
+    record: recordId || undefined
+  };
+}
+
+function logRouteParams(
+  filter: string,
+  page = 1,
+  includeSuperuserRequests = false,
+  logId = "",
+  timeRange: LogTimeRange | null = null
+) {
+  return {
+    filter: filter || undefined,
+    page: page > 1 ? page : undefined,
+    superuserRequests: includeSuperuserRequests ? "1" : undefined,
+    log: logId || undefined,
+    logStart: timeRange?.start || undefined,
+    logEnd: timeRange?.end || undefined
+  };
+}
+
+function logFilterWithVisibility(filter: string, includeSuperuserRequests: boolean) {
+  const trimmed = filter.trim();
+  if (includeSuperuserRequests) return trimmed;
+  const superuserFilter = 'data.auth != "_superusers"';
+  return trimmed ? `(${trimmed}) && (${superuserFilter})` : superuserFilter;
+}
+
+function logTimeRangeFromRoute(params: Record<string, string>): LogTimeRange | null {
+  const start = params.logStart ?? "";
+  const end = params.logEnd ?? "";
+  const startTime = parseLogDate(start)?.getTime();
+  const endTime = parseLogDate(end)?.getTime();
+  return startTime !== undefined && endTime !== undefined && endTime > startTime ? { start, end } : null;
+}
+
+function parseLogDate(value: string) {
+  const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatLogHour(value: Date) {
+  return value.toISOString().replace("T", " ");
+}
+
+function nextLogHour(value: string) {
+  const date = parseLogDate(value);
+  return date ? formatLogHour(new Date(date.getTime() + 60 * 60 * 1000)) : "";
+}
+
+function combineLogFilters(...filters: string[]) {
+  return filters
+    .map((filter) => filter.trim())
+    .filter(Boolean)
+    .map((filter) => `(${filter})`)
+    .join(" && ");
+}
+
+function logTimeRangeFilter(range: LogTimeRange) {
+  // The stats endpoint uses PocketBase's human-readable bucket format with a
+  // space between date and hour, while record timestamps retain ISO `T`.
+  // Convert only at the request boundary so the chart labels and deep links
+  // stay readable but RuleEvaluator compares compatible values.
+  const timestamp = (value: string) => parseLogDate(value)?.toISOString() ?? value;
+  return `created >= ${JSON.stringify(timestamp(range.start))} && created < ${JSON.stringify(timestamp(range.end))}`;
+}
+
+/**
+ * The stats API only returns occupied buckets. Insert a bounded set of empty
+ * hourly buckets so the chart's scale and drag selection remain truthful.
+ */
+function fillLogStatGaps(stats: LogStat[]) {
+  const normalized = stats
+    .map((item) => ({ ...item, date: item.date.trim(), timestamp: parseLogDate(item.date)?.getTime() }))
+    .filter((item): item is LogStat & { timestamp: number } => item.timestamp !== undefined)
+    .sort((left, right) => left.timestamp - right.timestamp);
+  if (normalized.length === 0) return stats.slice(-28);
+
+  const totals = new Map(normalized.map((item) => [formatLogHour(new Date(item.timestamp)), Number(item.total || 0)]));
+  const first = normalized[0].timestamp;
+  const last = normalized[normalized.length - 1].timestamp;
+  const hours = Math.round((last - first) / (60 * 60 * 1000));
+  // A large retention range may span years; keep its sparse buckets rather than
+  // allocating tens of thousands of synthetic DOM nodes.
+  if (hours > 24 * 31) return normalized.map(({ date, total }) => ({ date, total }));
+
+  const result: LogStat[] = [];
+  for (let timestamp = first; timestamp <= last; timestamp += 60 * 60 * 1000) {
+    const date = formatLogHour(new Date(timestamp));
+    result.push({ date, total: totals.get(date) ?? 0 });
+  }
+  return result;
 }
 
 type CollectionEditorState = {
@@ -358,11 +538,32 @@ type CollectionEditorState = {
 
 type RecordEditorState = {
   record?: RecordItem;
+  mode?: "duplicate";
+  /** Nested relation forms need a stable, parent-scoped draft namespace. */
+  draftKey?: string;
+};
+
+/** A record editor opened from a relation field. It deliberately stays off the
+ * primary hash route so the parent record draft remains intact underneath it. */
+type RelationRecordEditorState = RecordEditorState & {
+  editorId: string;
+  collection: CollectionSchema;
+  onSaved?: (record: RelationRecord) => void;
 };
 
 type ToastState = {
   kind: "ok" | "error";
   message: string;
+};
+
+type S3TestState = {
+  status: "idle" | "testing" | "success" | "error";
+  message: string;
+};
+
+type BackupOperation = {
+  kind: "create" | "restore";
+  key?: string;
 };
 
 type OAuthResultState = {
@@ -378,6 +579,13 @@ const TOKEN_KEY = "pbj_token";
 const PINNED_COLLECTIONS_KEY = "pbj_pinned_collections";
 const HIDDEN_COLUMNS_KEY = "pbj_hidden_columns";
 const THEME_KEY = "pbj_theme";
+const ACTIVE_COLLECTION_KEY = "pbj_active_collection";
+const SIDEBAR_WIDTH_KEY = "pbj_sidebar_width";
+const SEARCH_HISTORY_LIMIT = 15;
+// Keep bulk deletion bounded even when selection spans many loaded pages. This
+// matches PocketBase's batch-oriented UX without flooding a Java server with an
+// unbounded Promise.all request fan-out.
+const RECORD_DELETE_BATCH_SIZE = 100;
 const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
@@ -395,12 +603,15 @@ function App() {
   const [setupRequired, setSetupRequired] = useState(true);
   const [confirmState, setConfirmState] = useState<PendingConfirm | null>(null);
   const [apiPreviewOpen, setApiPreviewOpen] = useState(false);
+  const [collectionsOverviewOpen, setCollectionsOverviewOpen] = useState(false);
   const [mfaChallenge, setMfaChallenge] = useState<MfaChallenge | null>(null);
   const [otpCode, setOtpCode] = useState("");
   const [collections, setCollections] = useState<CollectionSchema[]>([]);
   const [selectedName, setSelectedName] = useState<string>("");
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [recordPage, setRecordPage] = useState<ListResponse<RecordItem> | null>(null);
+  const [recordRoutePage, setRecordRoutePage] = useState(1);
+  const [recordRouteId, setRecordRouteId] = useState("");
   const [query, setQuery] = useState<QueryState>({ filter: "", sort: "-created", perPage: 50 });
   const [view, setView] = useState<ViewName>("records");
   const [collectionSearch, setCollectionSearch] = useState("");
@@ -410,14 +621,27 @@ function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [collectionEditor, setCollectionEditor] = useState<CollectionEditorState | null>(null);
   const [recordEditor, setRecordEditor] = useState<RecordEditorState | null>(null);
+  const [relationRecordEditors, setRelationRecordEditors] = useState<RelationRecordEditorState[]>([]);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
+  const [backupOperation, setBackupOperation] = useState<BackupOperation | null>(null);
   const [backupName, setBackupName] = useState("");
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsDraft, setSettingsDraft] = useState("");
+  const [accentPreview, setAccentPreview] = useState<string | null>(null);
+  const [logsSettingsOpen, setLogsSettingsOpen] = useState(false);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [logPage, setLogPage] = useState<ListResponse<LogItem> | null>(null);
+  const [logRoutePage, setLogRoutePage] = useState(1);
+  const [logRouteId, setLogRouteId] = useState("");
+  // Keep the editable value separate from the hash-backed query so typing does
+  // not start a request before the user chooses Apply.
   const [logFilter, setLogFilter] = useState("");
+  const [logFilterDraft, setLogFilterDraft] = useState("");
+  const [logTimeRange, setLogTimeRange] = useState<LogTimeRange | null>(null);
+  const [includeSuperuserRequests, setIncludeSuperuserRequests] = useState(false);
+  const [selectedLog, setSelectedLog] = useState<LogItem | null>(null);
   const [logStats, setLogStats] = useState<LogStat[]>([]);
+  const [logRefreshVersion, setLogRefreshVersion] = useState(0);
   const [crons, setCrons] = useState<CronJob[]>([]);
   const [oauthProviders, setOauthProviders] = useState<OAuthProviderMetadata[]>([]);
   const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
@@ -425,6 +649,7 @@ function App() {
   const [oauthTestingProvider, setOauthTestingProvider] = useState<string>("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemeMode);
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveThemeMode(readThemeMode()));
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [pinnedCollectionNames, setPinnedCollectionNames] = useState<string[]>(() =>
     readStringArray(PINNED_COLLECTIONS_KEY)
   );
@@ -432,17 +657,35 @@ function App() {
     readStringArrayRecord(HIDDEN_COLUMNS_KEY)
   );
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [recordsNeedRefresh, setRecordsNeedRefresh] = useState(false);
   const [sqlQuery, setSqlQuery] = useState("select 1");
   const [sqlResult, setSqlResult] = useState<SqlResult | null>(null);
   const [sqlError, setSqlError] = useState("");
+  const [sqlElapsedMs, setSqlElapsedMs] = useState<number | null>(null);
   const [exportDraft, setExportDraft] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [deleteMissingCollections, setDeleteMissingCollections] = useState(true);
   const [testEmail, setTestEmail] = useState("");
   const [testEmailTemplate, setTestEmailTemplate] = useState("verification");
   const [testS3Target, setTestS3Target] = useState("storage");
+  const [s3TestState, setS3TestState] = useState<S3TestState>({ status: "idle", message: "" });
   const backupUploadRef = useRef<HTMLInputElement>(null);
   const lastSelectedId = useRef<string | null>(null);
+  const recordPageCacheRef = useRef<{ scope: string; pages: Map<number, ListResponse<RecordItem>> }>({
+    scope: "",
+    pages: new Map()
+  });
+  const logPageCacheRef = useRef<LogPageCache>({ scope: "", pages: new Map(), stats: null });
+  const recordsLoadGenerationRef = useRef(0);
+  const logsLoadGenerationRef = useRef(0);
+  const recordDetailGenerationRef = useRef(0);
+  const relationEditorSequenceRef = useRef(0);
+  const s3TestRequestIdRef = useRef(0);
+  const sqlHideControlsConfirmationRef = useRef(false);
+  const syncChannelRef = useRef<BroadcastChannel | null>(null);
+  const syncSourceRef = useRef(`pbj-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const settingsRef = useRef<AppSettings | null>(null);
+  const settingsDraftRef = useRef("");
 
   const authenticated = Boolean(token) && !setupRequired;
   const collectionView = view === "records" || view === "schema";
@@ -451,6 +694,35 @@ function App() {
     () => collections.find((collection) => collection.name === selectedName) ?? null,
     [collections, selectedName]
   );
+  const hideControls = settingsHideControls(settings);
+  const accentColor = accentPreview ?? settingsAccentColor(settings);
+
+  const replaceHash = useCallback((nextHash: string) => {
+    if (window.location.hash === nextHash) return;
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+    setHash(nextHash);
+  }, []);
+
+  const replaceRecordRoute = useCallback(
+    (nextQuery = query, page = recordRoutePage, recordId = recordRouteId) => {
+      if (!selectedName) return;
+      replaceHash(adminHashFor("records", selectedName, recordRouteParams(nextQuery, page, recordId)));
+    },
+    [query, recordRouteId, recordRoutePage, replaceHash, selectedName]
+  );
+
+  const replaceLogRoute = useCallback(
+    (
+      filter = logFilter,
+      page = logRoutePage,
+      includeSuperusers = includeSuperuserRequests,
+      logId = logRouteId,
+      timeRange = logTimeRange
+    ) => {
+      replaceHash(adminHashFor("logs", undefined, logRouteParams(filter, page, includeSuperusers, logId, timeRange)));
+    },
+    [includeSuperuserRequests, logFilter, logRouteId, logRoutePage, logTimeRange, replaceHash]
+  );
 
   const navigateTo = useCallback(
     (nextView: ViewName, collectionName = selectedName) => {
@@ -458,12 +730,20 @@ function App() {
         setSelectedName(collectionName);
       }
       setView(nextView);
-      const nextHash = adminHashFor(nextView, collectionName);
+      const nextHash = adminHashFor(
+        nextView,
+        collectionName,
+        nextView === "records"
+          ? recordRouteParams(query, 1)
+          : nextView === "logs"
+            ? logRouteParams(logFilter, 1, includeSuperuserRequests, "", logTimeRange)
+            : {}
+      );
       if (window.location.hash !== nextHash) {
         window.location.hash = nextHash;
       }
     },
-    [selectedName]
+    [includeSuperuserRequests, logFilter, logTimeRange, query, selectedName]
   );
 
   useEffect(() => {
@@ -475,8 +755,43 @@ function App() {
         setSelectedName(route.collectionName);
       }
     }
+    if (route.view === "records") {
+      const nextQuery = queryFromRoute(route.params);
+      const nextRecordId = route.params.record ?? "";
+      const collectionChanged = Boolean(route.collectionName && route.collectionName !== selectedName);
+      setQuery((current) =>
+        current.filter === nextQuery.filter && current.sort === nextQuery.sort && current.perPage === nextQuery.perPage
+          ? current
+          : nextQuery
+      );
+      setRecordRoutePage(routeNumber(route.params.page, 1, 1, 20));
+      setRecordRouteId(nextRecordId);
+      setRecordEditor((current) => {
+        if (collectionChanged) return null;
+        if (nextRecordId && current?.record?.id !== nextRecordId) return null;
+        if (!nextRecordId && current?.record && current.mode !== "duplicate") return null;
+        return current;
+      });
+    } else {
+      setRecordRouteId("");
+      setRecordEditor(null);
+    }
+    if (route.view === "logs") {
+      const nextLogId = route.params.log ?? "";
+      const nextLogFilter = route.params.filter ?? "";
+      setLogFilter(nextLogFilter);
+      setLogFilterDraft(nextLogFilter);
+      setLogRoutePage(routeNumber(route.params.page, 1, 1, 20));
+      setIncludeSuperuserRequests(route.params.superuserRequests === "1");
+      setLogRouteId(nextLogId);
+      setLogTimeRange(logTimeRangeFromRoute(route.params));
+      setSelectedLog((current) => (current?.id === nextLogId ? current : null));
+    } else {
+      setLogRouteId("");
+      setSelectedLog(null);
+    }
     setView(route.view);
-  }, [authenticated, collections, hash]);
+  }, [authenticated, collections, hash, selectedName]);
 
   const visibleCollections = useMemo(() => {
     const search = collectionSearch.trim().toLowerCase();
@@ -488,7 +803,8 @@ function App() {
 
   const hiddenColumns = useMemo(() => {
     if (!selected) return [];
-    return hiddenColumnsByCollection[selected.name] ?? [];
+    const preferences = hiddenColumnPreferencesFor(selected, hiddenColumnsByCollection);
+    return recordColumns(selected).filter((column) => preferences.includes(columnPreferenceKey(selected, column)) || preferences.includes(column));
   }, [hiddenColumnsByCollection, selected]);
 
   const notify = useCallback((message: string, kind: ToastState["kind"] = "ok") => {
@@ -502,6 +818,22 @@ function App() {
       return apiRequest<T>(path, token, options);
     },
     [token]
+  );
+
+  const getFileToken = useCallback(async () => {
+    const response = await api<{ token: string }>("/api/files/token", { method: "POST" });
+    return response.token;
+  }, [api]);
+
+  const generateAppleClientSecret = useCallback(
+    (input: AppleClientSecretInput) =>
+      api<{ secret: string }>("/api/settings/apple/generate-client-secret", { method: "POST", body: input }),
+    [api]
+  );
+
+  const dryRunView = useCallback(
+    (query: string) => api<ViewQueryPreview>("/api/collections/meta/dry-run-view", { method: "POST", body: { query } }),
+    [api]
   );
 
   const refreshHealth = useCallback(async (authToken = token) => {
@@ -529,6 +861,8 @@ function App() {
           return route.collectionName;
         }
         if (current && data.items.some((collection) => collection.name === current)) return current;
+        const remembered = localStorage.getItem(ACTIVE_COLLECTION_KEY) || "";
+        if (remembered && data.items.some((collection) => collection.name === remembered)) return remembered;
         return data.items.find((collection) => collection.name !== "_superusers")?.name ?? data.items[0]?.name ?? "";
       });
     } finally {
@@ -536,35 +870,140 @@ function App() {
     }
   }, [token]);
 
+  const fetchRecordsPage = useCallback(
+    async (
+      collectionName: string,
+      nextQuery: QueryState,
+      page: number,
+      options: { force?: boolean; signal?: AbortSignal } = {}
+    ) => {
+      if (!token || !collectionName) return null;
+      const collection = collections.find((item) => item.name === collectionName);
+      // Eagerly expand first-level relations so cells can show summaries instead of raw ids.
+      const relationFields = (collection?.fields ?? [])
+        .filter((field) => field.type === "relation" && !field.hidden)
+        .map((field) => field.name);
+      const filter = normalizeSearchFilter(nextQuery.filter, collection);
+      const scope = JSON.stringify({
+        collectionName,
+        perPage: nextQuery.perPage,
+        sort: nextQuery.sort,
+        filter,
+        expand: relationFields
+      });
+      let cache = recordPageCacheRef.current;
+      if (cache.scope !== scope || options.force) {
+        cache = { scope, pages: new Map() };
+        recordPageCacheRef.current = cache;
+      }
+      if (!options.force) {
+        const cached = cache.pages.get(page);
+        if (cached) return cached;
+      }
+      const qs = buildQuery({
+        page,
+        perPage: nextQuery.perPage,
+        sort: nextQuery.sort,
+        filter,
+        ...(relationFields.length ? { expand: relationFields.join(",") } : {})
+      });
+      const data = await apiRequest<ListResponse<RecordItem>>(
+        `/api/collections/${encodeURIComponent(collectionName)}/records?${qs}`,
+        token,
+        { signal: options.signal }
+      );
+      if (options.signal?.aborted) return null;
+      if (recordPageCacheRef.current === cache) cache.pages.set(page, data);
+      return data;
+    },
+    [collections, token]
+  );
+
   const refreshRecords = useCallback(
-    async (collectionName = selectedName, nextQuery = query, page = 1) => {
-      if (!token || !collectionName) return;
+    async (
+      collectionName = selectedName,
+      nextQuery = query,
+      page = 1,
+      options: { force?: boolean; signal?: AbortSignal } = {}
+    ) => {
+      if (!collectionName) return null;
+      const generation = ++recordsLoadGenerationRef.current;
       setLoading(true);
       try {
-        const collection = collections.find((item) => item.name === collectionName);
-        // Eagerly expand first-level relations so cells can show summaries instead of raw ids.
-        const relationFields = (collection?.fields ?? [])
-          .filter((field) => field.type === "relation" && !field.hidden)
-          .map((field) => field.name);
-        const qs = buildQuery({
-          page,
-          perPage: nextQuery.perPage,
-          sort: nextQuery.sort,
-          filter: normalizeSearchFilter(nextQuery.filter, collection),
-          ...(relationFields.length ? { expand: relationFields.join(",") } : {})
+        const data = await fetchRecordsPage(collectionName, nextQuery, page, {
+          ...options,
+          force: options.force ?? true
         });
-        const data = await apiRequest<ListResponse<RecordItem>>(
-          `/api/collections/${encodeURIComponent(collectionName)}/records?${qs}`,
-          token
-        );
+        if (!data || options.signal?.aborted || generation !== recordsLoadGenerationRef.current) return data;
         setRecordPage(data);
-        setRecords((prev) => (page > 1 ? [...prev, ...data.items] : data.items));
+        setRecords((prev) => (page > 1 ? mergeRecordItems(prev, data.items) : data.items));
+        setRecordsNeedRefresh(false);
+        return data;
       } finally {
-        setLoading(false);
+        if (generation === recordsLoadGenerationRef.current) setLoading(false);
       }
     },
-    [collections, query, selectedName, token]
+    [fetchRecordsPage, query, selectedName]
   );
+
+  /**
+   * An update response does not carry relation expansion data, while the row in
+   * the loaded list often does. Merge the authoritative fields into every
+   * loaded copy instead of reloading page 1 and losing the user's scroll and
+   * cross-page selection.
+   */
+  function mergeSavedRecordIntoLoadedState(saved: RecordItem) {
+    const hasExpand = Object.prototype.hasOwnProperty.call(saved, "expand");
+    const merge = (current: RecordItem) =>
+      current.id === saved.id
+        ? { ...current, ...saved, ...(hasExpand ? {} : { expand: current.expand }) }
+        : current;
+
+    setRecords((current) => current.map(merge));
+    setRecordPage((current) => (current ? { ...current, items: current.items.map(merge) } : current));
+
+    const cache = recordPageCacheRef.current;
+    for (const [page, data] of cache.pages) {
+      if (!data.items.some((record) => record.id === saved.id)) continue;
+      cache.pages.set(page, { ...data, items: data.items.map(merge) });
+    }
+  }
+
+  /** Remove successfully deleted records from the currently loaded pages and cache. */
+  function removeRecordsFromLoadedState(ids: Iterable<string>) {
+    const deletedIds = new Set(ids);
+    if (deletedIds.size === 0) return;
+    const remove = (items: RecordItem[]) => items.filter((record) => !deletedIds.has(record.id));
+    const pageCount = (totalItems: number, perPage: number) =>
+      totalItems === 0 ? 0 : Math.ceil(totalItems / Math.max(1, perPage));
+
+    setRecords(remove);
+    setRecordPage((current) => {
+      if (!current) return current;
+      const totalItems = Math.max(0, current.totalItems - deletedIds.size);
+      return {
+        ...current,
+        items: remove(current.items),
+        totalItems,
+        totalPages: pageCount(totalItems, current.perPage)
+      };
+    });
+    setSelectedRecordIds((current) => current.filter((id) => !deletedIds.has(id)));
+
+    const cache = recordPageCacheRef.current;
+    for (const [page, data] of cache.pages) {
+      const totalItems = Math.max(0, data.totalItems - deletedIds.size);
+      cache.pages.set(page, {
+        ...data,
+        items: remove(data.items),
+        totalItems,
+        totalPages: pageCount(totalItems, data.perPage)
+      });
+    }
+    // Removing a row locally is immediate and safe, but a partially loaded
+    // page may now be missing records that moved up from a later page.
+    if (recordPage && records.length < recordPage.totalItems) setRecordsNeedRefresh(true);
+  }
 
   const confirm = useCallback(
     (request: ConfirmRequest) =>
@@ -588,10 +1027,13 @@ function App() {
     [collections, token]
   );
 
-  const loadMoreRecords = useCallback(async () => {
+  const loadMoreRecords = useCallback(() => {
     if (!selectedName || !recordPage) return;
-    await refreshRecords(selectedName, query, recordPage.page + 1);
-  }, [query, recordPage, refreshRecords, selectedName]);
+    const nextPage = recordPage.page + 1;
+    if (nextPage > recordPage.totalPages) return;
+    setRecordRoutePage(nextPage);
+    replaceRecordRoute(query, nextPage, recordRouteId);
+  }, [query, recordPage, recordRouteId, replaceRecordRoute, selectedName]);
 
   const refreshBackups = useCallback(async () => {
     if (!token) return;
@@ -639,33 +1081,114 @@ function App() {
     }
   }, [token]);
 
-  const refreshLogs = useCallback(
-    async (page = 1) => {
-      if (!token) return;
-      setLoading(true);
-      try {
-        const filter = normalizeSearchTerm(logFilter, LOG_SEARCH_FIELDS);
-        const qs = buildQuery({ page, perPage: 50, sort: "-created", filter });
-        const statsQs = buildQuery({ filter });
-        const [logData, statsData] = await Promise.all([
-          apiRequest<ListResponse<LogItem>>(`/api/logs?${qs}`, token),
-          // Keep the chart in sync with the active filter, like the official UI does.
-          apiRequest<LogStat[]>(`/api/logs/stats${statsQs ? `?${statsQs}` : ""}`, token)
-        ]);
-        setLogPage(logData);
-        setLogs((prev) => (page > 1 ? [...prev, ...logData.items] : logData.items));
-        setLogStats(statsData);
-      } finally {
-        setLoading(false);
+  const broadcastSync = useCallback((type: "collections" | "settings" | "theme", theme?: ThemeMode) => {
+    syncChannelRef.current?.postMessage({ source: syncSourceRef.current, type, theme });
+  }, []);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+    settingsDraftRef.current = settingsDraft;
+  }, [settings, settingsDraft]);
+
+  useEffect(() => {
+    if (!authenticated || typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("pocketbase-java-admin-sync");
+    syncChannelRef.current = channel;
+    channel.onmessage = (event: MessageEvent<{ source?: string; type?: string; theme?: ThemeMode }>) => {
+      const message = event.data;
+      if (!message || message.source === syncSourceRef.current) return;
+
+      if (message.type === "theme") {
+        if (message.theme === "light" || message.theme === "dark" || message.theme === "auto") {
+          localStorage.setItem(THEME_KEY, message.theme);
+          setThemeMode(message.theme);
+        }
+        return;
       }
+
+      if (message.type === "collections") {
+        void refreshCollections().catch((error) => notify(errorMessage(error), "error"));
+        return;
+      }
+
+      if (message.type === "settings") {
+        const currentSettings = settingsRef.current;
+        const hasLocalEdits = Boolean(
+          currentSettings && settingsDraftRef.current !== JSON.stringify(currentSettings, null, 2)
+        );
+        if (hasLocalEdits) {
+          notify(
+            t(
+              "settings.remote_update_pending",
+              "Settings changed in another tab. Refresh after resolving your local edits."
+            ),
+            "error"
+          );
+          return;
+        }
+        void refreshSettings().catch((error) => notify(errorMessage(error), "error"));
+      }
+    };
+    return () => {
+      if (syncChannelRef.current === channel) syncChannelRef.current = null;
+      channel.close();
+    };
+  }, [authenticated, notify, refreshCollections, refreshSettings, t]);
+
+  const getLogPageCache = useCallback((scope: string): LogPageCache => {
+    let cache = logPageCacheRef.current;
+    if (cache.scope !== scope) {
+      cache = { scope, pages: new Map(), stats: null };
+      logPageCacheRef.current = cache;
+    }
+    return cache;
+  }, []);
+
+  const fetchLogsPage = useCallback(
+    async (page: number, filter: string, scope: string, signal?: AbortSignal) => {
+      if (!token) return null;
+      const cache = getLogPageCache(scope);
+      const cached = cache.pages.get(page);
+      if (cached) return cached;
+
+      const qs = buildQuery({ page, perPage: 50, sort: "-created", filter });
+      const data = await apiRequest<ListResponse<LogItem>>(`/api/logs?${qs}`, token, { signal });
+      if (signal?.aborted) return null;
+      if (logPageCacheRef.current === cache) cache.pages.set(page, data);
+      return data;
     },
-    [logFilter, token]
+    [getLogPageCache, token]
   );
 
-  const loadMoreLogs = useCallback(async () => {
-    if (!logPage) return;
-    await refreshLogs(logPage.page + 1);
-  }, [logPage, refreshLogs]);
+  const fetchLogStats = useCallback(
+    async (filter: string, scope: string, signal?: AbortSignal) => {
+      if (!token) return null;
+      const cache = getLogPageCache(scope);
+      if (cache.stats !== null) return cache.stats;
+
+      const statsQs = buildQuery({ filter });
+      const data = await apiRequest<LogStat[]>(
+        `/api/logs/stats${statsQs ? `?${statsQs}` : ""}`,
+        token,
+        { signal }
+      );
+      if (signal?.aborted) return null;
+      if (logPageCacheRef.current === cache) cache.stats = data;
+      return data;
+    },
+    [getLogPageCache, token]
+  );
+
+  const requestLogRefresh = useCallback(() => {
+    setLogRefreshVersion((version) => version + 1);
+  }, []);
+
+  const loadMoreLogs = useCallback(() => {
+    if (!logPage || logPage.page >= logPage.totalPages) return;
+    const nextPage = logPage.page + 1;
+    setLogRoutePage(nextPage);
+    replaceLogRoute(logFilter, nextPage, includeSuperuserRequests, logRouteId, logTimeRange);
+  }, [includeSuperuserRequests, logFilter, logPage, logRouteId, logTimeRange, replaceLogRoute]);
 
   const refreshCrons = useCallback(async () => {
     if (!token) return;
@@ -733,6 +1256,39 @@ function App() {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(hiddenColumnsByCollection));
   }, [hiddenColumnsByCollection]);
 
+  // Older versions keyed both the collection and fields by their mutable names.
+  // Migrate each still-known preference as soon as schemas load, so subsequent
+  // field/collection renames retain the user's column visibility choice.
+  useEffect(() => {
+    if (collections.length === 0) return;
+    setHiddenColumnsByCollection((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const collection of collections) {
+        const storeKey = collectionPreferenceStoreKey(collection);
+        const legacyKey = collection.name;
+        const source = hiddenColumnPreferencesFor(collection, current);
+        const normalized = normalizeColumnPreferences(collection, source);
+        const stored = current[storeKey] ?? [];
+        const hasLegacy = storeKey !== legacyKey && Object.prototype.hasOwnProperty.call(current, legacyKey);
+        if (sameStringValues(stored, normalized) && !hasLegacy) continue;
+        changed = true;
+        if (normalized.length > 0) next[storeKey] = normalized;
+        else delete next[storeKey];
+        if (storeKey !== legacyKey) delete next[legacyKey];
+      }
+      return changed ? next : current;
+    });
+  }, [collections]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (selectedName) localStorage.setItem(ACTIVE_COLLECTION_KEY, selectedName);
+  }, [selectedName]);
+
   useEffect(() => {
     const media = window.matchMedia?.("(prefers-color-scheme: dark)");
     const applyTheme = () => {
@@ -751,14 +1307,77 @@ function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    setSelectedRecordIds([]);
-  }, [records, selectedName]);
+    const root = document.documentElement;
+    let themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!themeColor) {
+      themeColor = document.createElement("meta");
+      themeColor.name = "theme-color";
+      themeColor.dataset.pbjAccentColor = "true";
+      document.head.appendChild(themeColor);
+    }
+
+    if (accentColor) {
+      root.style.setProperty("--accentColor", accentColor);
+      themeColor.content = accentColor;
+    } else {
+      root.style.removeProperty("--accentColor");
+      themeColor.removeAttribute("content");
+    }
+  }, [accentColor]);
 
   useEffect(() => {
-    if (authenticated && selectedName && view === "records") {
-      refreshRecords(selectedName).catch((error) => notify(errorMessage(error), "error"));
+    return () => {
+      document.documentElement.style.removeProperty("--accentColor");
+      document.querySelector<HTMLMetaElement>('meta[name="theme-color"][data-pbj-accent-color="true"]')?.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hideControls) sqlHideControlsConfirmationRef.current = false;
+  }, [hideControls]);
+
+  useEffect(() => {
+    setSelectedRecordIds([]);
+    lastSelectedId.current = null;
+    setRecordsNeedRefresh(false);
+  }, [query.filter, query.perPage, query.sort, selectedName]);
+
+  useEffect(() => {
+    const generation = ++recordsLoadGenerationRef.current;
+    if (!authenticated || !selectedName || view !== "records") {
+      setLoading(false);
+      return undefined;
     }
-  }, [authenticated, notify, refreshRecords, selectedName, view]);
+    const controller = new AbortController();
+    const loadRoutePages = async () => {
+      setLoading(true);
+      try {
+        // Deep links may request several pages. They are independent, so fetch them
+        // concurrently and commit once in page order. The per-query cache prevents
+        // a Load more route update from re-fetching already loaded pages.
+        const requestedPages = Array.from({ length: recordRoutePage }, (_, index) => index + 1);
+        const result = await Promise.all(
+          requestedPages.map((page) =>
+            fetchRecordsPage(selectedName, query, page, { signal: controller.signal })
+          )
+        );
+        if (controller.signal.aborted || generation !== recordsLoadGenerationRef.current) return;
+        const pages = result.filter((page): page is ListResponse<RecordItem> => page !== null);
+        if (pages.length !== requestedPages.length) return;
+        setRecordPage(pages.at(-1) ?? null);
+        setRecords(mergeRecordItems([], pages.flatMap((page) => page.items)));
+        setRecordsNeedRefresh(false);
+      } catch (error) {
+        if (!controller.signal.aborted && generation === recordsLoadGenerationRef.current) {
+          notify(errorMessage(error), "error");
+        }
+      } finally {
+        if (generation === recordsLoadGenerationRef.current) setLoading(false);
+      }
+    };
+    void loadRoutePages();
+    return () => controller.abort();
+  }, [authenticated, fetchRecordsPage, notify, query, recordRoutePage, selectedName, view]);
 
   useEffect(() => {
     if (authenticated && view === "backups") {
@@ -773,16 +1392,88 @@ function App() {
   }, [authenticated, notify, refreshSettings, view]);
 
   useEffect(() => {
+    if (!authenticated || view !== "settings") return;
+    const timer = window.setInterval(() => {
+      void refreshHealth().catch(() => {
+        // The diagnostic is supplementary; keep editing available on transient failures.
+      });
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [authenticated, refreshHealth, view]);
+
+  useEffect(() => {
     if (authenticated && view === "export") {
       setExportDraft(JSON.stringify(collections, null, 2));
     }
   }, [authenticated, collections, view]);
 
   useEffect(() => {
-    if (authenticated && view === "logs") {
-      refreshLogs().catch((error) => notify(errorMessage(error), "error"));
+    const generation = ++logsLoadGenerationRef.current;
+    const route = adminRouteFromHash(hash);
+    if (!authenticated || view !== "logs" || route?.view !== "logs") {
+      return undefined;
     }
-  }, [authenticated, notify, refreshLogs, view]);
+
+    // Derive the request from the hash rather than the editable input state. This
+    // makes the route effect the single load owner even while a new filter is
+    // being typed, and prevents an old route from briefly loading after navigation.
+    const routeFilter = route.params.filter ?? "";
+    const routeTimeRange = logTimeRangeFromRoute(route.params);
+    const routePage = routeNumber(route.params.page, 1, 1, 20);
+    const routeIncludesSuperuserRequests = route.params.superuserRequests === "1";
+    const filter = logFilterWithVisibility(
+      combineLogFilters(
+        normalizeSearchTerm(routeFilter, LOG_SEARCH_FIELDS),
+        routeTimeRange ? logTimeRangeFilter(routeTimeRange) : ""
+      ),
+      routeIncludesSuperuserRequests
+    );
+    const scope = JSON.stringify({ filter, refreshVersion: logRefreshVersion });
+    const cache = getLogPageCache(scope);
+    const requestedPages = Array.from({ length: routePage }, (_, index) => index + 1);
+    const missingPages = requestedPages.filter((page) => !cache.pages.has(page));
+    const controller = new AbortController();
+
+    const loadRoutePages = async () => {
+      setLoading(true);
+      try {
+        const statsPromise =
+          cache.stats === null
+            ? fetchLogStats(filter, scope, controller.signal)
+            : Promise.resolve(cache.stats);
+        const [, stats] = await Promise.all([
+          Promise.all(missingPages.map((page) => fetchLogsPage(page, filter, scope, controller.signal))),
+          statsPromise
+        ]);
+        if (
+          controller.signal.aborted ||
+          generation !== logsLoadGenerationRef.current ||
+          logPageCacheRef.current !== cache ||
+          stats === null
+        ) {
+          return;
+        }
+
+        const pages = requestedPages.map((page) => cache.pages.get(page));
+        if (pages.some((page) => !page)) return;
+        const loadedPages = pages as ListResponse<LogItem>[];
+        setLogPage(loadedPages.at(-1) ?? null);
+        setLogs(mergeLogItems([], loadedPages.flatMap((page) => page.items)));
+        // Stats are loaded only for a new query scope. Loading another page uses
+        // the same cached series instead of repeating /api/logs/stats.
+        setLogStats(stats);
+      } catch (error) {
+        if (!controller.signal.aborted && generation === logsLoadGenerationRef.current) {
+          notify(errorMessage(error), "error");
+        }
+      } finally {
+        if (generation === logsLoadGenerationRef.current) setLoading(false);
+      }
+    };
+
+    void loadRoutePages();
+    return () => controller.abort();
+  }, [authenticated, fetchLogStats, fetchLogsPage, getLogPageCache, hash, logRefreshVersion, notify, view]);
 
   useEffect(() => {
     if (authenticated && view === "crons") {
@@ -797,6 +1488,49 @@ function App() {
     }
     setAuthMethods(null);
   }, [authenticated, notify, refreshAuthMethods, selectedName, view]);
+
+  useEffect(() => {
+    if (!authenticated || view !== "records" || !selectedName || !recordRouteId) return;
+    const generation = ++recordDetailGenerationRef.current;
+    const controller = new AbortController();
+    api<RecordItem>(
+      `/api/collections/${encodeURIComponent(selectedName)}/records/${encodeURIComponent(recordRouteId)}`,
+      { signal: controller.signal }
+    )
+      .then((record) => {
+        if (!controller.signal.aborted && generation === recordDetailGenerationRef.current) {
+          setRecordEditor({ record });
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || generation !== recordDetailGenerationRef.current) return;
+        notify(errorMessage(error), "error");
+        setRecordRouteId("");
+        replaceRecordRoute(query, recordRoutePage, "");
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [api, authenticated, notify, query, recordRouteId, recordRoutePage, replaceRecordRoute, selectedName, view]);
+
+  useEffect(() => {
+    if (!authenticated || view !== "logs" || !logRouteId) return;
+    if (selectedLog?.id === logRouteId) return;
+    let cancelled = false;
+    api<LogItem>(`/api/logs/${encodeURIComponent(logRouteId)}`)
+      .then((log) => {
+        if (!cancelled) setSelectedLog(log);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        notify(errorMessage(error), "error");
+        setLogRouteId("");
+        replaceLogRoute(logFilter, logRoutePage, includeSuperuserRequests, "");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, authenticated, includeSuperuserRequests, logFilter, logRouteId, logRoutePage, notify, replaceLogRoute, selectedLog?.id, view]);
 
   async function completeAuth(auth: AuthResponse) {
     setAuthToken(auth.token);
@@ -894,6 +1628,10 @@ function App() {
   }
 
   function setAuthToken(nextToken: string) {
+    recordPageCacheRef.current = { scope: "", pages: new Map() };
+    logPageCacheRef.current = { scope: "", pages: new Map(), stats: null };
+    recordsLoadGenerationRef.current += 1;
+    logsLoadGenerationRef.current += 1;
     setToken(nextToken);
     if (nextToken) {
       localStorage.setItem(TOKEN_KEY, nextToken);
@@ -904,6 +1642,7 @@ function App() {
 
   function logout() {
     setAuthToken("");
+    setLoading(false);
     setCollections([]);
     setRecords([]);
     setRecordPage(null);
@@ -940,6 +1679,7 @@ function App() {
       }
       setCollectionEditor(null);
       await refreshCollections();
+      broadcastSync("collections");
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -963,6 +1703,46 @@ function App() {
       notify(t("notifications.collection_deleted", "Collection deleted"));
       setSelectedName("");
       await refreshCollections();
+      broadcastSync("collections");
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function truncateCollection(collection: CollectionSchema) {
+    if (collection.system) return;
+    const confirmed = await confirm({
+      title: t("parity.collection.truncate_title", "Truncate collection"),
+      message: t("parity.collection.truncate_body", {
+        name: collection.name,
+        defaultValue: "Permanently delete every record and uploaded file in {{name}}. The collection schema will be kept."
+      }),
+      confirmLabel: t("parity.collection.truncate_action", "Truncate collection"),
+      danger: true,
+      requireText: collection.name
+    });
+    if (!confirmed) return;
+    try {
+      await api(`/api/collections/${encodeURIComponent(collection.name)}/truncate`, { method: "DELETE" });
+      notify(t("parity.notifications.collection_truncated", "Collection truncated"));
+      await refreshRecords(collection.name);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function duplicateCollection(collection: CollectionSchema) {
+    if (collection.system) return;
+    const name = nextDuplicateCollectionName(collection.name, collections);
+    try {
+      const created = await api<CollectionSchema>("/api/collections", {
+        method: "POST",
+        body: duplicateCollectionPayload(collection, name)
+      });
+      notify(t("parity.notifications.collection_duplicated", { name: created.name, defaultValue: "Collection {{name}} created" }));
+      await refreshCollections();
+      broadcastSync("collections");
+      navigateTo("schema", created.name);
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1037,22 +1817,201 @@ function App() {
     if (!selected) return;
     try {
       const body = recordRequestBody(payload, files);
-      const id = recordEditor?.record?.id;
+      // Duplicating begins with a source record for form defaults, but it must
+      // always create a new row rather than PATCHing that source ID.
+      const id = recordEditor?.mode === "duplicate" ? undefined : recordEditor?.record?.id;
       const path = id
         ? `/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`
         : `/api/collections/${encodeURIComponent(selected.name)}/records`;
       const saved = await api<RecordItem>(path, { method: id ? "PATCH" : "POST", body });
       notify(id ? t("notifications.record_saved", "Record saved") : t("notifications.record_created", "Record created"));
       if (options.close !== false) {
-        setRecordEditor(null);
+        closeRecordEditor();
       } else if (id) {
         setRecordEditor({ record: saved });
       }
-      await refreshRecords(selected.name);
+      if (id) {
+        mergeSavedRecordIntoLoadedState(saved);
+        if (recordListMayNeedRefresh(query)) setRecordsNeedRefresh(true);
+      } else {
+        // New rows may or may not belong to the active filter/sort. Reload only
+        // that case instead of making every edit jump the list back to page 1.
+        await refreshRecords(selected.name);
+      }
     } catch (error) {
       notify(errorMessage(error), "error");
       throw error;
     }
+  }
+
+  async function openRelationRecordEditor(
+    target: RelationCollection,
+    recordId: string | undefined,
+    onSaved: (record: RelationRecord) => void,
+    parentEditorId = "root"
+  ) {
+    const collection = collections.find((item) => item.id === target.id || item.name === target.name);
+    if (!collection || collection.type === "view") return;
+    try {
+      const record = recordId
+        ? await api<RecordItem>(
+            `/api/collections/${encodeURIComponent(collection.name)}/records/${encodeURIComponent(recordId)}`
+          )
+        : undefined;
+      const editorId = `relation-${++relationEditorSequenceRef.current}`;
+      setRelationRecordEditors((current) => [
+        ...current,
+        {
+          editorId,
+          // A child form uses its parent's editor id as a namespace. This lets a
+          // multi-level relation workflow preserve each draft independently.
+          draftKey: `pbj_relation_draft_${collection.id || collection.name}_${record?.id || "new"}_${parentEditorId}`,
+          collection,
+          record,
+          onSaved
+        }
+      ]);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
+  async function saveRelationRecord(
+    payload: Record<string, unknown>,
+    files: Record<string, File[]>,
+    options: { close?: boolean } = {}
+  ) {
+    const editor = relationRecordEditors[relationRecordEditors.length - 1];
+    if (!editor) return;
+    try {
+      const body = recordRequestBody(payload, files);
+      const id = editor.mode === "duplicate" ? undefined : editor.record?.id;
+      const path = id
+        ? `/api/collections/${encodeURIComponent(editor.collection.name)}/records/${encodeURIComponent(id)}`
+        : `/api/collections/${encodeURIComponent(editor.collection.name)}/records`;
+      const saved = await api<RecordItem>(path, { method: id ? "PATCH" : "POST", body });
+      editor.onSaved?.(saved);
+      notify(id ? t("notifications.record_saved", "Record saved") : t("notifications.record_created", "Record created"));
+
+      // A self-relation can change the table currently shown behind the form.
+      // Keep that projection correct without rerouting or discarding the parent draft.
+      if (editor.collection.name === selectedName) {
+        if (id) {
+          mergeSavedRecordIntoLoadedState(saved);
+          if (recordListMayNeedRefresh(query)) setRecordsNeedRefresh(true);
+        }
+        else await refreshRecords(editor.collection.name);
+      }
+
+      if (options.close !== false) {
+        setRelationRecordEditors((current) => {
+          const top = current[current.length - 1];
+          return top?.editorId === editor.editorId ? current.slice(0, -1) : current;
+        });
+      } else if (id) {
+        setRelationRecordEditors((current) =>
+          current.map((candidate, index) =>
+            index === current.length - 1 && candidate.editorId === editor.editorId
+              ? { ...candidate, record: saved }
+              : candidate
+          )
+        );
+      }
+    } catch (error) {
+      notify(errorMessage(error), "error");
+      throw error;
+    }
+  }
+
+  function duplicateRelationRecord() {
+    setRelationRecordEditors((current) =>
+      current.map((editor, index) =>
+        index === current.length - 1 && editor.record ? { ...editor, mode: "duplicate" } : editor
+      )
+    );
+  }
+
+  function closeRelationRecordEditor(editorId: string) {
+    setRelationRecordEditors((current) => {
+      const top = current[current.length - 1];
+      return top?.editorId === editorId ? current.slice(0, -1) : current;
+    });
+  }
+
+  function openRecordEditor(record?: RecordItem) {
+    const recordId = record?.id ?? "";
+    // The table row is a list projection and can be stale or omit fields. Route
+    // record edits through the detail effect so both clicks and deep links use
+    // the same GET /records/{id} freshness boundary.
+    setRecordEditor(record ? null : {});
+    setRecordRouteId(recordId);
+    replaceRecordRoute(query, recordRoutePage, recordId);
+  }
+
+  function openRecordDuplicate(record: RecordItem) {
+    setRecordEditor({ record, mode: "duplicate" });
+    setRecordRouteId("");
+    replaceRecordRoute(query, recordRoutePage, "");
+  }
+
+  function closeRecordEditor() {
+    setRecordEditor(null);
+    setRecordRouteId("");
+    replaceRecordRoute(query, recordRoutePage, "");
+  }
+
+  function openLogDetails(log: LogItem) {
+    setSelectedLog(log);
+    setLogRouteId(log.id);
+    replaceLogRoute(logFilter, logRoutePage, includeSuperuserRequests, log.id);
+  }
+
+  function closeLogDetails() {
+    setSelectedLog(null);
+    setLogRouteId("");
+    replaceLogRoute(logFilter, logRoutePage, includeSuperuserRequests, "");
+  }
+
+  async function requestRecordVerification(collection: CollectionSchema, record: RecordItem) {
+    const email = typeof record.email === "string" ? record.email.trim() : "";
+    if (!email) throw new Error(t("parity.errors.auth_record_missing_email", "This auth record has no email address."));
+    await api(`/api/collections/${encodeURIComponent(collection.name)}/request-verification`, {
+      method: "POST",
+      body: { email }
+    });
+    notify(t("parity.notifications.verification_sent", "Verification email requested"));
+  }
+
+  async function requestRecordPasswordReset(collection: CollectionSchema, record: RecordItem) {
+    const email = typeof record.email === "string" ? record.email.trim() : "";
+    if (!email) throw new Error(t("parity.errors.auth_record_missing_email", "This auth record has no email address."));
+    await api(`/api/collections/${encodeURIComponent(collection.name)}/request-password-reset`, {
+      method: "POST",
+      body: { email }
+    });
+    notify(t("parity.notifications.password_reset_sent", "Password reset email requested"));
+  }
+
+  async function impersonateAuthRecord(
+    collection: CollectionSchema,
+    record: RecordItem,
+    duration: number
+  ): Promise<ImpersonationResult> {
+    return api<ImpersonationResult>(
+      `/api/collections/${encodeURIComponent(collection.name)}/impersonate/${encodeURIComponent(record.id)}`,
+      { method: "POST", body: { duration } }
+    );
+  }
+
+  async function loadExternalAuthLinks(collection: CollectionSchema, record: RecordItem): Promise<AuthRecordLink[]> {
+    const filter = `collectionRef=${JSON.stringify(collection.id)} && recordRef=${JSON.stringify(record.id)}`;
+    const qs = buildQuery({ page: 1, perPage: 500, sort: "-created", filter });
+    const response = await api<ListResponse<AuthRecordLink>>(`/api/collections/_externalAuths/records?${qs}`);
+    return response.items;
+  }
+
+  async function unlinkExternalAuth(link: AuthRecordLink) {
+    await api(`/api/collections/_externalAuths/records/${encodeURIComponent(link.id)}`, { method: "DELETE" });
   }
 
   async function deleteRecord(record: RecordItem) {
@@ -1069,7 +2028,7 @@ function App() {
         method: "DELETE"
       });
       notify(t("notifications.record_deleted", "Record deleted"));
-      await refreshRecords(selected.name);
+      removeRecordsFromLoadedState([record.id]);
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1088,16 +2047,33 @@ function App() {
     });
     if (!confirmed) return;
     try {
-      await Promise.all(
-        selectedRecordIds.map((id) =>
-          api(`/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`, {
-            method: "DELETE"
-          })
-        )
-      );
+      const ids = [...selectedRecordIds];
+      const deletedIds: string[] = [];
+      let failure: unknown;
+      let failed = false;
+      for (let offset = 0; offset < ids.length; offset += RECORD_DELETE_BATCH_SIZE) {
+        const batch = ids.slice(offset, offset + RECORD_DELETE_BATCH_SIZE);
+        const results = await Promise.allSettled(
+          batch.map((id) =>
+            api(`/api/collections/${encodeURIComponent(selected.name)}/records/${encodeURIComponent(id)}`, {
+              method: "DELETE"
+            })
+          )
+        );
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") deletedIds.push(batch[index]);
+          else if (!failed) {
+            failure = result.reason;
+            failed = true;
+          }
+        });
+        // Do not start another hundred deletes once one batch has a failure;
+        // completed requests are still reflected locally below.
+        if (failed) break;
+      }
+      removeRecordsFromLoadedState(deletedIds);
+      if (failed) throw failure;
       notify(t("notifications.records_deleted", "Records deleted"));
-      setSelectedRecordIds([]);
-      await refreshRecords(selected.name);
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -1149,13 +2125,19 @@ function App() {
   function toggleColumn(column: string) {
     if (!selected) return;
     setHiddenColumnsByCollection((current) => {
-      const existing = new Set(current[selected.name] ?? []);
-      if (existing.has(column)) {
-        existing.delete(column);
+      const storeKey = collectionPreferenceStoreKey(selected);
+      const key = columnPreferenceKey(selected, column);
+      const existing = new Set(normalizeColumnPreferences(selected, hiddenColumnPreferencesFor(selected, current)));
+      if (existing.has(key)) {
+        existing.delete(key);
       } else {
-        existing.add(column);
+        existing.add(key);
       }
-      return { ...current, [selected.name]: Array.from(existing) };
+      const next = { ...current };
+      if (existing.size > 0) next[storeKey] = Array.from(existing);
+      else delete next[storeKey];
+      if (storeKey !== selected.name) delete next[selected.name];
+      return next;
     });
   }
 
@@ -1163,6 +2145,7 @@ function App() {
     if (!selected) return;
     setHiddenColumnsByCollection((current) => {
       const next = { ...current };
+      delete next[collectionPreferenceStoreKey(selected)];
       delete next[selected.name];
       return next;
     });
@@ -1171,14 +2154,19 @@ function App() {
   async function openFile(record: RecordItem, filename: string) {
     if (!selected) return;
     try {
-      let tokenQuery = "";
+      const parameters = new URLSearchParams();
       try {
         const fileToken = await api<{ token: string }>("/api/files/token", { method: "POST" });
-        tokenQuery = fileToken.token ? `?token=${encodeURIComponent(fileToken.token)}` : "";
+        if (fileToken.token) parameters.set("token", fileToken.token);
       } catch {
-        tokenQuery = "";
+        // Public file rules don't require a token.
       }
-      const url = `/api/files/${encodeURIComponent(selected.name)}/${encodeURIComponent(record.id)}/${encodeURIComponent(filename)}${tokenQuery}`;
+      // A browser navigation gives an uploaded document the admin origin. Keep the
+      // convenience preview for inert raster images only; all other record files are
+      // explicitly downloaded and receive the server-side sandbox headers as well.
+      if (!safeImageFilename(filename)) parameters.set("download", "1");
+      const query = parameters.toString();
+      const url = `/api/files/${encodeURIComponent(selected.name)}/${encodeURIComponent(record.id)}/${encodeURIComponent(filename)}${query ? `?${query}` : ""}`;
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -1186,13 +2174,17 @@ function App() {
   }
 
   async function createBackup() {
+    const requestedName = backupName.trim();
+    setBackupOperation({ kind: "create", key: requestedName || undefined });
     try {
-      await api("/api/backups", { method: "POST", body: backupName.trim() ? { name: backupName.trim() } : {} });
+      await api("/api/backups", { method: "POST", body: requestedName ? { name: requestedName } : {} });
       setBackupName("");
       notify(t("notifications.backup_created", "Backup created"));
       await refreshBackups();
     } catch (error) {
       notify(errorMessage(error), "error");
+    } finally {
+      setBackupOperation((current) => (current?.kind === "create" ? null : current));
     }
   }
 
@@ -1244,13 +2236,18 @@ function App() {
       requireText: backup.key
     });
     if (!confirmed) return;
+    setBackupOperation({ kind: "restore", key: backup.key });
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}/restore`, { method: "POST" });
       notify(t("notifications.backup_restored", "Backup restored"));
       await refreshCollections();
       await refreshBackups();
+      broadcastSync("collections");
+      broadcastSync("settings");
     } catch (error) {
       notify(errorMessage(error), "error");
+    } finally {
+      setBackupOperation((current) => (current?.kind === "restore" && current.key === backup.key ? null : current));
     }
   }
 
@@ -1271,21 +2268,55 @@ function App() {
     }
   }
 
-  async function saveSettings() {
+  async function saveSettings(draft = settingsDraft): Promise<boolean> {
     try {
-      const parsed = JSON.parse(settingsDraft || "{}") as AppSettings;
+      const parsed = JSON.parse(draft || "{}") as AppSettings;
       // Rules are resolved in order, so normalise priority on save like the official UI.
       const limits = isPlainObject(parsed.rateLimits) ? parsed.rateLimits : null;
       if (limits && Array.isArray(limits.rules)) {
         limits.rules = sortRateLimitRules(limits.rules as RateLimitRule[]);
       }
+      const superuserIPs = Array.isArray(parsed.superuserIPs)
+        ? parsed.superuserIPs.map((value) => String(value).trim()).filter(Boolean)
+        : [];
+      const currentIp = health?.realIP?.trim() ?? "";
+      if (currentIp && superuserIPs.length > 0 && !superuserIPs.some((rule) => ipRuleAllows(currentIp, rule))) {
+        const confirmed = await confirm({
+          title: t("settings.superuser_ip_warning_title", "Current IP is not allowlisted"),
+          message: t("settings.superuser_ip_warning_body", {
+            ip: currentIp,
+            defaultValue:
+              "The new Superuser IP rules do not include {{ip}}. Saving can lock this browser out of the dashboard. Continue anyway?"
+          }),
+          confirmLabel: t("actions.save", "Save"),
+          danger: true
+        });
+        if (!confirmed) return false;
+      }
       await api<AppSettings>("/api/settings", { method: "PATCH", body: parsed });
+      // The HTTP layer starts enforcing new IP rules on the following request.
+      // Refresh now, so a potential lockout is surfaced while this tab is still open.
+      if (superuserIPs.length > 0) {
+        try {
+          const refreshed = await api<AuthResponse>("/api/collections/_superusers/auth-refresh", { method: "POST" });
+          if (refreshed.token) setAuthToken(refreshed.token);
+        } catch (error) {
+          notify(
+            `${t("settings.superuser_ip_refresh_failed", "The IP restriction was saved, but this browser is no longer authorized.")} ${errorMessage(error)}`,
+            "error"
+          );
+          return false;
+        }
+      }
       // Re-read instead of trusting the PATCH echo: the server normalises settings
       // (dedupes rate limit rules, redacts secrets) and the response can differ.
       await refreshSettings();
+      broadcastSync("settings");
       notify(t("notifications.settings_saved", "Settings saved"));
+      return true;
     } catch (error) {
       notify(errorMessage(error), "error");
+      return false;
     }
   }
 
@@ -1304,21 +2335,35 @@ function App() {
     }
   }
 
-  async function testS3Settings() {
+  async function testS3Settings(automatic = false) {
+    const requestId = ++s3TestRequestIdRef.current;
+    const draft = parseSettingsDraft(settingsDraft, settings);
+    const body =
+      testS3Target === "backups"
+        ? {
+            filesystem: "backups",
+            backups: { s3: settingsObject(settingsObject(draft, "backups"), "s3") }
+          }
+        : { filesystem: "storage", s3: settingsObject(draft, "s3") };
+    setS3TestState({ status: "testing", message: "" });
     try {
       await api("/api/settings/test/s3", {
         method: "POST",
-        body: {
-          filesystem: testS3Target
-        }
+        body
       });
-      notify(t("notifications.s3_check_completed", "S3 connection check completed"));
+      if (requestId !== s3TestRequestIdRef.current) return;
+      const message = t("settings.s3_test_success", "S3 connection verified");
+      setS3TestState({ status: "success", message });
+      if (!automatic) notify(t("notifications.s3_check_completed", "S3 connection check completed"));
     } catch (error) {
-      notify(errorMessage(error), "error");
+      if (requestId !== s3TestRequestIdRef.current) return;
+      const message = errorMessage(error);
+      setS3TestState({ status: "error", message });
+      if (!automatic) notify(message, "error");
     }
   }
 
-  async function importCollections() {
+  async function importCollections(): Promise<boolean> {
     try {
       const parsed = JSON.parse(importDraft || "{}");
       const collectionsPayload = Array.isArray(parsed)
@@ -1336,24 +2381,40 @@ function App() {
       });
       notify(t("notifications.collections_imported", "Collections imported"));
       await refreshCollections();
+      broadcastSync("collections");
       setExportDraft(JSON.stringify(collectionsPayload, null, 2));
+      return true;
     } catch (error) {
       notify(errorMessage(error), "error");
+      return false;
     }
   }
 
   async function runSql() {
-    const statement = DANGEROUS_SQL.find((keyword) =>
-      new RegExp(`^\\s*${keyword}\\b`, "i").test(sqlQuery)
-    );
-    if (statement) {
+    // Match statements anywhere in a batch/CTE, as the official console does.
+    // Checking only the first token misses `select ...; drop ...` and
+    // `with ... delete ...`.
+    const normalizedQuery = `${sqlQuery.replace(/[\\s;]/g, " ").toUpperCase()} `;
+    const statement = DANGEROUS_SQL.find((keyword) => normalizedQuery.includes(`${keyword.toUpperCase()} `));
+    const confirmForHideControls = hideControls && !sqlHideControlsConfirmationRef.current;
+    if (confirmForHideControls || statement) {
+      // PocketBase asks once even for a read-only query while hideControls is
+      // active. It is a deliberate acknowledgement, not an authorization gate.
+      if (confirmForHideControls) sqlHideControlsConfirmationRef.current = true;
       const confirmed = await confirm({
-        title: t("confirm.run_sql_title", "Run write statement"),
-        message: t("confirm.run_sql_body", {
-          statement: statement.toUpperCase(),
-          defaultValue:
-            "This query starts with {{statement}} and can modify or destroy data. Are you sure you want to execute it?"
-        }),
+        title: statement
+          ? t("confirm.run_sql_title", "Run write statement")
+          : t("confirm.run_sql_hide_controls_title", "Confirm SQL query"),
+        message: statement
+          ? t("confirm.run_sql_body", {
+              statement: statement.toUpperCase(),
+              defaultValue:
+                "This query contains {{statement}} and can modify or destroy data. Are you sure you want to execute it?"
+            })
+          : t(
+              "confirm.run_sql_hide_controls_body",
+              "Hide/Lock collection and record controls is enabled. Continue only if you understand that this SQL query may affect your application."
+            ),
         confirmLabel: t("actions.execute", "Execute"),
         danger: true
       });
@@ -1361,6 +2422,7 @@ function App() {
     }
     setSqlError("");
     setLoading(true);
+    const started = performance.now();
     try {
       const result = await api<SqlResult>("/api/sql", { method: "POST", body: { query: sqlQuery } });
       setSqlResult(result);
@@ -1371,6 +2433,7 @@ function App() {
       setSqlError(message);
       notify(message, "error");
     } finally {
+      setSqlElapsedMs(Math.round(performance.now() - started));
       setLoading(false);
     }
   }
@@ -1405,14 +2468,25 @@ function App() {
     [allColumns, hiddenColumns]
   );
   const pageMeta = viewMeta(view, selected, t);
+  const applicationName = settingsApplicationName(settings) || "pocketbase-java";
+  const documentTitle = authenticated && pageMeta.title !== applicationName ? `${pageMeta.title} · ${applicationName}` : applicationName;
   const showWorkspaceTopbar = !authenticated || (!collectionView && !settingsView && view !== "logs");
 
-  if (hash.startsWith('#/pbinstall/') || hash.startsWith('#/request-password-reset') || hash.startsWith('#/auth/confirm-')) {
+  useEffect(() => {
+    document.title = documentTitle;
+  }, [documentTitle]);
+
+  if (
+    hash.startsWith("#/pbinstall/") ||
+    hash.startsWith("#/request-password-reset") ||
+    hash.startsWith("#/auth/confirm-") ||
+    hash.startsWith("#/auth/oauth2-redirect-")
+  ) {
     return <AuthActionPages />;
   }
 
   return (
-    <div className="app-shell">
+    <div className={hideControls ? "app-shell hide-controls" : "app-shell"}>
       <header className="app-header">
         <button
           className="logo"
@@ -1455,6 +2529,7 @@ function App() {
           <ThemeSelector mode={themeMode} resolvedTheme={resolvedTheme} onChange={(nextMode) => {
             setThemeMode(nextMode);
             localStorage.setItem(THEME_KEY, nextMode);
+            broadcastSync("theme", nextMode);
           }} />
           <StatusPill health={health} loading={loading} />
           <button className="icon-button header-icon" onClick={refreshAll} title={t("actions.refresh")} aria-label={t("actions.refresh")}>
@@ -1468,22 +2543,36 @@ function App() {
 
       <div className={view === "logs" ? "app-body app-body-wide" : "app-body"}>
         {authenticated && !setupRequired && collectionView && (
-          <CollectionSidebar
-            collections={visibleCollections}
-            currentName={selectedName}
-            pinnedNames={pinnedCollectionNames}
-            search={collectionSearch}
-            onSearch={setCollectionSearch}
-            onCreate={() => setCollectionEditor({ mode: "create" })}
-            onSelect={(collection) => {
-              navigateTo("records", collection.name);
-            }}
-            onTogglePinned={togglePinnedCollection}
-          />
+          <ResizableSidebar
+            width={sidebarWidth}
+            onWidthChange={setSidebarWidth}
+            label={t("nav.resize_sidebar", "Resize sidebar")}
+          >
+            <CollectionSidebar
+              collections={visibleCollections}
+              currentName={selectedName}
+              pinnedNames={pinnedCollectionNames}
+              search={collectionSearch}
+              hideControls={hideControls}
+              onSearch={setCollectionSearch}
+              onCreate={() => setCollectionEditor({ mode: "create" })}
+              onOverview={() => setCollectionsOverviewOpen(true)}
+              onSelect={(collection) => {
+                navigateTo("records", collection.name);
+              }}
+              onTogglePinned={togglePinnedCollection}
+            />
+          </ResizableSidebar>
         )}
 
         {authenticated && !setupRequired && settingsView && (
-          <SettingsSidebar current={view} onSelect={navigateTo} />
+          <ResizableSidebar
+            width={sidebarWidth}
+            onWidthChange={setSidebarWidth}
+            label={t("nav.resize_sidebar", "Resize sidebar")}
+          >
+            <SettingsSidebar current={view} onSelect={navigateTo} hideControls={hideControls} />
+          </ResizableSidebar>
         )}
 
         <main className={showWorkspaceTopbar ? "workspace" : "workspace workspace-flush"}>
@@ -1534,6 +2623,7 @@ function App() {
                   draft={settingsDraft}
                   backupName={backupName}
                   canBackup={Boolean(health?.canBackup)}
+                  operation={backupOperation}
                   loading={loading}
                   uploadRef={backupUploadRef}
                   onConfirm={confirm}
@@ -1551,11 +2641,13 @@ function App() {
                 <SettingsView
                   settings={settings}
                   draft={settingsDraft}
+                  health={health}
                   loading={loading}
                   collections={collections}
                   onDraft={setSettingsDraft}
                   onRefresh={refreshSettings}
                   onSave={saveSettings}
+                  onAccentPreview={setAccentPreview}
                 />
               ) : view === "mail" ? (
                 <MailSettingsView
@@ -1575,10 +2667,15 @@ function App() {
                   settings={settings}
                   draft={settingsDraft}
                   target={testS3Target}
+                  testState={s3TestState}
                   loading={loading}
                   onDraft={setSettingsDraft}
                   onSave={saveSettings}
-                  onTarget={setTestS3Target}
+                  onTarget={(value) => {
+                    s3TestRequestIdRef.current += 1;
+                    setTestS3Target(value);
+                    setS3TestState({ status: "idle", message: "" });
+                  }}
                   onTest={testS3Settings}
                 />
               ) : view === "export" ? (
@@ -1622,6 +2719,7 @@ function App() {
                   query={sqlQuery}
                   result={sqlResult}
                   error={sqlError}
+                  elapsedMs={sqlElapsedMs}
                   loading={loading}
                   sqlCompletions={sqlCompletions}
                   onQuery={setSqlQuery}
@@ -1631,12 +2729,43 @@ function App() {
                 <LogsView
                   logs={logs}
                   logPage={logPage}
-                  filter={logFilter}
+                  filter={logFilterDraft}
                   stats={logStats}
+                  timeRange={logTimeRange}
+                  includeSuperuserRequests={includeSuperuserRequests}
                   loading={loading}
-                  onFilter={setLogFilter}
-                  onRefresh={() => refreshLogs()}
+                  onFilter={setLogFilterDraft}
+                  onApply={() => {
+                    setLogFilter(logFilterDraft);
+                    setLogRoutePage(1);
+                    setLogRouteId("");
+                    replaceLogRoute(logFilterDraft, 1, includeSuperuserRequests, "", logTimeRange);
+                    requestLogRefresh();
+                  }}
+                  onIncludeSuperuserRequests={(value) => {
+                    setLogFilter(logFilterDraft);
+                    setIncludeSuperuserRequests(value);
+                    setLogRoutePage(1);
+                    setLogRouteId("");
+                    replaceLogRoute(logFilterDraft, 1, value, "", logTimeRange);
+                  }}
+                  onTimeRange={(range) => {
+                    setLogTimeRange(range);
+                    setLogRoutePage(1);
+                    setLogRouteId("");
+                    replaceLogRoute(logFilter, 1, includeSuperuserRequests, "", range);
+                  }}
+                  onClearTimeRange={() => {
+                    setLogTimeRange(null);
+                    setLogRoutePage(1);
+                    setLogRouteId("");
+                    replaceLogRoute(logFilter, 1, includeSuperuserRequests, "", null);
+                  }}
+                  onRefresh={requestLogRefresh}
                   onLoadMore={loadMoreLogs}
+                  onOpenLog={openLogDetails}
+                  onNotify={notify}
+                  onOpenSettings={() => setLogsSettingsOpen(true)}
                 />
               ) : view === "crons" ? (
                 <CronsView crons={crons} loading={loading} onRefresh={refreshCrons} onRun={runCron} />
@@ -1653,14 +2782,28 @@ function App() {
                     query={query}
                     recordPage={recordPage}
                     loading={loading}
-                    onQuery={setQuery}
-                    onApply={(nextQuery) => refreshRecords(selected.name, nextQuery)}
-                    onRefresh={() => refreshRecords(selected.name, query)}
+                    refreshSuggested={recordsNeedRefresh}
+                    hideControls={hideControls}
+                    onApply={(nextQuery) => {
+                      setQuery((current) =>
+                        current.filter === nextQuery.filter &&
+                        current.sort === nextQuery.sort &&
+                        current.perPage === nextQuery.perPage
+                          ? current
+                          : nextQuery
+                      );
+                      setRecordRoutePage(1);
+                      setRecordRouteId("");
+                      replaceRecordRoute(nextQuery, 1, "");
+                    }}
+                    onRefresh={async () => {
+                      await refreshRecords(selected.name, query);
+                    }}
                     onLoadMore={loadMoreRecords}
                     onEditCollection={() => setCollectionEditor({ mode: "edit", collection: selected })}
                     onApiPreview={() => setApiPreviewOpen(true)}
-                    onNew={() => setRecordEditor({})}
-                    onEdit={(record) => setRecordEditor({ record })}
+                    onNew={() => openRecordEditor()}
+                    onEdit={openRecordEditor}
                     onDelete={deleteRecord}
                     onDeleteSelected={deleteSelectedRecords}
                     onToggleColumn={toggleColumn}
@@ -1675,8 +2818,11 @@ function App() {
                     collection={selected}
                     authMethods={authMethods}
                     oauthTestingProvider={oauthTestingProvider}
+                    hideControls={hideControls}
                     onEdit={() => setCollectionEditor({ mode: "edit", collection: selected })}
                     onDelete={() => deleteCollection(selected)}
+                    onTruncate={() => truncateCollection(selected)}
+                    onDuplicate={() => duplicateCollection(selected)}
                     onOAuthTest={startOAuthTest}
                     onCopy={(value) => {
                       navigator.clipboard.writeText(value).then(
@@ -1701,21 +2847,67 @@ function App() {
           allCollections={collections}
           onClose={() => setCollectionEditor(null)}
           onConfirm={confirm}
+          onDryRunView={dryRunView}
+          onGenerateAppleClientSecret={generateAppleClientSecret}
           onSubmit={(payload) => saveCollection(payload)}
         />
       )}
 
       {recordEditor && selected && (
         <RecordModal
+          key={`${recordEditor.mode ?? "edit"}:${recordEditor.record?.id ?? "new"}`}
           collection={selected}
           collections={collections}
           state={recordEditor}
-          onClose={() => setRecordEditor(null)}
+          hideControls={hideControls}
+          onClose={closeRecordEditor}
           onConfirm={confirm}
           fetchRecords={fetchRelationRecords}
+          getFileToken={getFileToken}
+          onRequestVerification={() => requestRecordVerification(selected, recordEditor.record!)}
+          onRequestPasswordReset={() => requestRecordPasswordReset(selected, recordEditor.record!)}
+          onImpersonate={(duration) => impersonateAuthRecord(selected, recordEditor.record!, duration)}
+          onLoadExternalAuths={() => loadExternalAuthLinks(selected, recordEditor.record!)}
+          onUnlinkExternalAuth={unlinkExternalAuth}
+          onDuplicate={() => openRecordDuplicate(recordEditor.record!)}
+          onCreateRelationRecord={(target, onSaved) => {
+            void openRelationRecordEditor(target, undefined, onSaved);
+          }}
+          onEditRelationRecord={(target, id, onSaved) => {
+            void openRelationRecordEditor(target, id, onSaved);
+          }}
+          onNotify={notify}
           onSubmit={saveRecord}
         />
       )}
+
+      {relationRecordEditors.map((editor) => (
+        <RecordModal
+          key={`relation:${editor.editorId}:${editor.collection.id}:${editor.mode ?? "edit"}:${editor.record?.id ?? "new"}`}
+          collection={editor.collection}
+          collections={collections}
+          state={editor}
+          hideControls={hideControls}
+          onClose={() => closeRelationRecordEditor(editor.editorId)}
+          onConfirm={confirm}
+          fetchRecords={fetchRelationRecords}
+          getFileToken={getFileToken}
+          onRequestVerification={() => requestRecordVerification(editor.collection, editor.record!)}
+          onRequestPasswordReset={() => requestRecordPasswordReset(editor.collection, editor.record!)}
+          onImpersonate={(duration) => impersonateAuthRecord(editor.collection, editor.record!, duration)}
+          onLoadExternalAuths={() => loadExternalAuthLinks(editor.collection, editor.record!)}
+          onUnlinkExternalAuth={unlinkExternalAuth}
+          onDuplicate={duplicateRelationRecord}
+          onCreateRelationRecord={(target, onSaved) => {
+            void openRelationRecordEditor(target, undefined, onSaved, editor.editorId);
+          }}
+          onEditRelationRecord={(target, id, onSaved) => {
+            void openRelationRecordEditor(target, id, onSaved, editor.editorId);
+          }}
+          onNotify={notify}
+          onSubmit={saveRelationRecord}
+        />
+      ))}
 
       {oauthResult && (
         <OAuthResultModal result={oauthResult} onClose={() => setOauthResult(null)} />
@@ -1723,6 +2915,63 @@ function App() {
 
       {apiPreviewOpen && selected && (
         <ApiPreview collection={selected} baseUrl={window.location.origin} onClose={() => setApiPreviewOpen(false)} />
+      )}
+
+      {collectionsOverviewOpen && (
+        <CollectionsOverview
+          collections={collections}
+          onClose={() => setCollectionsOverviewOpen(false)}
+          onSelect={(name) => {
+            setCollectionsOverviewOpen(false);
+            navigateTo("schema", name);
+          }}
+        />
+      )}
+
+      {view === "logs" && selectedLog && (
+        <Modal
+          title={t("logs.log_title", { id: selectedLog.id, defaultValue: "Log {{id}}" })}
+          onClose={closeLogDetails}
+          wide
+        >
+          <div className="modal-grid">
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="subtle"
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(selectedLog, null, 2)).then(
+                    () => notify(t("notifications.copied", "Copied")),
+                    (error) => notify(errorMessage(error), "error")
+                  );
+                }}
+              >
+                <Copy size={16} />
+                {t("actions.copy_json", "Copy JSON")}
+              </button>
+              <button
+                type="button"
+                className="subtle"
+                onClick={() => downloadJsonFile(selectedLog, `pocketbase-log-${selectedLog.id}.json`)}
+              >
+                <Download size={16} />
+                {t("actions.download_json", "Download as JSON")}
+              </button>
+            </div>
+            <pre className="json-panel log-json">{JSON.stringify(selectedLog, null, 2)}</pre>
+          </div>
+        </Modal>
+      )}
+
+      {logsSettingsOpen && (
+        <LogSettingsModal
+          settings={settings}
+          draft={settingsDraft}
+          loading={loading}
+          onDraft={setSettingsDraft}
+          onSave={saveSettings}
+          onClose={() => setLogsSettingsOpen(false)}
+        />
       )}
 
       {confirmState && (
@@ -1825,10 +3074,9 @@ function AuthPanel(props: AuthPanelProps) {
         </label>
         <label>
           {t("auth.password", "Password")}
-          <input
+          <PasswordInput
             id="superuser-password"
             name="password"
-            type="password"
             autoComplete={props.setupRequired ? "new-password" : "current-password"}
             required
             minLength={8}
@@ -1836,6 +3084,17 @@ function AuthPanel(props: AuthPanelProps) {
             onChange={(event) => props.onPassword(event.target.value)}
           />
         </label>
+        {!props.setupRequired && (
+          <button
+            type="button"
+            className="subtle compact auth-forgot-password"
+            onClick={() => {
+              window.location.hash = "#/request-password-reset?collection=_superusers";
+            }}
+          >
+            {t("auth.forgot_password", "Forgot password?")}
+          </button>
+        )}
         <button className="primary submit" type="submit" disabled={props.loading}>
           <KeyRound size={16} />
           {props.setupRequired ? t("auth.create_and_sign_in", "Create and sign in") : t("auth.sign_in", "Sign in")}
@@ -1850,8 +3109,10 @@ type CollectionSidebarProps = {
   currentName: string;
   pinnedNames: string[];
   search: string;
+  hideControls: boolean;
   onSearch: (value: string) => void;
   onCreate: () => void;
+  onOverview: () => void;
   onSelect: (collection: CollectionSchema) => void;
   onTogglePinned: (collection: CollectionSchema) => void;
 };
@@ -1928,10 +3189,16 @@ function CollectionSidebar(props: CollectionSidebarProps) {
       )}
 
       <div className="sidebar-actions">
-        <button className="subtle outline-button" onClick={props.onCreate}>
-          <Plus size={16} />
-          {t("actions.new_collection", "New collection")}
+        <button className="subtle outline-button" onClick={props.onOverview}>
+          <GitBranch size={16} />
+          {t("parity.collection.overview", "Collections overview")}
         </button>
+        {!props.hideControls && (
+          <button className="subtle outline-button" onClick={props.onCreate}>
+            <Plus size={16} />
+            {t("actions.new_collection", "New collection")}
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -2002,35 +3269,51 @@ const getSettingsNavGroups = (t: any): Array<{
   }
 ];
 
-function SettingsSidebar({ current, onSelect }: { current: ViewName; onSelect: (view: ViewName) => void }) {
+function SettingsSidebar({
+  current,
+  onSelect,
+  hideControls
+}: {
+  current: ViewName;
+  onSelect: (view: ViewName) => void;
+  hideControls: boolean;
+}) {
   const { t } = useTranslation();
   return (
     <aside className="sidebar settings-sidebar">
-      {getSettingsNavGroups(t).map((group) => (
-        <section className="sidebar-group" key={group.title}>
-          <div className="sidebar-section-title">{group.title}</div>
-          <nav className="settings-nav" aria-label={group.title}>
-            {group.items.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.view}
-                  className={current === item.view ? "active" : ""}
-                  onClick={() => onSelect(item.view)}
-                >
-                  <span className="nav-icon">
-                    <Icon size={16} />
-                  </span>
-                  <span className="nav-text">
-                    <strong>{item.label}</strong>
-                  </span>
-                  <ChevronRight size={15} />
-                </button>
-              );
-            })}
-          </nav>
-        </section>
-      ))}
+      {getSettingsNavGroups(t).map((group) => {
+        // The upstream "Sync" group contains collection import/export. This
+        // Java UI keeps those routes in System, so hide the same two controls.
+        const items = hideControls
+          ? group.items.filter((item) => item.view !== "export" && item.view !== "import")
+          : group.items;
+        if (items.length === 0) return null;
+        return (
+          <section className="sidebar-group" key={group.title}>
+            <div className="sidebar-section-title">{group.title}</div>
+            <nav className="settings-nav" aria-label={group.title}>
+              {items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.view}
+                    className={current === item.view ? "active" : ""}
+                    onClick={() => onSelect(item.view)}
+                  >
+                    <span className="nav-icon">
+                      <Icon size={16} />
+                    </span>
+                    <span className="nav-text">
+                      <strong>{item.label}</strong>
+                    </span>
+                    <ChevronRight size={15} />
+                  </button>
+                );
+              })}
+            </nav>
+          </section>
+        );
+      })}
     </aside>
   );
 }
@@ -2046,7 +3329,8 @@ type RecordsViewProps = {
   query: QueryState;
   recordPage: ListResponse<RecordItem> | null;
   loading: boolean;
-  onQuery: (query: QueryState) => void;
+  refreshSuggested: boolean;
+  hideControls: boolean;
   onApply: (query: QueryState) => void;
   onRefresh: () => void | Promise<void>;
   onLoadMore: () => void | Promise<void>;
@@ -2068,10 +3352,16 @@ function RecordsView(props: RecordsViewProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(props.query);
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const searchHistoryKey = useMemo(
+    () => `pbj_record_search_history:${props.collection.id || props.collection.name}`,
+    [props.collection.id, props.collection.name]
+  );
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => readSearchHistory(searchHistoryKey));
   const selectedSet = useMemo(() => new Set(props.selectedIds), [props.selectedIds]);
   const allVisibleSelected =
     props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
   const canCreateRecord = props.collection.type !== "view";
+  const canDeleteRecords = props.collection.type !== "view";
   const hasMoreRecords = Boolean(
     props.recordPage && props.records.length > 0 && props.records.length < props.recordPage.totalItems
   );
@@ -2095,10 +3385,22 @@ function RecordsView(props: RecordsViewProps) {
   const perPageWidth = compactSelectWidth(perPageOptions.map((option) => String(option.label)));
 
   useEffect(() => setDraft(props.query), [props.query]);
+  useEffect(() => setSearchHistory(readSearchHistory(searchHistoryKey)), [searchHistoryKey]);
+
+  function rememberSearch(value: string) {
+    const next = writeSearchHistory(searchHistoryKey, value);
+    setSearchHistory(next);
+  }
 
   function apply() {
-    props.onQuery(draft);
+    rememberSearch(draft.filter);
     props.onApply(draft);
+  }
+
+  function clearFilter() {
+    const next = { ...draft, filter: "" };
+    setDraft(next);
+    props.onApply(next);
   }
 
   function updateSort(field: string, direction = sortState.direction) {
@@ -2107,6 +3409,13 @@ function RecordsView(props: RecordsViewProps) {
 
   function updateSortDirection(direction: SortDirection) {
     setDraft({ ...draft, sort: formatSortValue(sortState.field || sortableColumns[0] || "created", direction) });
+  }
+
+  function toggleColumnSort(column: string) {
+    const direction: SortDirection = sortState.field === column && sortState.direction === "asc" ? "desc" : "asc";
+    const next = { ...draft, sort: formatSortValue(column, direction) };
+    setDraft(next);
+    props.onApply(next);
   }
 
   return (
@@ -2125,10 +3434,17 @@ function RecordsView(props: RecordsViewProps) {
           >
             <Code2 size={17} />
           </button>
-          <button className="icon-button page-circle" onClick={props.onEditCollection} title={t("collections.collection_settings", "Collection settings")} aria-label={t("collections.collection_settings", "Collection settings")}>
-            <Settings size={17} />
-          </button>
-          <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_records", "Refresh records")} aria-label={t("actions.refresh_records", "Refresh records")}>
+          {!props.hideControls && (
+            <button className="icon-button page-circle" onClick={props.onEditCollection} title={t("collections.collection_settings", "Collection settings")} aria-label={t("collections.collection_settings", "Collection settings")}>
+              <Settings size={17} />
+            </button>
+          )}
+          <button
+            className={`icon-button page-circle${props.refreshSuggested ? " refresh-suggested" : ""}`}
+            onClick={props.onRefresh}
+            title={t("actions.refresh_records", "Refresh records")}
+            aria-label={t("actions.refresh_records", "Refresh records")}
+          >
             <RefreshCw size={17} />
           </button>
         </div>
@@ -2149,6 +3465,7 @@ function RecordsView(props: RecordsViewProps) {
             id="records-filter"
             name="filter"
             autoComplete="off"
+            list="records-search-history"
             aria-label={t("logs.search_aria", "Search term or filter")}
             value={draft.filter}
             onChange={(event) => setDraft({ ...draft, filter: event.target.value })}
@@ -2157,6 +3474,20 @@ function RecordsView(props: RecordsViewProps) {
             }}
             placeholder={t("records.search_placeholder", "Search term or filter...")}
           />
+          {draft.filter && (
+            <button
+              type="button"
+              className="search-clear-button"
+              onClick={clearFilter}
+              title={t("actions.clear_search", "Clear search")}
+              aria-label={t("actions.clear_search", "Clear search")}
+            >
+              <X size={14} />
+            </button>
+          )}
+          <datalist id="records-search-history">
+            {searchHistory.map((value) => <option key={value} value={value} />)}
+          </datalist>
         </div>
         <label className="compact-field sort-field">
           {t("collections.sort", "Sort")}
@@ -2237,10 +3568,12 @@ function RecordsView(props: RecordsViewProps) {
             <X size={16} />
             {t("actions.clear", "Clear")}
           </button>
-          <button className="danger subtle" onClick={props.onDeleteSelected}>
-            <Trash2 size={16} />
-            {t("actions.delete_selected", "Delete selected")}
-          </button>
+          {canDeleteRecords && (
+            <button className="danger subtle" onClick={props.onDeleteSelected}>
+              <Trash2 size={16} />
+              {t("actions.delete_selected", "Delete selected")}
+            </button>
+          )}
         </div>
       )}
 
@@ -2258,9 +3591,23 @@ function RecordsView(props: RecordsViewProps) {
                   {allVisibleSelected ? <CheckSquare2 size={17} /> : <Square size={17} />}
                 </button>
               </th>
-              {props.columns.map((column) => (
-                <th key={column}>{column}</th>
-              ))}
+              {props.columns.map((column) => {
+                const sorted = sortState.field === column;
+                return (
+                  <th key={column} aria-sort={sorted ? (sortState.direction === "asc" ? "ascending" : "descending") : "none"}>
+                    <button
+                      type="button"
+                      className={sorted ? "records-sort-button active" : "records-sort-button"}
+                      onClick={() => toggleColumnSort(column)}
+                      title={`${t("collections.sort", "Sort")}: ${column}`}
+                      aria-label={`${t("collections.sort", "Sort")}: ${column}`}
+                    >
+                      <span>{column}</span>
+                      {sorted && <span className="records-sort-indicator" aria-hidden="true">{sortState.direction === "asc" ? "↑" : "↓"}</span>}
+                    </button>
+                  </th>
+                );
+              })}
               <th className="actions-col">{t("collections.actions")}</th>
             </tr>
           </thead>
@@ -2280,10 +3627,7 @@ function RecordsView(props: RecordsViewProps) {
                       <button
                         className="subtle"
                         onClick={() => {
-                          const next = { ...draft, filter: "" };
-                          setDraft(next);
-                          props.onQuery(next);
-                          props.onApply(next);
+                          clearFilter();
                         }}
                       >
                         {t("actions.clear_search", "Clear search")}
@@ -2319,17 +3663,24 @@ function RecordsView(props: RecordsViewProps) {
                       </td>
                     ))}
                     <td className="row-actions">
-                      <button className="icon-button" onClick={() => props.onEdit(record)} title={t("actions.edit", "Edit")} aria-label={t("actions.edit", "Edit")}>
+                      <button
+                        className="icon-button"
+                        onClick={() => props.onEdit(record)}
+                        title={canDeleteRecords ? t("actions.edit", "Edit") : t("actions.view", "View")}
+                        aria-label={canDeleteRecords ? t("actions.edit", "Edit") : t("actions.view", "View")}
+                      >
                         <Edit3 size={16} />
                       </button>
-                      <button
-                        className="icon-button danger"
-                        onClick={() => props.onDelete(record)}
-                        title={t("actions.delete", "Delete")}
-                        aria-label={t("actions.delete", "Delete")}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {canDeleteRecords && (
+                        <button
+                          className="icon-button danger"
+                          onClick={() => props.onDelete(record)}
+                          title={t("actions.delete", "Delete")}
+                          aria-label={t("actions.delete", "Delete")}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -2432,13 +3783,16 @@ type SchemaViewProps = {
   collection: CollectionSchema;
   authMethods: AuthMethodsResponse | null;
   oauthTestingProvider: string;
+  hideControls: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onTruncate: () => void;
+  onDuplicate: () => void;
   onOAuthTest: (provider: AuthMethodProvider) => void;
   onCopy: (value: string) => void;
 };
 
-function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onDelete, onOAuthTest, onCopy }: SchemaViewProps) {
+function SchemaView({ collection, authMethods, oauthTestingProvider, hideControls, onEdit, onDelete, onTruncate, onDuplicate, onOAuthTest, onCopy }: SchemaViewProps) {
   const { t } = useTranslation();
   const json = JSON.stringify(collection, null, 2);
   return (
@@ -2457,18 +3811,32 @@ function SchemaView({ collection, authMethods, oauthTestingProvider, onEdit, onD
           <strong>{collection.system ? "true" : "false"}</strong>
         </div>
         <div className="schema-actions">
-          <button className="primary" onClick={onEdit}>
-            <Edit3 size={16} />
-            {t("actions.edit_schema", "Edit schema")}
-          </button>
+          {!hideControls && (
+            <button className="primary" onClick={onEdit}>
+              <Edit3 size={16} />
+              {t("actions.edit_schema", "Edit schema")}
+            </button>
+          )}
           <button className="subtle" onClick={() => onCopy(json)}>
             <Copy size={16} />
             {t("actions.copy_json", "Copy JSON")}
           </button>
-          <button className="danger subtle" onClick={onDelete} disabled={collection.system}>
-            <Trash2 size={16} />
-            {t("actions.delete", "Delete")}
-          </button>
+          {!hideControls && (
+            <>
+              <button className="subtle" onClick={onDuplicate} disabled={collection.system}>
+                <Copy size={16} />
+                {t("parity.collection.duplicate", "Duplicate")}
+              </button>
+              <button className="danger subtle" onClick={onTruncate} disabled={collection.system}>
+                <Archive size={16} />
+                {t("parity.collection.truncate", "Truncate")}
+              </button>
+              <button className="danger subtle" onClick={onDelete} disabled={collection.system}>
+                <Trash2 size={16} />
+                {t("actions.delete", "Delete")}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -2553,6 +3921,7 @@ type BackupViewProps = {
   draft: string;
   backupName: string;
   canBackup: boolean;
+  operation: BackupOperation | null;
   loading: boolean;
   uploadRef: RefObject<HTMLInputElement | null>;
   onConfirm: (request: ConfirmRequest) => Promise<boolean>;
@@ -2596,6 +3965,7 @@ function BackupView(props: BackupViewProps) {
   const autoBackupsEnabled = Boolean(backupsSettings.cron);
   const backupS3Enabled = Boolean(backupS3.enabled);
   const hasBackupS3Secret = Object.prototype.hasOwnProperty.call(backupS3, "secret");
+  const operationBusy = Boolean(props.operation) || !props.canBackup;
   const cronPresets = [
     { cron: "0 0 * * *", label: t("settings.cron_every_day", "Every day at 00:00h") },
     { cron: "0 0 * * 0", label: t("settings.cron_every_sunday", "Every Sunday at 00:00h") },
@@ -2655,7 +4025,7 @@ function BackupView(props: BackupViewProps) {
             <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_backups", "Refresh backups")} aria-label={t("actions.refresh_backups", "Refresh backups")}>
               <RefreshCw size={17} />
             </button>
-            <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} title={t("actions.upload_backup", "Upload backup")} aria-label={t("actions.upload_backup", "Upload backup")}>
+            <button className="icon-button page-circle" onClick={() => props.uploadRef.current?.click()} disabled={operationBusy || props.loading} title={t("actions.upload_backup", "Upload backup")} aria-label={t("actions.upload_backup", "Upload backup")}>
               <Upload size={17} />
             </button>
             <input
@@ -2670,6 +4040,25 @@ function BackupView(props: BackupViewProps) {
         }
       />
 
+      {props.operation && (
+        <aside className="settings-alert info backup-operation-notice" aria-live="polite">
+          <RefreshCw className="backup-operation-spinner" size={17} aria-hidden="true" />
+          <div>
+            <strong>
+              {props.operation.kind === "create"
+                ? t("settings.backup_creating_in_background", "Backup creation is in progress")
+                : t("settings.backup_restoring_in_background", "Backup restore is in progress")}
+            </strong>
+            <span>
+              {t(
+                "settings.backup_background_help",
+                "You can continue navigating in the admin UI. Backup controls will become available again when the Java server finishes the operation."
+              )}
+            </span>
+          </div>
+        </aside>
+      )}
+
       <section className="surface backups-surface">
         <div className="backup-list-header">
           <div>
@@ -2680,7 +4069,7 @@ function BackupView(props: BackupViewProps) {
               <span>{t("settings.backups_latest", { value: latestBackup ? formatDate(latestBackup.modified) : t("common.none", "none"), defaultValue: "Latest {{value}}" })}</span>
             </div>
           </div>
-          <button className="primary" onClick={() => setCreateOpen(true)} disabled={!props.canBackup || props.loading}>
+          <button className="primary" onClick={() => setCreateOpen(true)} disabled={operationBusy || props.loading}>
             <Archive size={16} />
             {t("actions.initialize_backup", "Initialize new backup")}
           </button>
@@ -2707,10 +4096,10 @@ function BackupView(props: BackupViewProps) {
                   <button className="icon-button" onClick={() => props.onDownload(backup)} title={t("actions.download", "Download")} aria-label={t("actions.download", "Download")}>
                     <Download size={16} />
                   </button>
-                  <button className="icon-button" onClick={() => props.onRestore(backup)} title={t("actions.restore", "Restore")} aria-label={t("actions.restore", "Restore")}>
+                  <button className="icon-button" onClick={() => props.onRestore(backup)} disabled={operationBusy || props.loading} title={t("actions.restore", "Restore")} aria-label={t("actions.restore", "Restore")}>
                     <FileUp size={16} />
                   </button>
-                  <button className="icon-button danger" onClick={() => props.onDelete(backup)} title={t("actions.delete", "Delete")} aria-label={t("actions.delete", "Delete")}>
+                  <button className="icon-button danger" onClick={() => props.onDelete(backup)} disabled={operationBusy || props.loading} title={t("actions.delete", "Delete")} aria-label={t("actions.delete", "Delete")}>
                     <Trash2 size={16} />
                   </button>
                 </nav>
@@ -2862,10 +4251,9 @@ function BackupView(props: BackupViewProps) {
                     </label>
                     <label>
                       {t("settings.secret", "Secret")}
-                      <input
+                      <PasswordInput
                         id="backups-s3-secret"
                         name="backups.s3.secret"
-                        type="password"
                         autoComplete="new-password"
                         value={String(backupS3.secret ?? "")}
                         placeholder={hasBackupS3Secret ? "" : "* * * * * *"}
@@ -2888,7 +4276,7 @@ function BackupView(props: BackupViewProps) {
             </section>
 
             <div className="backup-options-actions">
-              <button className="primary" type="button" onClick={props.onSave} disabled={props.loading}>
+              <button className="primary" type="button" onClick={props.onSave} disabled={operationBusy || props.loading}>
                 <Save size={16} />
                 {t("actions.save_changes", "Save changes")}
               </button>
@@ -2921,7 +4309,7 @@ function BackupView(props: BackupViewProps) {
                 <X size={16} />
                 {t("actions.cancel", "Cancel")}
               </button>
-              <button type="button" className="primary" onClick={startBackup} disabled={!props.canBackup || props.loading}>
+              <button type="button" className="primary" onClick={startBackup} disabled={operationBusy || props.loading}>
                 <Archive size={16} />
                 {t("actions.start_backup", "Start backup")}
               </button>
@@ -3014,11 +4402,13 @@ function CronsView(props: CronsViewProps) {
 type SettingsViewProps = {
   settings: AppSettings | null;
   draft: string;
+  health: HealthResponse["data"] | null;
   loading: boolean;
   collections: CollectionSchema[];
   onDraft: (value: string) => void;
   onRefresh: () => void;
   onSave: () => void;
+  onAccentPreview: (color: string | null) => void;
 };
 
 type RateLimitRule = {
@@ -3108,7 +4498,6 @@ function SettingsView(props: SettingsViewProps) {
   const { t } = useTranslation();
   const draftSettings = useMemo(() => parseSettingsDraft(props.draft, props.settings), [props.draft, props.settings]);
   const meta = settingsObject(draftSettings, "meta");
-  const logs = settingsObject(draftSettings, "logs");
   const batch = settingsObject(draftSettings, "batch");
   const trustedProxy = settingsObject(draftSettings, "trustedProxy");
   const rateLimits = settingsObject(draftSettings, "rateLimits");
@@ -3132,6 +4521,15 @@ function SettingsView(props: SettingsViewProps) {
     ? rateLimits.excludedIPs.map((item) => String(item)).join(", ")
     : "";
   const rateLimitTagOptions = useMemo(() => rateLimitTags(props.collections), [props.collections]);
+  const currentIp = props.health?.realIP?.trim() ?? "";
+  const detectedProxyHeader = props.health?.possibleProxyHeader?.trim() ?? "";
+  const draftAccentColor = normalizeAccentColor(meta.accentColor) || "#1055c9";
+  const [accentColorError, setAccentColorError] = useState("");
+
+  useEffect(() => {
+    props.onAccentPreview(draftAccentColor);
+    return () => props.onAccentPreview(null);
+  }, [draftAccentColor, props.onAccentPreview]);
 
   function writeRateLimitRules(rules: RateLimitRule[], enabled?: boolean) {
     const next = cloneJsonObject(draftSettings);
@@ -3167,6 +4565,21 @@ function SettingsView(props: SettingsViewProps) {
 
   function updateNumber(path: string[], value: string) {
     updateSetting(path, value === "" ? 0 : Number(value));
+  }
+
+  function updateAccentColor(value: string) {
+    const normalized = normalizeAccentColor(value);
+    if (!isDarkEnoughForWhiteText(normalized)) {
+      setAccentColorError(
+        t(
+          "settings.accent_color_too_light",
+          "Choose a darker accent color so white text remains readable."
+        )
+      );
+      return;
+    }
+    setAccentColorError("");
+    updateSetting(["meta", "accentColor"], normalized);
   }
 
   return (
@@ -3214,9 +4627,10 @@ function SettingsView(props: SettingsViewProps) {
               id="meta-accent-color"
               name="meta.accentColor"
               type="color"
-              value={String(meta.accentColor ?? "#1055c9")}
-              onChange={(event) => updateSetting(["meta", "accentColor"], event.target.value)}
+              value={draftAccentColor}
+              onChange={(event) => updateAccentColor(event.target.value)}
             />
+            {accentColorError && <span className="form-error">{accentColorError}</span>}
           </label>
         </div>
 
@@ -3234,59 +4648,6 @@ function SettingsView(props: SettingsViewProps) {
         </div>
 
         <section className="settings-accordion-grid">
-          <article className="settings-accordion-card">
-            <header>
-              <div>
-                <strong>{t("nav.logs", "Logs")}</strong>
-                <span>{t("settings.logs_desc", "Retention and request metadata")}</span>
-              </div>
-              <Activity size={18} />
-            </header>
-            <div className="settings-form-row two">
-              <label>
-                {t("settings.max_days", "Max days")}
-                <input
-                  id="logs-max-days"
-                  name="logs.maxDays"
-                  type="number"
-                  min="0"
-                  value={String(logs.maxDays ?? 5)}
-                  onChange={(event) => updateNumber(["logs", "maxDays"], event.target.value)}
-                />
-              </label>
-              <label>
-                {t("settings.min_level", "Min level")}
-                <input
-                  id="logs-min-level"
-                  name="logs.minLevel"
-                  type="number"
-                  value={String(logs.minLevel ?? 0)}
-                  onChange={(event) => updateNumber(["logs", "minLevel"], event.target.value)}
-                />
-              </label>
-            </div>
-            <label className="check-row switch-row">
-              <input
-                id="logs-log-ip"
-                name="logs.logIP"
-                type="checkbox"
-                checked={Boolean(logs.logIP)}
-                onChange={(event) => updateSetting(["logs", "logIP"], event.target.checked)}
-              />
-              {t("settings.log_request_ip", "Log request IP")}
-            </label>
-            <label className="check-row switch-row">
-              <input
-                id="logs-log-auth-id"
-                name="logs.logAuthId"
-                type="checkbox"
-                checked={Boolean(logs.logAuthId)}
-                onChange={(event) => updateSetting(["logs", "logAuthId"], event.target.checked)}
-              />
-              {t("settings.log_auth_id", "Log auth record id")}
-            </label>
-          </article>
-
           <article className="settings-accordion-card">
             <header>
               <div>
@@ -3368,6 +4729,27 @@ function SettingsView(props: SettingsViewProps) {
               />
               {t("settings.use_leftmost_ip", "Use leftmost IP")}
             </label>
+            <div className="settings-diagnostic">
+              <span>{t("settings.resolved_ip", "Resolved client IP")}</span>
+              <code>{currentIp || t("settings.unavailable", "Unavailable")}</code>
+              {detectedProxyHeader ? (
+                <>
+                  <span>{t("settings.detected_proxy_header", "Detected proxy header")}</span>
+                  <code>{detectedProxyHeader}</code>
+                  {!splitCsv(trustedHeaders).some((header) => header.toLowerCase() === detectedProxyHeader.toLowerCase()) && (
+                    <button
+                      type="button"
+                      className="subtle compact"
+                      onClick={() => updateSetting(["trustedProxy", "headers"], [...splitCsv(trustedHeaders), detectedProxyHeader])}
+                    >
+                      {t("settings.use_detected_header", "Use detected header")}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <em>{t("settings.trusted_proxy_no_header", "No forwarded IP header detected for this request.")}</em>
+              )}
+            </div>
           </article>
 
           <article className="settings-accordion-card">
@@ -3389,6 +4771,22 @@ function SettingsView(props: SettingsViewProps) {
                 onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
               />
             </label>
+            {currentIp && (
+              <div className="settings-current-ip">
+                <span>{t("settings.current_ip", { ip: currentIp, defaultValue: "Your current IP: {{ip}}" })}</span>
+                <button
+                  type="button"
+                  className="subtle compact"
+                  onClick={() => {
+                    const next = splitCsv(superuserIPs);
+                    if (!next.some((value) => value === currentIp)) next.push(currentIp);
+                    updateSetting(["superuserIPs"], next);
+                  }}
+                >
+                  {t("settings.add_current_ip", "Add current IP")}
+                </button>
+              </div>
+            )}
           </article>
 
           <article className="settings-accordion-card rate-limit-card">
@@ -3506,6 +4904,121 @@ function SettingsView(props: SettingsViewProps) {
         </label>
       </section>
     </section>
+  );
+}
+
+type LogSettingsModalProps = {
+  settings: AppSettings | null;
+  draft: string;
+  loading: boolean;
+  onDraft: (value: string) => void;
+  onSave: (draft?: string) => Promise<boolean>;
+  onClose: () => void;
+};
+
+/**
+ * PocketBase keeps log retention and request metadata settings beside the log
+ * stream, not in the broader application settings page. Keep an isolated draft
+ * here so cancelling the dialog cannot overwrite edits the user already made
+ * in another settings section.
+ */
+function LogSettingsModal(props: LogSettingsModalProps) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(props.draft);
+  const [saving, setSaving] = useState(false);
+  const draftSettings = useMemo(() => parseSettingsDraft(draft, props.settings), [draft, props.settings]);
+  const logs = settingsObject(draftSettings, "logs");
+  const disabled = props.loading || saving;
+
+  useEffect(() => {
+    if (!saving) setDraft(props.draft);
+  }, [props.draft, saving]);
+
+  function updateSetting(key: string, value: unknown) {
+    const next = cloneJsonObject(draftSettings);
+    setNestedSetting(next, ["logs", key], value);
+    setDraft(JSON.stringify(next, null, 2));
+  }
+
+  async function save() {
+    if (disabled) return;
+    setSaving(true);
+    props.onDraft(draft);
+    const saved = await props.onSave(draft);
+    setSaving(false);
+    if (saved) props.onClose();
+  }
+
+  const close = () => {
+    if (!saving) props.onClose();
+  };
+
+  return (
+    <Modal title={t("settings.logs_title", "Logs")} onClose={close}>
+      <div className="modal-grid">
+        <p className="settings-footnote">{t("settings.logs_desc", "Retention and request metadata")}</p>
+        <div className="settings-form-row two">
+          <label>
+            {t("settings.max_days", "Max days")}
+            <input
+              id="logs-max-days"
+              name="logs.maxDays"
+              type="number"
+              min="0"
+              max="3650"
+              value={String(logs.maxDays ?? 5)}
+              onChange={(event) => updateSetting("maxDays", Math.max(0, Math.min(3650, Number(event.target.value || 0))))}
+              disabled={disabled}
+            />
+          </label>
+          <label>
+            {t("settings.min_level", "Min level")}
+            <input
+              id="logs-min-level"
+              name="logs.minLevel"
+              type="number"
+              min="0"
+              max="16"
+              value={String(logs.minLevel ?? 0)}
+              onChange={(event) => updateSetting("minLevel", Math.max(0, Math.min(16, Number(event.target.value || 0))))}
+              disabled={disabled}
+            />
+          </label>
+        </div>
+        <label className="check-row switch-row">
+          <input
+            id="logs-log-ip"
+            name="logs.logIP"
+            type="checkbox"
+            checked={Boolean(logs.logIP)}
+            onChange={(event) => updateSetting("logIP", event.target.checked)}
+            disabled={disabled}
+          />
+          {t("settings.log_request_ip", "Log request IP")}
+        </label>
+        <label className="check-row switch-row">
+          <input
+            id="logs-log-auth-id"
+            name="logs.logAuthId"
+            type="checkbox"
+            checked={Boolean(logs.logAuthId)}
+            onChange={(event) => updateSetting("logAuthId", event.target.checked)}
+            disabled={disabled}
+          />
+          {t("settings.log_auth_id", "Log auth record id")}
+        </label>
+        <div className="modal-actions">
+          <button type="button" className="subtle" onClick={close} disabled={saving}>
+            <X size={16} />
+            {t("actions.cancel", "Cancel")}
+          </button>
+          <button type="button" className="primary" onClick={() => void save()} disabled={disabled}>
+            <Save size={16} />
+            {saving ? t("common.submitting", "Submitting...") : t("actions.save", "Save")}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -3663,10 +5176,9 @@ function MailSettingsView(props: MailSettingsViewProps) {
             <div className="settings-form-row two">
               <label>
                 {t("auth.password", "Password")}
-                <input
+                <PasswordInput
                   id="smtp-password"
                   name="smtp.password"
-                  type="password"
                   autoComplete="new-password"
                   value={String(smtp.password ?? "")}
                   placeholder={hasSmtpPassword ? "" : "* * * * * *"}
@@ -3773,11 +5285,12 @@ type StorageSettingsViewProps = {
   settings: AppSettings | null;
   draft: string;
   target: string;
+  testState: S3TestState;
   loading: boolean;
   onDraft: (value: string) => void;
   onSave: () => void;
   onTarget: (value: string) => void;
-  onTest: () => void;
+  onTest: (automatic?: boolean) => void;
 };
 
 function StorageSettingsView(props: StorageSettingsViewProps) {
@@ -3786,14 +5299,51 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
   const storage = settingsObject(draftSettings, "s3");
   const originalStorage = settingsObject(props.settings, "s3");
   const storageEnabled = Boolean(storage.enabled);
+  const backupStorage = settingsObject(settingsObject(draftSettings, "backups"), "s3");
+  const targetStorage = props.target === "backups" ? backupStorage : storage;
+  const canAutomaticallyTest = Boolean(
+    targetStorage.enabled &&
+      String(targetStorage.endpoint ?? "").trim() &&
+      String(targetStorage.bucket ?? "").trim() &&
+      String(targetStorage.region ?? "").trim() &&
+      String(targetStorage.accessKey ?? "").trim()
+  );
   const hasS3Secret = Object.prototype.hasOwnProperty.call(storage, "secret");
   const changedStorageMode = Boolean(originalStorage.enabled) !== storageEnabled;
+  const onTestRef = useRef(props.onTest);
+  const lastAutomaticTestFingerprint = useRef<string | null>(null);
+  const automaticTestFingerprint = JSON.stringify({
+    target: props.target,
+    enabled: Boolean(targetStorage.enabled),
+    endpoint: String(targetStorage.endpoint ?? "").trim(),
+    bucket: String(targetStorage.bucket ?? "").trim(),
+    region: String(targetStorage.region ?? "").trim(),
+    accessKey: String(targetStorage.accessKey ?? "").trim(),
+    secret: String(targetStorage.secret ?? ""),
+    forcePathStyle: Boolean(targetStorage.forcePathStyle)
+  });
+
+  useEffect(() => {
+    onTestRef.current = props.onTest;
+  }, [props.onTest]);
 
   function updateSetting(path: string[], value: unknown) {
     const next = cloneJsonObject(draftSettings);
     setNestedSetting(next, path, value);
     props.onDraft(JSON.stringify(next, null, 2));
   }
+
+  useEffect(() => {
+    if (lastAutomaticTestFingerprint.current === null) {
+      lastAutomaticTestFingerprint.current = automaticTestFingerprint;
+      return;
+    }
+    if (lastAutomaticTestFingerprint.current === automaticTestFingerprint) return;
+    lastAutomaticTestFingerprint.current = automaticTestFingerprint;
+    if (!canAutomaticallyTest) return;
+    const timer = window.setTimeout(() => onTestRef.current(true), 650);
+    return () => window.clearTimeout(timer);
+  }, [automaticTestFingerprint, canAutomaticallyTest]);
 
   return (
     <section className="settings-page">
@@ -3888,10 +5438,9 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
               </label>
               <label>
                 {t("settings.secret", "Secret")}
-                <input
+                <PasswordInput
                   id="s3-secret"
                   name="s3.secret"
-                  type="password"
                   autoComplete="new-password"
                   value={String(storage.secret ?? "")}
                   placeholder={hasS3Secret ? "" : "* * * * * *"}
@@ -3928,10 +5477,21 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
               <option value="backups">backups</option>
             </select>
           </label>
-          <button className="primary apply-button" onClick={props.onTest} disabled={props.loading}>
+          <button className="primary apply-button" onClick={() => props.onTest()} disabled={props.loading}>
             <Play size={16} />
             {t("actions.test_s3", "Test S3")}
           </button>
+        </div>
+        <div className={`s3-test-state ${props.testState.status}`} role="status" aria-live="polite">
+          {props.testState.status === "testing"
+            ? t("settings.s3_test_pending", "Testing S3 connection…")
+            : props.testState.status === "success"
+              ? props.testState.message
+              : props.testState.status === "error"
+                ? `${t("settings.s3_test_failed", "S3 connection failed")}: ${props.testState.message}`
+                : canAutomaticallyTest
+                  ? t("settings.s3_test_waiting", "Connection test will run after changes settle.")
+                  : t("settings.s3_test_incomplete", "Enter the S3 endpoint, bucket, region and access key to test automatically.")}
         </div>
       </section>
     </section>
@@ -3947,7 +5507,7 @@ type CollectionTransferViewProps = {
   onDraft: (value: string) => void;
   onDeleteMissing: (value: boolean) => void;
   onExport: () => void;
-  onImport: () => Promise<void> | void;
+  onImport: () => Promise<boolean> | boolean;
   onCopy: (value: string) => void;
 };
 
@@ -3963,6 +5523,10 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
     [exportCollections, selectedExportIds]
   );
   const importedCollections = useMemo(() => parseCollectionsPayload(props.draft), [props.draft]);
+  const collectionIdReplacements = useMemo(
+    () => collectionIdReplacementSuggestions(props.collections, importedCollections),
+    [props.collections, importedCollections]
+  );
   const importChanges = useMemo(
     () => collectionImportChanges(props.collections, importedCollections, props.deleteMissing),
     [props.collections, importedCollections, props.deleteMissing]
@@ -4013,9 +5577,15 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function confirmImport() {
-    await props.onImport();
+  function applyCollectionIdReplacements() {
+    const nextDraft = replaceCollectionIdsInImportPayload(props.draft, collectionIdReplacements);
+    if (!nextDraft) return;
     setReviewOpen(false);
+    props.onDraft(nextDraft);
+  }
+
+  async function confirmImport() {
+    if (await props.onImport()) setReviewOpen(false);
   }
 
   if (!importing) {
@@ -4110,15 +5680,58 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
           </label>
           {importInvalid && <div className="form-error">{t("transfer.invalid_config", "Invalid collections configuration.")}</div>}
           {Boolean(importedCollections?.length) && !importInvalid && (
-            <label className="check-row switch-row">
-              <input
-                type="checkbox"
-                name="deleteMissingCollections"
-                checked={props.deleteMissing}
-                onChange={(event) => props.onDeleteMissing(event.target.checked)}
-              />
-              {t("transfer.delete_missing", "Delete missing collections")}
-            </label>
+            <fieldset className="import-mode-options">
+              <legend>{t("transfer.import_mode", "Import mode")}</legend>
+              <label className="check-row">
+                <input
+                  type="radio"
+                  name="collectionImportMode"
+                  checked={!props.deleteMissing}
+                  onChange={() => props.onDeleteMissing(false)}
+                />
+                <span>
+                  <strong>{t("transfer.merge_mode", "Merge with current collections")}</strong>
+                  <small>{t("transfer.merge_mode_help", "Keep collections that are not included in the import.")}</small>
+                </span>
+              </label>
+              <label className="check-row">
+                <input
+                  type="radio"
+                  name="collectionImportMode"
+                  checked={props.deleteMissing}
+                  onChange={() => props.onDeleteMissing(true)}
+                />
+                <span>
+                  <strong>{t("transfer.replace_mode", "Replace current collections")}</strong>
+                  <small>{t("transfer.replace_mode_help", "Delete non-system collections that are not included in the import.")}</small>
+                </span>
+              </label>
+            </fieldset>
+          )}
+          {collectionIdReplacements.length > 0 && (
+            <aside className="settings-alert warning import-id-replacement-suggestions">
+              <strong>{t("transfer.collection_id_conflicts", "Matching collection names use different IDs")}</strong>
+              <p>
+                {t(
+                  "transfer.collection_id_conflicts_help",
+                  "This Java storage implementation keeps collection IDs as stable relation keys. Replace the imported IDs with the matching local IDs before importing to update the existing collections and preserve relation targets."
+                )}
+              </p>
+              <ul>
+                {collectionIdReplacements.map((replacement) => (
+                  <li key={`${replacement.fromId}:${replacement.toId}`}>
+                    <code>{replacement.name}</code>
+                    <span>{replacement.fromId}</span>
+                    <ChevronRight size={14} aria-hidden="true" />
+                    <span>{replacement.toId}</span>
+                  </li>
+                ))}
+              </ul>
+              <button className="subtle" type="button" onClick={applyCollectionIdReplacements}>
+                <GitBranch size={16} />
+                {t("actions.replace_collection_ids", "Use matching local IDs")}
+              </button>
+            </aside>
           )}
         </div>
 
@@ -4177,6 +5790,9 @@ function CollectionTransferView(props: CollectionTransferViewProps) {
                 <TransferChangeRow key={`modal-add-${collection.id}`} label="Added" tone="success" collection={collection} />
               ))}
             </div>
+            {importChanges.changed.map((pair) => (
+              <CollectionImportDiff key={`diff-${pair.next.id}`} previous={pair.previous} next={pair.next} />
+            ))}
             <div className="settings-alert">
               {t("transfer.import_warning", "Importing will apply schema changes to the current database. Review destructive changes before continuing.")}
             </div>
@@ -4229,10 +5845,81 @@ function TransferChangeRow({ label, tone, collection, previousName }: TransferCh
   );
 }
 
+type CollectionFieldChange = {
+  kind: "Added" | "Changed" | "Deleted";
+  previous?: FieldSchema;
+  next?: FieldSchema;
+  changedKeys: string[];
+};
+
+function CollectionImportDiff({ previous, next }: { previous: CollectionSchema; next: CollectionSchema }) {
+  const { t } = useTranslation();
+  const fieldChanges = useMemo(() => collectionFieldChanges(previous, next), [previous, next]);
+  return (
+    <article className="collection-import-diff">
+      <header className="collection-import-diff-header">
+        <div>
+          <strong>{next.name}</strong>
+          {previous.name !== next.name && <span className="previous-name">{previous.name}</span>}
+        </div>
+        <code>{next.id}</code>
+      </header>
+      <div className="collection-import-diff-columns">
+        <section>
+          <h3>{t("transfer.current", "Current")}</h3>
+          <pre>{JSON.stringify(previous, null, 2)}</pre>
+        </section>
+        <section>
+          <h3>{t("transfer.imported", "Imported")}</h3>
+          <pre>{JSON.stringify(next, null, 2)}</pre>
+        </section>
+      </div>
+      <section className="collection-field-diff">
+        <h3>{t("transfer.field_changes", "Field changes")}</h3>
+        {fieldChanges.length === 0 ? (
+          <p>{t("transfer.no_field_changes", "No field changes")}</p>
+        ) : (
+          <div className="collection-field-diff-list">
+            {fieldChanges.map((change) => {
+              const field = change.next ?? change.previous!;
+              const label =
+                change.kind === "Added"
+                  ? t("transfer.change_added", "Added")
+                  : change.kind === "Deleted"
+                    ? t("transfer.change_deleted", "Deleted")
+                    : t("transfer.change_changed", "Changed");
+              const tone = change.kind === "Added" ? "success" : change.kind === "Deleted" ? "danger" : "warning";
+              return (
+                <div className="collection-field-diff-row" key={`${change.kind}:${field.id ?? field.name}`}>
+                  <span className={`sync-change-label ${tone}`}>{label}</span>
+                  <div>
+                    {change.previous && change.next && change.previous.name !== change.next.name ? (
+                      <>
+                        <span className="previous-name">{change.previous.name}</span>
+                        <ChevronRight size={14} />
+                        <strong>{change.next.name}</strong>
+                      </>
+                    ) : (
+                      <strong>{field.name}</strong>
+                    )}
+                    <code>{field.type}</code>
+                    {change.changedKeys.length > 0 && <code>{change.changedKeys.join(", ")}</code>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </article>
+  );
+}
+
 type SqlViewProps = {
   query: string;
   result: SqlResult | null;
   error: string;
+  elapsedMs: number | null;
   loading: boolean;
   sqlCompletions: string[];
   onQuery: (value: string) => void;
@@ -4243,6 +5930,39 @@ function SqlView(props: SqlViewProps) {
   const { t } = useTranslation();
   const columns = props.result?.columns ?? [];
   const rows = props.result?.rows ?? [];
+  const [visibleRows, setVisibleRows] = useState(250);
+  const [sort, setSort] = useState<{ index: number; direction: SortDirection } | null>(null);
+
+  useEffect(() => {
+    setVisibleRows(250);
+    setSort(null);
+  }, [props.result]);
+
+  const sortedRows = useMemo(() => {
+    const indexed: Array<{ row: unknown[]; index: number }> = rows.map((row, index) => ({ row, index }));
+    if (!sort) return indexed;
+    return [...indexed].sort((left, right) => {
+      const result = compareSqlValues(left.row[sort.index], right.row[sort.index]);
+      return result === 0 ? left.index - right.index : sort.direction === "asc" ? result : -result;
+    });
+  }, [rows, sort]);
+  const shownRows = sortedRows.slice(0, visibleRows);
+
+  function toggleSort(index: number) {
+    setSort((current) => {
+      if (!current || current.index !== index) return { index, direction: "asc" };
+      return { index, direction: current.direction === "asc" ? "desc" : "asc" };
+    });
+  }
+
+  function exportCsv() {
+    downloadCsvFile(
+      columns.map((column) => column.name),
+      rows,
+      `pocketbase-sql-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`
+    );
+  }
+
   return (
     <section className="settings-page">
       <SettingsPageHeader section={t("settings.nav.sql", "SQL console")} />
@@ -4276,13 +5996,31 @@ function SqlView(props: SqlViewProps) {
           <div className="table-meta">
             <span>{t("sql.affected_rows", { count: Number(props.result?.affectedRows ?? 0), defaultValue: "{{count}} affected rows" })}</span>
             <span>{t("sql.result_rows", { count: rows.length, defaultValue: "{{count}} result rows" })}</span>
+            {props.elapsedMs !== null && <span>{t("sql.elapsed_ms", { count: props.elapsedMs, defaultValue: "{{count}} ms" })}</span>}
             {props.error && <span className="danger">{props.error}</span>}
+            {columns.length > 0 && rows.length > 0 && (
+              <button type="button" className="subtle compact" onClick={exportCsv}>
+                <Download size={14} />
+                {t("sql.export_csv", "Export CSV")}
+              </button>
+            )}
           </div>
           <div className="table-wrap">
             <table className="sql-table">
               <thead>
                 <tr>
-                  {columns.length === 0 ? <th>{t("sql.result", "Result")}</th> : columns.map((column) => <th key={column.name}>{column.name}</th>)}
+                  {columns.length === 0 ? (
+                    <th>{t("sql.result", "Result")}</th>
+                  ) : (
+                    columns.map((column, index) => (
+                      <th key={column.name} aria-sort={sort?.index === index ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}>
+                        <button type="button" className="table-sort-button" onClick={() => toggleSort(index)}>
+                          {column.name}
+                          {sort?.index === index && <span aria-hidden="true">{sort.direction === "asc" ? " ↑" : " ↓"}</span>}
+                        </button>
+                      </th>
+                    ))
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -4293,11 +6031,15 @@ function SqlView(props: SqlViewProps) {
                     </td>
                   </tr>
                 ) : (
-                  rows.map((row, rowIndex) => (
+                  shownRows.map(({ row, index: rowIndex }) => (
                     <tr key={rowIndex}>
                       {columns.map((column, columnIndex) => (
                         <td key={column.name}>
-                          <code>{formatValue(Array.isArray(row) ? row[columnIndex] : "")}</code>
+                          {row[columnIndex] === null ? (
+                            <em className="sql-null">{t("sql.null", "NULL")}</em>
+                          ) : (
+                            <code>{formatValue(row[columnIndex])}</code>
+                          )}
                         </td>
                       ))}
                     </tr>
@@ -4306,6 +6048,14 @@ function SqlView(props: SqlViewProps) {
               </tbody>
             </table>
           </div>
+          {shownRows.length < rows.length && (
+            <div className="load-more-row sql-load-more">
+              <span>{t("sql.showing_rows", { shown: shownRows.length, count: rows.length, defaultValue: "Showing {{shown}} of {{count}} rows" })}</span>
+              <button type="button" className="subtle" onClick={() => setVisibleRows((count) => Math.min(rows.length, count + 250))}>
+                {t("sql.load_more", { count: rows.length - shownRows.length, defaultValue: "Load 250 more ({{count}} remaining)" })}
+              </button>
+            </div>
+          )}
         </section>
       </div>
     </section>
@@ -4317,52 +6067,207 @@ type LogsViewProps = {
   logPage: ListResponse<LogItem> | null;
   filter: string;
   stats: LogStat[];
+  timeRange: LogTimeRange | null;
+  includeSuperuserRequests: boolean;
   loading: boolean;
   onFilter: (value: string) => void;
+  onApply: () => void;
+  onIncludeSuperuserRequests: (value: boolean) => void;
+  onTimeRange: (range: LogTimeRange) => void;
+  onClearTimeRange: () => void;
   onRefresh: () => void;
   onLoadMore: () => void | Promise<void>;
+  onOpenLog: (log: LogItem) => void;
+  onNotify: (message: string, kind?: "ok" | "error") => void;
+  onOpenSettings: () => void;
 };
 
 function LogsView(props: LogsViewProps) {
   const { t } = useTranslation();
-  const [selected, setSelected] = useState<LogItem | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => readSearchHistory("pbj_log_search_history"));
+  const lastSelectedId = useRef<string | null>(null);
+  const chartSelectionStart = useRef<number | null>(null);
+  const [chartSelection, setChartSelection] = useState<{ start: number; end: number } | null>(null);
+  const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null);
+  const chartStats = useMemo(() => fillLogStatGaps(props.stats), [props.stats]);
+  const [chartWindowStart, setChartWindowStart] = useState(0);
   const total = props.logPage?.totalItems ?? props.logs.length;
   const hasMoreLogs = Boolean(props.logPage && props.logs.length > 0 && props.logs.length < total);
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const maxStat = Math.max(1, ...props.stats.map((item) => Number(item.total || 0)));
-  const chartStats = props.stats.slice(-28);
+  const chartWindowSize = 28;
+  const chartMaxStart = Math.max(0, chartStats.length - chartWindowSize);
+  const visibleChartStats = chartStats.slice(chartWindowStart, chartWindowStart + chartWindowSize);
+  const maxStat = Math.max(1, ...visibleChartStats.map((item) => Number(item.total || 0)));
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const allVisibleSelected = props.logs.length > 0 && props.logs.every((log) => selectedSet.has(log.id));
+  const selectedLogs = useMemo(() => props.logs.filter((log) => selectedSet.has(log.id)), [props.logs, selectedSet]);
 
   useEffect(() => {
-    if (selected && !props.logs.some((log) => log.id === selected.id)) {
-      setSelected(null);
-    }
-  }, [props.logs, selected]);
+    const ids = new Set(props.logs.map((log) => log.id));
+    setSelectedIds((current) => current.filter((id) => ids.has(id)));
+  }, [props.logs]);
+
+  useEffect(() => {
+    setChartWindowStart(chartMaxStart);
+    setChartSelection(null);
+    chartSelectionStart.current = null;
+  }, [chartMaxStart, props.stats]);
+
+  function toggleSelected(id: string, extendRange = false) {
+    setSelectedIds((current) => {
+      const isSelected = current.includes(id);
+      if (extendRange && lastSelectedId.current) {
+        const from = props.logs.findIndex((log) => log.id === lastSelectedId.current);
+        const to = props.logs.findIndex((log) => log.id === id);
+        if (from >= 0 && to >= 0) {
+          const ids = props.logs.slice(Math.min(from, to), Math.max(from, to) + 1).map((log) => log.id);
+          const next = new Set(current);
+          for (const itemId of ids) isSelected ? next.delete(itemId) : next.add(itemId);
+          return Array.from(next);
+        }
+      }
+      lastSelectedId.current = id;
+      return isSelected ? current.filter((itemId) => itemId !== id) : [...current, id];
+    });
+  }
+
+  function exportSelected() {
+    downloadJsonFile(
+      selectedLogs,
+      `pocketbase-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.json`
+    );
+    props.onNotify(t("logs.exported_selected", "Selected logs downloaded"));
+  }
+
+  function apply() {
+    setSearchHistory(writeSearchHistory("pbj_log_search_history", props.filter));
+    props.onApply();
+  }
+
+  function chartIndex(event: { currentTarget: HTMLDivElement; clientX: number }) {
+    if (visibleChartStats.length === 0) return -1;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) return -1;
+    const ratio = Math.max(0, Math.min(0.999999, (event.clientX - bounds.left) / bounds.width));
+    return Math.floor(ratio * visibleChartStats.length);
+  }
+
+  function selectChartRange(startIndex: number, endIndex: number) {
+    const first = visibleChartStats[Math.min(startIndex, endIndex)];
+    const last = visibleChartStats[Math.max(startIndex, endIndex)];
+    const end = last ? nextLogHour(last.date) : "";
+    if (first && end) props.onTimeRange({ start: first.date, end });
+  }
+
+  function resetChart() {
+    setChartWindowStart(chartMaxStart);
+    if (props.timeRange) props.onClearTimeRange();
+  }
 
   return (
     <section className="logs-page">
       <div className="logs-chart-strip">
-        <div className="logs-chart-bars" aria-label={t("logs.activity", "Log activity")}>
-          {chartStats.length === 0 ? (
+        <button
+          type="button"
+          className="logs-chart-pan logs-chart-pan-left"
+          disabled={chartWindowStart <= 0}
+          onClick={() => setChartWindowStart((start) => Math.max(0, start - 12))}
+          title={t("actions.back", "Back")}
+          aria-label={t("actions.back", "Back")}
+        >
+          <ChevronRight size={16} />
+        </button>
+        <div
+          className="logs-chart-bars"
+          aria-label={t("logs.activity", "Log activity")}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            const index = chartIndex(event);
+            if (index < 0) return;
+            chartSelectionStart.current = index;
+            setChartSelection({ start: index, end: index });
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const index = chartIndex(event);
+            if (index >= 0) setHoveredChartIndex(index);
+            if (index >= 0 && chartSelectionStart.current !== null) {
+              setChartSelection({ start: chartSelectionStart.current, end: index });
+            }
+          }}
+          onPointerUp={(event) => {
+            const start = chartSelectionStart.current;
+            const end = chartIndex(event);
+            chartSelectionStart.current = null;
+            setChartSelection(null);
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            if (start !== null && end >= 0) selectChartRange(start, end);
+          }}
+          onPointerCancel={() => {
+            chartSelectionStart.current = null;
+            setChartSelection(null);
+          }}
+          onPointerLeave={() => {
+            if (chartSelectionStart.current === null) setHoveredChartIndex(null);
+          }}
+          onDoubleClick={resetChart}
+        >
+          {visibleChartStats.length === 0 ? (
             <span className="logs-chart-empty">{t("logs.no_activity", "No log activity")}</span>
           ) : (
-            chartStats.map((item) => {
+            visibleChartStats.map((item, index) => {
               const totalValue = Number(item.total || 0);
+              const selected = chartSelection && index >= Math.min(chartSelection.start, chartSelection.end) && index <= Math.max(chartSelection.start, chartSelection.end);
               return (
                 <span
                   key={item.date}
+                  className={`logs-chart-bar${selected ? " selected" : ""}`}
+                  role="button"
+                  tabIndex={0}
                   style={{ height: `${Math.max(8, (totalValue / maxStat) * 100)}%` }}
                   title={`${item.date}: ${totalValue}`}
+                  aria-label={`${item.date}: ${totalValue}`}
+                  onFocus={() => setHoveredChartIndex(index)}
+                  onBlur={() => setHoveredChartIndex(null)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      selectChartRange(index, index);
+                    }
+                  }}
                 />
               );
             })
           )}
+          {hoveredChartIndex !== null && visibleChartStats[hoveredChartIndex] && (
+            <span
+              className="logs-chart-tooltip"
+              style={{ left: `${((hoveredChartIndex + 0.5) / visibleChartStats.length) * 100}%` }}
+            >
+              {visibleChartStats[hoveredChartIndex].date} · {visibleChartStats[hoveredChartIndex].total}
+            </span>
+          )}
         </div>
+        <button
+          type="button"
+          className="logs-chart-pan"
+          disabled={chartWindowStart >= chartMaxStart}
+          onClick={() => setChartWindowStart((start) => Math.min(chartMaxStart, start + 12))}
+          title={t("actions.next", "Next")}
+          aria-label={t("actions.next", "Next")}
+        >
+          <ChevronRight size={16} />
+        </button>
       </div>
 
       <header className="page-header logs-page-header">
         <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
           <span>{t("nav.logs", "Logs")}</span>
         </nav>
+        <button className="icon-button page-circle" onClick={props.onOpenSettings} title={t("settings.logs_title", "Logs")} aria-label={t("settings.logs_title", "Logs")}>
+          <Settings size={17} />
+        </button>
         <button className="icon-button page-circle" onClick={props.onRefresh} title={t("actions.refresh_logs", "Refresh logs")} aria-label={t("actions.refresh_logs", "Refresh logs")}>
           <RefreshCw size={17} />
         </button>
@@ -4372,28 +6277,65 @@ function LogsView(props: LogsViewProps) {
             id="logs-filter"
             name="logsFilter"
             autoComplete="off"
+            list="logs-search-history"
             aria-label={t("logs.search_aria", "Search term or filter")}
             value={props.filter}
             onChange={(event) => props.onFilter(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") props.onRefresh();
+              if (event.key === "Enter") apply();
             }}
             placeholder={t("logs.search_placeholder", "Search term or filter like `level > 0`")}
           />
+          <datalist id="logs-search-history">
+            {searchHistory.map((value) => <option key={value} value={value} />)}
+          </datalist>
         </div>
-        <button className="subtle apply-button" onClick={props.onRefresh} disabled={props.loading}>
+        <button className="subtle apply-button" onClick={apply} disabled={props.loading}>
           <ListFilter size={16} />
           {t("actions.apply", "Apply")}
         </button>
+        <label className="check-row logs-superuser-toggle">
+          <input
+            type="checkbox"
+            checked={props.includeSuperuserRequests}
+            onChange={(event) => props.onIncludeSuperuserRequests(event.target.checked)}
+          />
+          {t("logs.include_superuser_requests", "Include requests by superusers")}
+        </label>
         <div className="logs-header-meta">
           <span>{t("logs.hourly_events", { count: statsTotal, defaultValue: "{{count}} hourly events" })}</span>
         </div>
       </header>
 
+      {selectedIds.length > 0 && (
+        <div className="bulkbar">
+          <span>{t("transfer.selected_count", { count: selectedIds.length, defaultValue: "{{count}} selected" })}</span>
+          <button type="button" className="subtle" onClick={() => setSelectedIds([])}>
+            <X size={16} />
+            {t("actions.clear", "Clear")}
+          </button>
+          <button type="button" className="subtle" onClick={exportSelected}>
+            <Download size={16} />
+            {t("logs.export_selected", "Download JSON")}
+          </button>
+        </div>
+      )}
+
       <div className="page-table-wrapper">
         <table className="logs-table">
           <thead>
             <tr>
+              <th className="select-col">
+                <button
+                  type="button"
+                  className="checkbox-button"
+                  onClick={() => setSelectedIds(allVisibleSelected ? [] : props.logs.map((log) => log.id))}
+                  title={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
+                  aria-label={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
+                >
+                  {allVisibleSelected ? <CheckSquare2 size={17} /> : <Square size={17} />}
+                </button>
+              </th>
               <th className="log-level-col">{t("logs.level", "Level")}</th>
               <th>{t("logs.message", "Message")}</th>
               <th>{t("logs.time", "Created")}</th>
@@ -4403,15 +6345,30 @@ function LogsView(props: LogsViewProps) {
           <tbody>
             {props.logs.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={4}>
+                <td className="empty-row" colSpan={5}>
                   {t("logs.no_logs", "No logs")}
                 </td>
               </tr>
             ) : (
               props.logs.map((log) => {
                 const level = logLevel(log.level);
+                const selected = selectedSet.has(log.id);
                 return (
-                  <tr key={log.id} onClick={() => setSelected(log)} className="log-row">
+                  <tr key={log.id} onClick={() => props.onOpenLog(log)} className={selected ? "log-row selected" : "log-row"}>
+                    <td className="select-col">
+                      <button
+                        type="button"
+                        className="checkbox-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleSelected(log.id, event.shiftKey);
+                        }}
+                        title={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
+                        aria-label={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
+                      >
+                        {selected ? <CheckSquare2 size={17} /> : <Square size={17} />}
+                      </button>
+                    </td>
                     <td className="log-level-col">
                       <span className={`log-level ${level.kind}`}>{level.label}</span>
                     </td>
@@ -4436,7 +6393,7 @@ function LogsView(props: LogsViewProps) {
                         className="icon-button"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelected(log);
+                          props.onOpenLog(log);
                         }}
                         title={t("logs.inspect", "Inspect log")}
                         aria-label={t("logs.inspect", "Inspect log")}
@@ -4465,12 +6422,6 @@ function LogsView(props: LogsViewProps) {
         <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
         <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
       </footer>
-
-      {selected && (
-        <Modal title={t("logs.log_title", { id: selected.id, defaultValue: "Log {{id}}" })} onClose={() => setSelected(null)} wide>
-          <pre className="json-panel log-json">{JSON.stringify(selected, null, 2)}</pre>
-        </Modal>
-      )}
     </section>
   );
 }
@@ -4488,11 +6439,28 @@ type CollectionPayload = {
   otp?: OtpConfig;
   mfa?: MfaConfig;
   oauth2?: OAuth2Config;
+  authAlert?: AuthAlertConfig;
+  authToken?: TokenConfig;
+  passwordResetToken?: TokenConfig;
+  verificationToken?: TokenConfig;
+  emailChangeToken?: TokenConfig;
+  fileToken?: TokenConfig;
+  verificationTemplate?: EmailTemplate;
+  resetPasswordTemplate?: EmailTemplate;
+  confirmEmailChangeTemplate?: EmailTemplate;
+  authRule?: string | null;
+  manageRule?: string | null;
   viewQuery?: string | null;
   indexes?: string[];
 };
 
-type RuleKey = "listRule" | "viewRule" | "createRule" | "updateRule" | "deleteRule";
+type PendingDeletedField = {
+  field: FieldSchema;
+  /** Original position is retained so restore does not unexpectedly reshuffle schema fields. */
+  index: number;
+};
+
+type RuleKey = "listRule" | "viewRule" | "createRule" | "updateRule" | "deleteRule" | "authRule" | "manageRule";
 
 type CollectionModalProps = {
   state: CollectionEditorState;
@@ -4500,20 +6468,35 @@ type CollectionModalProps = {
   allCollections: CollectionSchema[];
   onClose: () => void;
   onConfirm: (request: ConfirmRequest) => Promise<boolean>;
+  onDryRunView: (query: string) => Promise<ViewQueryPreview>;
+  onGenerateAppleClientSecret: (input: AppleClientSecretInput) => Promise<{ secret: string }>;
   onSubmit: (payload: CollectionPayload) => void;
 };
 
-function CollectionModal({ state, oauthProviders, allCollections, onClose, onConfirm, onSubmit }: CollectionModalProps) {
+function CollectionModal({
+  state,
+  oauthProviders,
+  allCollections,
+  onClose,
+  onConfirm,
+  onDryRunView,
+  onGenerateAppleClientSecret,
+  onSubmit
+}: CollectionModalProps) {
   const { t } = useTranslation();
   const collection = state.collection;
   const [name, setName] = useState(collection?.name ?? "");
   const [type, setType] = useState(collection?.type ?? "base");
   const [fields, setFields] = useState(JSON.stringify(collection?.fields ?? DEFAULT_FIELDS, null, 2));
+  const [pendingDeletedFields, setPendingDeletedFields] = useState<PendingDeletedField[]>([]);
   const [viewQuery, setViewQuery] = useState(collection?.viewQuery ?? "");
   const [indexes, setIndexes] = useState<string[]>(collection?.indexes ?? []);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [dragArmed, setDragArmed] = useState(false);
+  const [viewPreview, setViewPreview] = useState<ViewQueryPreview | null>(null);
+  const [viewPreviewError, setViewPreviewError] = useState("");
+  const [viewPreviewLoading, setViewPreviewLoading] = useState(false);
   const ruleCompletions = useMemo(
     () => buildRuleCompletions(collection ?? null, allCollections),
     [allCollections, collection]
@@ -4529,10 +6512,26 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
   const [passwordEnabled, setPasswordEnabled] = useState(collection?.passwordAuth?.enabled ?? true);
   const [identityFields, setIdentityFields] = useState<string[]>(collection?.passwordAuth?.identityFields ?? ["email"]);
   const [otpEnabled, setOtpEnabled] = useState(collection?.otp?.enabled ?? false);
-  const [otpDuration, setOtpDuration] = useState(String(collection?.otp?.duration ?? 300));
-  const [otpLength, setOtpLength] = useState(String(collection?.otp?.length ?? 6));
+  const [otpDuration, setOtpDuration] = useState(String(collection?.otp?.duration ?? 180));
+  const [otpLength, setOtpLength] = useState(String(collection?.otp?.length ?? 8));
   const [mfaEnabled, setMfaEnabled] = useState(collection?.mfa?.enabled ?? false);
-  const [mfaDuration, setMfaDuration] = useState(String(collection?.mfa?.duration ?? 1800));
+  const [mfaDuration, setMfaDuration] = useState(String(collection?.mfa?.duration ?? 600));
+  const [mfaRule, setMfaRule] = useState(collection?.mfa?.rule ?? "");
+  const [authAlertEnabled, setAuthAlertEnabled] = useState(collection?.authAlert?.enabled ?? true);
+  const [templates, setTemplates] = useState<Record<"verification" | "passwordReset" | "emailChange" | "otp" | "authAlert", EmailTemplate>>({
+    verification: collection?.verificationTemplate ?? {},
+    passwordReset: collection?.resetPasswordTemplate ?? {},
+    emailChange: collection?.confirmEmailChangeTemplate ?? {},
+    otp: collection?.otp?.emailTemplate ?? {},
+    authAlert: collection?.authAlert?.emailTemplate ?? {}
+  });
+  const [tokenDrafts, setTokenDrafts] = useState<Record<"authToken" | "passwordResetToken" | "verificationToken" | "emailChangeToken" | "fileToken", { duration: string; rotate: boolean }>>({
+    authToken: { duration: String(collection?.authToken?.duration ?? 432000), rotate: false },
+    passwordResetToken: { duration: String(collection?.passwordResetToken?.duration ?? 1800), rotate: false },
+    verificationToken: { duration: String(collection?.verificationToken?.duration ?? 86400), rotate: false },
+    emailChangeToken: { duration: String(collection?.emailChangeToken?.duration ?? 1800), rotate: false },
+    fileToken: { duration: String(collection?.fileToken?.duration ?? 180), rotate: false }
+  });
   const [oauthEnabled, setOauthEnabled] = useState(collection?.oauth2?.enabled ?? false);
   const [oauthProviderNames, setOauthProviderNames] = useState<string[]>(
     collection?.oauth2?.providers?.map((provider) => provider.name) ?? []
@@ -4551,7 +6550,11 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     viewRule: collection?.viewRule ?? null,
     createRule: collection?.createRule ?? null,
     updateRule: collection?.updateRule ?? null,
-    deleteRule: collection?.deleteRule ?? null
+    deleteRule: collection?.deleteRule ?? null,
+    // New auth collections authenticate publicly by default. Existing `null` must
+    // stay locked (superusers only), so do not collapse it with the public `""`.
+    authRule: collection && collection.authRule !== undefined ? collection.authRule : "",
+    manageRule: collection?.manageRule ?? null
   });
   const [ruleMemory, setRuleMemory] = useState<Partial<Record<RuleKey, string>>>({});
   const [error, setError] = useState("");
@@ -4572,6 +6575,10 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     otpLength,
     mfaEnabled,
     mfaDuration,
+    mfaRule,
+    authAlertEnabled,
+    templates,
+    tokenDrafts,
     oauthEnabled,
     oauthProviderNames,
     oauthProviderConfigs,
@@ -4602,6 +6609,36 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     }
   }, [activeTab, tabs]);
 
+  useEffect(() => {
+    if (type !== "view" || activeTab !== "query" || !viewQuery.trim()) {
+      setViewPreview(null);
+      setViewPreviewError("");
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setViewPreviewLoading(true);
+      setViewPreviewError("");
+      onDryRunView(viewQuery)
+        .then((preview) => {
+          if (!cancelled) setViewPreview(preview);
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setViewPreview(null);
+            setViewPreviewError(errorMessage(error));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setViewPreviewLoading(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeTab, onDryRunView, type, viewQuery]);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
@@ -4626,13 +6663,15 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
       onSubmit({
         name: name.trim(),
         type,
-        fields: type === "view" ? [] : parsedFields,
+        fields: type === "view" ? (collection?.fields ?? []) : parsedFields,
         ...(type === "view" ? {} : { indexes }),
         listRule: normalizeRule(rules.listRule),
         viewRule: normalizeRule(rules.viewRule),
         createRule: normalizeRule(rules.createRule),
         updateRule: normalizeRule(rules.updateRule),
         deleteRule: normalizeRule(rules.deleteRule),
+        authRule: type === "auth" ? normalizeRule(rules.authRule) : null,
+        manageRule: normalizeRule(rules.manageRule),
         ...(type === "view" ? { viewQuery: viewQuery.trim() } : {}),
         ...(type === "auth"
           ? {
@@ -4642,13 +6681,27 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
               },
               otp: {
                 enabled: otpEnabled,
-                duration: Number(otpDuration || 300),
-                length: Number(otpLength || 6)
+                duration: Number(otpDuration || 180),
+                length: Number(otpLength || 8),
+                emailTemplate: templates.otp
               },
               mfa: {
                 enabled: mfaEnabled,
-                duration: Number(mfaDuration || 1800)
+                duration: Number(mfaDuration || 600),
+                rule: normalizeRule(mfaRule)
               },
+              authAlert: {
+                enabled: authAlertEnabled,
+                emailTemplate: templates.authAlert
+              },
+              authToken: tokenPayload("authToken"),
+              passwordResetToken: tokenPayload("passwordResetToken"),
+              verificationToken: tokenPayload("verificationToken"),
+              emailChangeToken: tokenPayload("emailChangeToken"),
+              fileToken: tokenPayload("fileToken"),
+              verificationTemplate: templates.verification,
+              resetPasswordTemplate: templates.passwordReset,
+              confirmEmailChangeTemplate: templates.emailChange,
               oauth2: {
                 enabled: oauthEnabled,
                 mappedFields: oauthMappedFields,
@@ -4719,6 +6772,41 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
     }));
   }
 
+  function updateTemplate(
+    key: "verification" | "passwordReset" | "emailChange" | "otp" | "authAlert",
+    patch: Partial<EmailTemplate>
+  ) {
+    setTemplates((current) => ({ ...current, [key]: { ...current[key], ...patch } }));
+  }
+
+  function updateTokenDraft(
+    key: "authToken" | "passwordResetToken" | "verificationToken" | "emailChangeToken" | "fileToken",
+    patch: Partial<{ duration: string; rotate: boolean }>
+  ) {
+    setTokenDrafts((current) => ({ ...current, [key]: { ...current[key], ...patch } }));
+  }
+
+  function tokenPayload(key: "authToken" | "passwordResetToken" | "verificationToken" | "emailChangeToken" | "fileToken"): TokenConfig {
+    const draft = tokenDrafts[key];
+    return {
+      duration: Math.max(1, Number(draft.duration) || 1),
+      ...(draft.rotate ? { secret: randomTokenSecret() } : {})
+    };
+  }
+
+  async function requestTokenRotation(key: "authToken" | "passwordResetToken" | "verificationToken" | "emailChangeToken" | "fileToken") {
+    const confirmed = await onConfirm({
+      title: t("parity.collection.rotate_token_title", "Invalidate previously issued tokens"),
+      message: t(
+        "parity.collection.rotate_token_body",
+        "Saving this collection will rotate the signing secret for this token type. Existing tokens of this type will stop working."
+      ),
+      confirmLabel: t("parity.collection.rotate_token_action", "Invalidate tokens"),
+      danger: true
+    });
+    if (confirmed) updateTokenDraft(key, { rotate: true });
+  }
+
   const fieldsPreview = useMemo(() => parseFieldsPreview(fields, t), [fields, t]);
 
   function updateFields(nextFields: FieldSchema[]) {
@@ -4750,7 +6838,28 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
       setError(fieldsPreview.error);
       return;
     }
+    const removed = fieldsPreview.fields[index];
+    if (!removed) return;
+    // An existing field's deletion is destructive only once the collection is
+    // saved. Keep it recoverable in this modal, matching the official staged
+    // delete flow. A brand-new field has no persisted data and can disappear
+    // immediately.
+    if (removed.id) {
+      setPendingDeletedFields((current) =>
+        current.some((item) => item.field.id === removed.id)
+          ? current
+          : [...current, { field: removed, index }]
+      );
+    }
     updateFields(fieldsPreview.fields.filter((_, currentIndex) => currentIndex !== index));
+  }
+
+  function restoreDeletedField(deleted: PendingDeletedField) {
+    if (fieldsPreview.error || fieldsPreview.fields.some((field) => field.name === deleted.field.name)) return;
+    const nextFields = [...fieldsPreview.fields];
+    nextFields.splice(Math.min(deleted.index, nextFields.length), 0, deleted.field);
+    updateFields(nextFields);
+    setPendingDeletedFields((current) => current.filter((item) => item.field.id !== deleted.field.id));
   }
 
   function updateFieldAt(index: number, updatedField: FieldSchema) {
@@ -4909,6 +7018,31 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
               )}
             </div>
           )}
+          {pendingDeletedFields.length > 0 && !fieldsPreview.error && (
+            <aside className="field-deletion-queue" aria-label={t("actions.remove", "Remove")}>
+              {pendingDeletedFields.map((deleted) => {
+                const nameConflict = fieldsPreview.fields.some((field) => field.name === deleted.field.name);
+                return (
+                  <div className="field-deletion-queue-item" key={deleted.field.id || deleted.field.name}>
+                    <span>
+                      <strong>{deleted.field.name}</strong>
+                      <em>{deleted.field.type}</em>
+                    </span>
+                    <button
+                      type="button"
+                      className="subtle compact"
+                      disabled={nameConflict}
+                      onClick={() => restoreDeletedField(deleted)}
+                      title={t("actions.restore", "Restore")}
+                    >
+                      <RotateCcw size={14} />
+                      {t("actions.restore", "Restore")}
+                    </button>
+                  </div>
+                );
+              })}
+            </aside>
+          )}
           <label>
             {t("collections.fields_json", "Fields JSON")}
             <textarea value={fields} onChange={(event) => setFields(event.target.value)} spellCheck={false} />
@@ -4938,6 +7072,38 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                 minHeight={120}
               />
             </label>
+            <div className="table-meta">
+              <span>{t("parity.collection.view_preview", "Live query preview")}</span>
+              {viewPreviewLoading && <span>{t("common.loading", "Loading...")}</span>}
+              {viewPreview && <span>{t("parity.collection.view_preview_rows", { count: viewPreview.sample.length, defaultValue: "{{count}} sample row(s)" })}</span>}
+            </div>
+            {viewPreviewError && <p className="form-error">{viewPreviewError}</p>}
+            {viewPreview && (
+              <div className="table-wrap">
+                <table className="sql-table">
+                  <thead>
+                    <tr>
+                      {viewPreview.fields.map((field) => <th key={field.name}>{field.name}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewPreview.sample.length === 0 ? (
+                      <tr>
+                        <td className="empty-row" colSpan={Math.max(1, viewPreview.fields.length)}>
+                          {t("parity.collection.view_preview_empty", "The query is valid but returned no sample rows.")}
+                        </td>
+                      </tr>
+                    ) : (
+                      viewPreview.sample.map((row, index) => (
+                        <tr key={String(row.id ?? index)}>
+                          {viewPreview.fields.map((field) => <td key={field.name}><code>{formatValue(row[field.name])}</code></td>)}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         )}
 
@@ -4984,7 +7150,7 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                   {t("collections.duration_seconds", "Duration (s)")}
                   <input
                     type="number"
-                    min={60}
+                    min={1}
                     value={otpDuration}
                     onChange={(event) => setOtpDuration(event.target.value)}
                   />
@@ -5014,11 +7180,35 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                 {t("collections.duration_seconds", "Duration (s)")}
                 <input
                   type="number"
-                  min={60}
+                  min={1}
                   value={mfaDuration}
                   onChange={(event) => setMfaDuration(event.target.value)}
                 />
               </label>
+              <label>
+                {t("parity.collection.mfa_rule", "MFA rule")}
+                <CodeEditor
+                  value={mfaRule}
+                  onChange={setMfaRule}
+                  language="pbrule"
+                  completions={ruleCompletions}
+                  placeholder={t("parity.collection.mfa_rule_placeholder", "Leave empty to require MFA from every account")}
+                  name="mfaRule"
+                  ariaLabel={t("parity.collection.mfa_rule", "MFA rule")}
+                  minHeight={72}
+                />
+              </label>
+            </article>
+
+            <article className="auth-config-card">
+              <header>
+                <strong>{t("parity.collection.auth_alert", "Login alert")}</strong>
+              </header>
+              <label className="check-row">
+                <input type="checkbox" checked={authAlertEnabled} onChange={(event) => setAuthAlertEnabled(event.target.checked)} />
+                {t("parity.collection.auth_alert_enabled", "Send an email when a new login origin is detected")}
+              </label>
+              <p className="field-option-help">{t("parity.collection.auth_alert_help", "Edit the login alert email in the Templates tab.")}</p>
             </article>
 
             <article className="auth-config-card auth-config-card-wide">
@@ -5136,6 +7326,19 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
                             PKCE
                           </label>
                         </div>
+                        {providerName === "apple" && (
+                          <AppleClientSecretAssistant
+                            clientId={config.clientId ?? ""}
+                            onGenerate={onGenerateAppleClientSecret}
+                            onApplySecret={(clientSecret) => updateOauthProviderConfig(providerName, { clientSecret })}
+                          />
+                        )}
+                        {providerName === "oidc" && (
+                          <OidcDiscoveryAssistant
+                            config={config}
+                            onApply={(patch) => updateOauthProviderConfig(providerName, patch)}
+                          />
+                        )}
                       </article>
                     );
                   })}
@@ -5144,6 +7347,92 @@ function CollectionModal({ state, oauthProviders, allCollections, onClose, onCon
             </article>
           </section>
         )}
+
+        {activeTab === "templates" && type === "auth" && (
+          <section className="auth-config-grid collection-tab-panel">
+            {([
+              ["verification", t("parity.collection.template_verification", "Verification email")],
+              ["passwordReset", t("parity.collection.template_password_reset", "Password reset email")],
+              ["emailChange", t("parity.collection.template_email_change", "Confirm email change")],
+              ["otp", t("parity.collection.template_otp", "One-time password")],
+              ["authAlert", t("parity.collection.template_auth_alert", "New login alert")]
+            ] as const).map(([key, label]) => {
+              const template = templates[key];
+              return (
+                <article className="auth-config-card auth-config-card-wide" key={key}>
+                  <header>
+                    <strong>{label}</strong>
+                  </header>
+                  <label>
+                    {t("parity.collection.template_subject", "Subject")}
+                    <input
+                      value={template.subject ?? ""}
+                      onChange={(event) => updateTemplate(key, { subject: event.target.value })}
+                      placeholder={t("parity.collection.template_subject_placeholder", "Use {APP_NAME} for the application name")}
+                    />
+                  </label>
+                  <label>
+                    {t("parity.collection.template_body", "HTML body")}
+                    <textarea
+                      value={template.body ?? ""}
+                      onChange={(event) => updateTemplate(key, { body: event.target.value })}
+                      rows={8}
+                      spellCheck={false}
+                    />
+                  </label>
+                  <p className="field-option-help">{t("parity.collection.template_help", "Available placeholders include {APP_NAME}, {APP_URL}, {TOKEN}, and action-specific values.")}</p>
+                </article>
+              );
+            })}
+          </section>
+        )}
+
+        {activeTab === "tokens" && type === "auth" && (
+          <section className="auth-config-grid collection-tab-panel">
+            {([
+              ["authToken", t("parity.collection.auth_token", "Auth token"), t("parity.collection.auth_token_help", "Used for signed-in auth records.")],
+              ["passwordResetToken", t("parity.collection.password_reset_token", "Password reset token"), t("parity.collection.password_reset_token_help", "Used by password reset links.")],
+              ["verificationToken", t("parity.collection.verification_token", "Verification token"), t("parity.collection.verification_token_help", "Used by email verification links.")],
+              ["emailChangeToken", t("parity.collection.email_change_token", "Email change token"), t("parity.collection.email_change_token_help", "Used by email change confirmation links.")],
+              ["fileToken", t("parity.collection.file_token", "File token"), t("parity.collection.file_token_help", "Used for time-limited protected file URLs.")]
+            ] as const).map(([key, label, help]) => {
+              const draft = tokenDrafts[key];
+              return (
+                <article className="auth-config-card" key={key}>
+                  <header>
+                    <div>
+                      <strong>{label}</strong>
+                      <span>{help}</span>
+                    </div>
+                  </header>
+                  <label>
+                    {t("parity.collection.token_duration", "Duration (seconds)")}
+                    <input
+                      type="number"
+                      min={1}
+                      value={draft.duration}
+                      onChange={(event) => updateTokenDraft(key, { duration: event.target.value })}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className={draft.rotate ? "subtle danger" : "subtle"}
+                    onClick={() => {
+                      if (draft.rotate) updateTokenDraft(key, { rotate: false });
+                      else void requestTokenRotation(key);
+                    }}
+                  >
+                    <RotateCcw size={15} />
+                    {draft.rotate
+                      ? t("parity.collection.token_rotation_pending", "Will invalidate on save")
+                      : t("parity.collection.rotate_token_action", "Invalidate tokens")}
+                  </button>
+                </article>
+              );
+            })}
+          </section>
+        )}
+
         {activeTab === "rules" && (
           <section className="collection-rules-panel collection-tab-panel">
             <div className="rules-helper">
@@ -5254,9 +7543,20 @@ type RecordModalProps = {
   collection: CollectionSchema;
   collections: CollectionSchema[];
   state: RecordEditorState;
+  hideControls: boolean;
   onClose: () => void;
   onConfirm: (request: ConfirmRequest) => Promise<boolean>;
   fetchRecords: RelationFetcher;
+  getFileToken: () => Promise<string>;
+  onRequestVerification: () => Promise<void>;
+  onRequestPasswordReset: () => Promise<void>;
+  onImpersonate: (duration: number) => Promise<ImpersonationResult>;
+  onLoadExternalAuths: () => Promise<AuthRecordLink[]>;
+  onUnlinkExternalAuth: (link: AuthRecordLink) => Promise<void>;
+  onDuplicate: () => void;
+  onCreateRelationRecord?: (target: RelationCollection, onSaved: (record: RelationRecord) => void) => void;
+  onEditRelationRecord?: (target: RelationCollection, id: string, onSaved: (record: RelationRecord) => void) => void;
+  onNotify: (message: string, kind?: "ok" | "error") => void;
   onSubmit: (
     payload: Record<string, unknown>,
     files: Record<string, File[]>,
@@ -5264,36 +7564,111 @@ type RecordModalProps = {
   ) => Promise<void> | void;
 };
 
-function RecordModal({ collection, collections, state, onClose, onConfirm, fetchRecords, onSubmit }: RecordModalProps) {
+function RecordModal({
+  collection,
+  collections,
+  state,
+  hideControls,
+  onClose,
+  onConfirm,
+  fetchRecords,
+  getFileToken,
+  onRequestVerification,
+  onRequestPasswordReset,
+  onImpersonate,
+  onLoadExternalAuths,
+  onUnlinkExternalAuth,
+  onDuplicate,
+  onCreateRelationRecord,
+  onEditRelationRecord,
+  onNotify,
+  onSubmit
+}: RecordModalProps) {
   const { t } = useTranslation();
   const fileFields = (collection.fields ?? []).filter((field) => field.type === "file" && !field.hidden);
-  const editableFields = (collection.fields ?? []).filter(
+  const ordinaryEditableFields = (collection.fields ?? []).filter(
     (field) => field.type !== "file" && !field.hidden && !field.system
   );
-  const initialPayload = useMemo(() => recordEditorPayload(collection, state.record), [collection, state.record]);
-  const draftKey = `pbj_record_draft_${collection.id || collection.name}_${state.record?.id || "new"}`;
+  const authVisibleFields =
+    collection.type === "auth"
+      ? (collection.fields ?? []).filter((field) => ["email", "emailVisibility", "verified"].includes(field.name))
+      : [];
+  const passwordField =
+    collection.type === "auth" ? (collection.fields ?? []).find((field) => field.name === "password") : undefined;
+  const editableFields = [...authVisibleFields, ...ordinaryEditableFields];
+  const duplicating = state.mode === "duplicate";
+  const readOnly = collection.type === "view";
+  const initialPayload = useMemo(
+    () => (duplicating ? duplicateRecordPayload(collection, state.record) : recordEditorPayload(collection, state.record)),
+    [collection, duplicating, state.record]
+  );
+  const draftKey = state.draftKey
+    ? `${state.draftKey}${duplicating ? "_duplicate" : ""}`
+    : `pbj_record_draft_${collection.id || collection.name}_${duplicating ? `duplicate_${state.record?.id || "new"}` : state.record?.id || "new"}`;
   const [basePayload, setBasePayload] = useState<Record<string, unknown>>(() => initialPayload);
   const [payload, setPayload] = useState<Record<string, unknown>>(() => initialPayload);
   const [json, setJson] = useState(JSON.stringify(initialPayload, null, 2));
   const [initialDraft, setInitialDraft] = useState<Record<string, unknown> | null>(() => readRecordDraft(draftKey));
-  const [activeTab, setActiveTab] = useState<"main" | "providers">("main");
+  const [activeTab, setActiveTab] = useState<"main" | "providers" | "actions">("main");
   const [files, setFiles] = useState<Record<string, File[]>>({});
+  const [fileRemovals, setFileRemovals] = useState<Record<string, string[]>>({});
+  const [fileToken, setFileToken] = useState("");
+  // A duplicated auth record is a new account, so it must collect a fresh
+  // password instead of inheriting the source record's edit-only state.
+  const [changePassword, setChangePassword] = useState(() => Boolean(passwordField) && (!state.record || duplicating));
+  const [passwordValue, setPasswordValue] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [invalidJsonFields, setInvalidJsonFields] = useState<Record<string, true>>({});
+  const [invalidRecordJson, setInvalidRecordJson] = useState(false);
+  const [jsonFieldResetVersion, setJsonFieldResetVersion] = useState(0);
   const [saving, setSaving] = useState(false);
-  const editing = Boolean(state.record);
-  const showTabs = Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
-  const changed = JSON.stringify(payload) !== JSON.stringify(basePayload) || Object.values(files).some((items) => items.length > 0);
-  const canSubmit = !saving && (!editing || changed);
+  const editing = Boolean(state.record) && !duplicating;
+  // Match PocketBase's safety mode: a new record remains creatable, while an
+  // existing record can be inspected/edited but requires an explicit unlock
+  // before any change can be submitted.
+  const [locked, setLocked] = useState(() => editing && !readOnly && hideControls);
+  const showTabs = !duplicating && Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
+  const invalidJsonFieldNames = Object.keys(invalidJsonFields);
+  const hasInvalidJsonFields = invalidJsonFieldNames.length > 0;
+  const hasInvalidJson = hasInvalidJsonFields || invalidRecordJson;
+  const changed =
+    JSON.stringify(payload) !== JSON.stringify(basePayload) ||
+    Object.values(files).some((items) => items.length > 0) ||
+    Object.values(fileRemovals).some((items) => items.length > 0) ||
+    hasInvalidJson;
+  const canSubmit = !readOnly && !locked && !saving && !hasInvalidJson && (!editing || changed);
+  const exportRecord = useMemo(
+    () => sanitizeRecordForExport(readOnly && state.record ? state.record : payload),
+    [payload, readOnly, state.record]
+  );
+  const exportJson = useMemo(() => JSON.stringify(exportRecord, null, 2), [exportRecord]);
 
   useEffect(() => {
     if (!changed) return;
-    localStorage.setItem(draftKey, JSON.stringify(payload));
+    localStorage.setItem(draftKey, JSON.stringify(sanitizeRecordForExport(payload)));
   }, [changed, draftKey, payload]);
 
   useEffect(() => {
     if (!showTabs && activeTab !== "main") setActiveTab("main");
   }, [activeTab, showTabs]);
+
+  useEffect(() => {
+    if (readOnly || duplicating || !state.record?.id || fileFields.length === 0) return;
+    let cancelled = false;
+    getFileToken()
+      .then((nextToken) => {
+        if (!cancelled) setFileToken(nextToken);
+      })
+      .catch(() => {
+        // A regular file URL still works for public file fields. The explicit
+        // token is only needed by the browser's media elements for protected ones.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [duplicating, fileFields.length, getFileToken, readOnly, state.record?.id]);
 
   async function requestClose() {
     if (changed) {
@@ -5318,6 +7693,7 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
       setJson(JSON.stringify(next, null, 2));
       return next;
     });
+    setInvalidRecordJson(false);
     setError("");
     // Editing a field clears its own error, so stale markers don't linger.
     setFieldErrors((current) => {
@@ -5328,16 +7704,79 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
     });
   }
 
+  const updateJsonFieldValidity = useCallback((fieldName: string, valid: boolean) => {
+    setInvalidJsonFields((current) => {
+      const alreadyInvalid = Boolean(current[fieldName]);
+      if (valid) {
+        if (!alreadyInvalid) return current;
+        const next = { ...current };
+        delete next[fieldName];
+        return next;
+      }
+      if (alreadyInvalid) return current;
+      return { ...current, [fieldName]: true };
+    });
+  }, []);
+
+  async function updateVerified(field: FieldSchema, value: boolean) {
+    if (value && state.record && !Boolean(payload[field.name])) {
+      const proceed = await onConfirm({
+        title: t("parity.confirm.verify_auth_record_title", "Verify email address"),
+        message: t(
+          "parity.confirm.verify_auth_record_body",
+          "Mark this account as verified without the owner completing the email verification link?"
+        ),
+        confirmLabel: t("actions.verify", "Verify")
+      });
+      if (!proceed) return;
+    }
+    updatePayload(field, value);
+  }
+
+  function updatePassword(value: string) {
+    setPasswordValue(value);
+    if (passwordField) updatePayload(passwordField, value);
+  }
+
+  function togglePasswordChange(enabled: boolean) {
+    setChangePassword(enabled);
+    setPasswordValue("");
+    setPasswordConfirmation("");
+    if (!enabled && passwordField) {
+      setPayload((current) => {
+        const next = { ...current };
+        delete next[passwordField.name];
+        setJson(JSON.stringify(next, null, 2));
+        return next;
+      });
+      setInvalidRecordJson(false);
+    }
+  }
+
+  function generatePassword() {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%*";
+    const bytes = new Uint32Array(18);
+    crypto.getRandomValues(bytes);
+    const next = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+    setPasswordConfirmation(next);
+    updatePassword(next);
+  }
+
   function updateJson(value: string) {
     setJson(value);
     try {
       const parsed = JSON.parse(value || "{}") as Record<string, unknown>;
-      if (isPlainObject(parsed)) {
-        setPayload(parsed);
-        setError("");
+      if (!isPlainObject(parsed)) {
+        setInvalidRecordJson(true);
+        return;
       }
+      setPayload(parsed);
+      setInvalidRecordJson(false);
+      setError("");
     } catch {
-      // Keep the raw JSON text so the submit path can surface the exact validation error.
+      // Keep the raw JSON text visible, but prevent a submit from silently
+      // falling back to the last valid object.
+      setInvalidRecordJson(true);
     }
   }
 
@@ -5347,6 +7786,9 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
     setJson(JSON.stringify(initialDraft, null, 2));
     setInitialDraft(null);
     setError("");
+    setInvalidJsonFields({});
+    setInvalidRecordJson(false);
+    setJsonFieldResetVersion((current) => current + 1);
   }
 
   function discardDraft() {
@@ -5358,34 +7800,71 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
     setPayload(basePayload);
     setJson(JSON.stringify(basePayload, null, 2));
     setFiles({});
+    setFileRemovals({});
     localStorage.removeItem(draftKey);
     setInitialDraft(null);
     setError("");
+    setInvalidJsonFields({});
+    setInvalidRecordJson(false);
+    setJsonFieldResetVersion((current) => current + 1);
   }
 
   async function submit(event: FormEvent<HTMLFormElement> | null, close = true) {
     event?.preventDefault();
-    if (saving) return;
+    if (saving || readOnly || locked) return;
+    if (hasInvalidJson) {
+      const message = t("errors.invalid_json", "Enter valid JSON before saving.");
+      setError(message);
+      if (hasInvalidJsonFields) {
+        setFieldErrors((current) => ({
+          ...current,
+          ...Object.fromEntries(invalidJsonFieldNames.map((fieldName) => [fieldName, message]))
+        }));
+      }
+      return;
+    }
     setSaving(true);
     try {
       const parsedPayload = JSON.parse(json || "{}") as Record<string, unknown>;
       if (!isPlainObject(parsedPayload)) throw new Error(t("errors.record_payload_object", "Record payload must be an object."));
-      await onSubmit(parsedPayload, files, { close });
+      const requestPayload = { ...parsedPayload };
+      if (passwordField && changePassword && passwordValue !== passwordConfirmation) {
+        throw new Error(t("parity.errors.password_confirmation_mismatch", "Password confirmation does not match."));
+      }
+      if (passwordField && changePassword) {
+        requestPayload.passwordConfirm = passwordConfirmation;
+      }
+      if (passwordField && editing && !changePassword) {
+        delete requestPayload[passwordField.name];
+        delete requestPayload.passwordConfirm;
+      }
+      for (const [fieldName, names] of Object.entries(fileRemovals)) {
+        if (names.length > 0) requestPayload[`${fieldName}-`] = names;
+      }
+      await onSubmit(requestPayload, files, { close });
       if (!close && !editing) {
         const nextPayload = recordEditorPayload(collection);
         setBasePayload(nextPayload);
         setPayload(nextPayload);
         setJson(JSON.stringify(nextPayload, null, 2));
         setFiles({});
+        setFileRemovals({});
         localStorage.removeItem(draftKey);
         setInitialDraft(null);
+        setInvalidJsonFields({});
+        setInvalidRecordJson(false);
+        setJsonFieldResetVersion((current) => current + 1);
         return;
       }
       setBasePayload(parsedPayload);
       setPayload(parsedPayload);
       setFiles({});
+      setFileRemovals({});
       localStorage.removeItem(draftKey);
       setInitialDraft(null);
+      setInvalidJsonFields({});
+      setInvalidRecordJson(false);
+      setJsonFieldResetVersion((current) => current + 1);
     } catch (err) {
       setError(errorMessage(err));
       setFieldErrors(fieldErrorsOf(err));
@@ -5394,10 +7873,54 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
     }
   }
 
+  function copyRecordJson() {
+    navigator.clipboard.writeText(exportJson).then(
+      () => onNotify(t("notifications.copied", "Copied")),
+      (error) => onNotify(errorMessage(error), "error")
+    );
+  }
+
+  function downloadRecordJson() {
+    const id = state.record?.id || "new";
+    downloadJsonFile(exportRecord, `pocketbase-${collection.name}-${id}.json`);
+  }
+
+  if (readOnly) {
+    return (
+      <Modal
+        title={t("records.view_record_title", { id: state.record?.id ?? "", defaultValue: "View {{id}}" })}
+        onClose={onClose}
+        wide
+      >
+        <section className="record-preview">
+          <p>{t("parity.records.view_read_only", "View collection records are read-only.")}</p>
+          <pre>{exportJson}</pre>
+          <div className="modal-actions record-footer-actions">
+            <button type="button" className="subtle" onClick={onClose}>
+              <X size={16} />
+              {t("actions.close", "Close")}
+            </button>
+            <span className="modal-actions-spacer" />
+            <button type="button" className="subtle" onClick={copyRecordJson}>
+              <Copy size={16} />
+              {t("actions.copy_json", "Copy JSON")}
+            </button>
+            <button type="button" className="primary" onClick={downloadRecordJson}>
+              <Download size={16} />
+              {t("actions.download_json", "Download as JSON")}
+            </button>
+          </div>
+        </section>
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       title={
-        state.record
+        duplicating
+          ? t("parity.records.duplicate_record_title", { id: state.record?.id ?? "", defaultValue: "Duplicate {{id}}" })
+          : state.record
           ? t("records.edit_record_title", { id: state.record.id, defaultValue: "Edit {{id}}" })
           : t("records.new_record_title", { name: collection.name, defaultValue: "New {{name}}" })
       }
@@ -5434,10 +7957,28 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
             >
               {t("records.auth_providers", "Auth providers")}
             </button>
+            <button
+              type="button"
+              className={activeTab === "actions" ? "active" : ""}
+              onClick={() => setActiveTab("actions")}
+            >
+              {t("parity.records.account_actions", "Account actions")}
+            </button>
           </nav>
         )}
 
-        {activeTab === "providers" ? (
+        {activeTab === "actions" && state.record ? (
+          <AuthRecordActions
+            record={state.record}
+            onConfirm={onConfirm}
+            onRequestVerification={onRequestVerification}
+            onRequestPasswordReset={onRequestPasswordReset}
+            onImpersonate={onImpersonate}
+            onLoadLinks={onLoadExternalAuths}
+            onUnlink={onUnlinkExternalAuth}
+            onNotify={onNotify}
+          />
+        ) : activeTab === "providers" ? (
           <AuthProvidersPanel collection={collection} record={state.record} />
         ) : (
           <div className="record-editor-layout">
@@ -5455,14 +7996,30 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
                   editableFields.map((field) => (
                     <div
                       key={field.name}
-                      className={`record-field-slot${fieldErrors[field.name] ? " has-error" : ""}`}
+                      className={`record-field-slot${fieldErrors[field.name] || invalidJsonFields[field.name] ? " has-error" : ""}`}
                     >
                       <RecordFieldControl
                         field={field}
                         value={payload[field.name]}
                         collections={collections}
                         fetchRecords={fetchRecords}
-                        onChange={(value) => updatePayload(field, value)}
+                        onCreateRelationRecord={onCreateRelationRecord}
+                        onEditRelationRecord={onEditRelationRecord}
+                        resolveFileUrl={({ collection: fileCollection, recordId, filename, thumb }) => {
+                          const query = new URLSearchParams();
+                          if (thumb) query.set("thumb", thumb);
+                          const suffix = query.toString();
+                          return `/api/files/${encodeURIComponent(fileCollection.id || fileCollection.name)}/${encodeURIComponent(recordId)}/${encodeURIComponent(filename)}${suffix ? `?${suffix}` : ""}`;
+                        }}
+                        onValidityChange={updateJsonFieldValidity}
+                        resetVersion={jsonFieldResetVersion}
+                        onChange={(value) => {
+                          if (field.name === "verified") {
+                            void updateVerified(field, Boolean(value));
+                          } else {
+                            updatePayload(field, value);
+                          }
+                        }}
                       />
                       {fieldErrors[field.name] && (
                         <p className="record-field-error">{fieldErrors[field.name]}</p>
@@ -5470,38 +8027,104 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
                     </div>
                   ))
                 )}
+                {passwordField && (
+                  <div className="record-field-slot auth-password-slot">
+                    {editing && (
+                      <label className="check-row">
+                        <input
+                          type="checkbox"
+                          checked={changePassword}
+                          onChange={(event) => togglePasswordChange(event.target.checked)}
+                        />
+                        {t("parity.records.change_password", "Change password")}
+                      </label>
+                    )}
+                    {changePassword && (
+                      <div className="record-field-card wide auth-password-fields">
+                        <span>
+                          <strong>{t("parity.records.new_password", "New password")}</strong>
+                          <span className="record-field-meta">{t("parity.records.password_help", "Use a strong password; changing it invalidates existing sessions.")}</span>
+                        </span>
+                        <div className="auth-password-input-row">
+                          <PasswordInput
+                            name="password"
+                            autoComplete="new-password"
+                            value={passwordValue}
+                            onChange={(event) => updatePassword(event.target.value)}
+                            required={changePassword}
+                          />
+                          <button type="button" className="subtle compact" onClick={generatePassword}>
+                            {t("parity.actions.generate_password", "Generate")}
+                          </button>
+                        </div>
+                        <label>
+                          {t("parity.records.confirm_password", "Confirm password")}
+                          <PasswordInput
+                            name="passwordConfirm"
+                            autoComplete="new-password"
+                            value={passwordConfirmation}
+                            onChange={(event) => setPasswordConfirmation(event.target.value)}
+                            required={changePassword}
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {fileFields.length > 0 && (
-                <div className="file-upload-grid record-file-grid">
+                <div className="record-file-grid">
                   {fileFields.map((field) => (
-                    <label key={field.name}>
-                      {field.name}
-                      <input
-                        name={field.name}
-                        type="file"
-                        multiple={maxFiles(field) > 1}
-                        accept={(field.mimeTypes ?? []).join(",")}
-                        onChange={(event) =>
-                          setFiles({ ...files, [field.name]: Array.from(event.target.files ?? []) })
-                        }
-                      />
-                    </label>
+                    <FileFieldControl
+                      key={field.name}
+                      field={field}
+                      value={payload[field.name]}
+                      files={files[field.name] ?? []}
+                      removed={fileRemovals[field.name] ?? []}
+                      fileUrl={(filename, thumb) => {
+                        const query = new URLSearchParams();
+                        if (fileToken) query.set("token", fileToken);
+                        if (thumb) query.set("thumb", thumb);
+                        const suffix = query.toString();
+                        return `/api/files/${encodeURIComponent(collection.id || collection.name)}/${encodeURIComponent(state.record?.id ?? "new")}/${encodeURIComponent(filename)}${suffix ? `?${suffix}` : ""}`;
+                      }}
+                      onValueChange={(value) => updatePayload(field, value)}
+                      onFilesChange={(nextFiles) => setFiles((current) => ({ ...current, [field.name]: nextFiles }))}
+                      onRemovedChange={(names) => setFileRemovals((current) => ({ ...current, [field.name]: names }))}
+                    />
                   ))}
                 </div>
               )}
             </section>
 
             <section className="record-json-panel">
-              <label>
-                JSON
-                <textarea
-                  name={`${collection.name}RecordJson`}
-                  value={json}
-                  onChange={(event) => updateJson(event.target.value)}
-                  spellCheck={false}
-                />
-              </label>
+              <div className="record-json-heading">
+                <strong>JSON</strong>
+                <div>
+                  <button type="button" className="subtle compact" onClick={copyRecordJson}>
+                    <Copy size={14} />
+                    {t("actions.copy_json", "Copy JSON")}
+                  </button>
+                  <button type="button" className="subtle compact" onClick={downloadRecordJson}>
+                    <Download size={14} />
+                    {t("actions.download_json", "Download as JSON")}
+                  </button>
+                </div>
+              </div>
+              <CodeEditor
+                name={`${collection.name}RecordJson`}
+                ariaLabel={t("records.record_json", "Record JSON")}
+                value={json}
+                onChange={updateJson}
+                language="json"
+                minHeight={520}
+              />
+              {invalidRecordJson && (
+                <p className="record-json-field-error" role="alert">
+                  {t("errors.invalid_json", "Enter valid JSON before saving.")}
+                </p>
+              )}
             </section>
           </div>
         )}
@@ -5515,15 +8138,35 @@ function RecordModal({ collection, collections, state, onClose, onConfirm, fetch
             <RotateCcw size={16} />
             {t("actions.reset_form", "Reset form")}
           </button>
-          <span className="modal-actions-spacer" />
-          <button className="primary" type="submit" disabled={!canSubmit}>
-            <Save size={16} />
-            {state.record ? t("actions.save_changes", "Save changes") : t("actions.create", "Create")}
-          </button>
-          {!editing && (
-            <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={!canSubmit}>
-              {t("actions.save_and_continue", "Save and continue")}
+          {editing && (
+            <button type="button" className="subtle" onClick={onDuplicate} disabled={saving}>
+              <Copy size={16} />
+              {t("parity.records.duplicate", "Duplicate")}
             </button>
+          )}
+          <span className="modal-actions-spacer" />
+          {locked ? (
+            <button
+              type="button"
+              className="subtle outline-button"
+              onClick={() => setLocked(false)}
+              disabled={saving || !changed}
+            >
+              <Unlock size={16} />
+              {t("parity.records.unlock_to_save", "Unlock to save")}
+            </button>
+          ) : (
+            <>
+              <button className="primary" type="submit" disabled={!canSubmit}>
+                <Save size={16} />
+                {editing ? t("actions.save_changes", "Save changes") : t("actions.create", "Create")}
+              </button>
+              {!editing && (
+                <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={!canSubmit}>
+                  {t("actions.save_and_continue", "Save and continue")}
+                </button>
+              )}
+            </>
           )}
         </div>
       </form>
@@ -5566,9 +8209,22 @@ type ModalProps = {
 
 function Modal({ title, onClose, wide, children }: ModalProps) {
   const { t } = useTranslation();
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose);
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className={wide ? "modal wide" : "modal"} role="dialog" aria-modal="true" aria-label={title}>
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={onBackdropMouseDown}
+      onMouseUp={onBackdropMouseUp}
+    >
+      <section
+        ref={dialogRef}
+        className={wide ? "modal wide" : "modal"}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+      >
         <header>
           <h2>{title}</h2>
           <button className="icon-button" onClick={onClose} title={t("actions.close", "Close")} aria-label={t("actions.close", "Close")}>
@@ -5778,14 +8434,94 @@ function recordColumns(collection: CollectionSchema | null) {
   return columns;
 }
 
+function collectionPreferenceStoreKey(collection: CollectionSchema) {
+  return `collection:${collection.id || collection.name}`;
+}
+
+function columnPreferenceKey(collection: CollectionSchema, column: string) {
+  const field = (collection.fields ?? []).find((candidate) => candidate.name === column);
+  return field?.id ? `field:${field.id}` : `system:${column}`;
+}
+
+function hiddenColumnPreferencesFor(collection: CollectionSchema, preferences: Record<string, string[]>) {
+  const keys = [collectionPreferenceStoreKey(collection), collection.name];
+  return Array.from(new Set(keys.flatMap((key) => preferences[key] ?? [])));
+}
+
+function normalizeColumnPreferences(collection: CollectionSchema, values: string[]) {
+  const columns = recordColumns(collection);
+  const knownColumns = new Set(columns);
+  const fieldNameById = new Map((collection.fields ?? []).filter((field) => field.id).map((field) => [field.id!, field.name]));
+  const normalized: string[] = [];
+  for (const value of values) {
+    const column = value.startsWith("field:")
+      ? fieldNameById.get(value.slice("field:".length))
+      : value.startsWith("system:")
+        ? value.slice("system:".length)
+        : value;
+    if (!column || !knownColumns.has(column)) continue;
+    const key = columnPreferenceKey(collection, column);
+    if (!normalized.includes(key)) normalized.push(key);
+  }
+  return normalized;
+}
+
+function sameStringValues(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function recordEditorPayload(collection: CollectionSchema, record?: RecordItem) {
   if (record) {
-    return Object.fromEntries(Object.entries(record).filter(([key]) => !SYSTEM_RECORD_KEYS.has(key)));
+    return Object.fromEntries(
+      Object.entries(record).filter(([key]) => !SYSTEM_RECORD_KEYS.has(key) && key !== "tokenKey" && key !== "passwordHash")
+    );
   }
   return Object.fromEntries(
     (collection.fields ?? [])
-      .filter((field) => field.type !== "file" && !field.system)
+      .filter(
+        (field) =>
+          field.type !== "file" &&
+          (!field.system || (collection.type === "auth" && ["email", "emailVisibility", "verified", "password"].includes(field.name)))
+      )
       .map((field) => [field.name, defaultValue(field)])
+  );
+}
+
+/** A duplicate is a new record: it must not retain source files or automatic timestamps. */
+function duplicateRecordPayload(collection: CollectionSchema, record?: RecordItem) {
+  const payload = recordEditorPayload(collection, record);
+  for (const field of collection.fields ?? []) {
+    if (field.type === "file" || field.type === "autodate") {
+      delete payload[field.name];
+    }
+  }
+  return payload;
+}
+
+/** Copy/download/drafts are conveniences, never a reason to persist credentials. */
+function sanitizeRecordForExport(record: Record<string, unknown>) {
+  return sanitizeSensitiveValue(record) as Record<string, unknown>;
+}
+
+function sanitizeSensitiveValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeSensitiveValue);
+  if (!isPlainObject(value)) return value;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "expand" || sensitiveRecordKey(key)) continue;
+    sanitized[key] = sanitizeSensitiveValue(nested);
+  }
+  return sanitized;
+}
+
+function sensitiveRecordKey(key: string) {
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return /(?:^|_)(?:password|passphrase|token|secret|credential|authorization|api_key|private_key)(?:$|_)/.test(
+    normalized
   );
 }
 
@@ -5797,17 +8533,25 @@ function defaultValue(field: FieldSchema) {
   return "";
 }
 
+function randomTokenSecret(length = 48) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_";
+  const bytes = new Uint32Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 function recordRequestBody(payload: Record<string, unknown>, files: Record<string, File[]>) {
   const entries = Object.entries(files).filter(([, value]) => value.length > 0);
   if (entries.length === 0) return payload;
 
   const form = new FormData();
-  Object.entries(payload).forEach(([key, value]) => {
-    if (value === undefined || value === null) return;
-    form.append(key, typeof value === "string" ? value : JSON.stringify(value));
-  });
+  // Preserve nulls, arrays and nested JSON exactly like the official SDKs. The
+  // server merges @jsonPayload with the multipart file fields before validation.
+  form.append("@jsonPayload", JSON.stringify(payload));
   entries.forEach(([field, fieldFiles]) => {
-    fieldFiles.forEach((file) => form.append(field, file));
+    // `field+` appends uploads to existing file values; a bare field would replace
+    // all files and make the UI's delete/restore workflow destructive.
+    fieldFiles.forEach((file) => form.append(`${field}+`, file));
   });
   return form;
 }
@@ -5816,6 +8560,40 @@ function maxFiles(field: FieldSchema) {
   const direct = field.maxSelect ?? field.maxFiles;
   const optionValue = Number(field.options?.maxSelect ?? field.options?.maxFiles ?? 1);
   return Math.max(1, Number(direct ?? optionValue ?? 1));
+}
+
+function mergeRecordItems(existing: RecordItem[], additions: RecordItem[]) {
+  const next = [...existing];
+  const positions = new Map(next.map((record, index) => [record.id, index]));
+  for (const record of additions) {
+    const position = positions.get(record.id);
+    if (position === undefined) {
+      positions.set(record.id, next.length);
+      next.push(record);
+    } else {
+      next[position] = record;
+    }
+  }
+  return next;
+}
+
+function mergeLogItems(existing: LogItem[], additions: LogItem[]) {
+  const next = [...existing];
+  const positions = new Map(next.map((log, index) => [log.id, index]));
+  for (const log of additions) {
+    const position = positions.get(log.id);
+    if (position === undefined) {
+      positions.set(log.id, next.length);
+      next.push(log);
+    } else {
+      next[position] = log;
+    }
+  }
+  return next;
+}
+
+function safeImageFilename(filename: string) {
+  return /\.(?:gif|jpe?g|png|webp)$/i.test(filename);
 }
 
 function normalizeRule(value: string | null) {
@@ -6220,6 +8998,88 @@ function parseCollectionsPayload(value: string) {
   }
 }
 
+type CollectionIdReplacement = {
+  name: string;
+  fromId: string;
+  toId: string;
+};
+
+/**
+ * A collection import addresses existing schemas by id first. A schema exported
+ * from another PocketBase instance can therefore collide by name but still be
+ * treated as a new collection. Only suggest a rewrite when the name and type
+ * unambiguously identify the same local collection and the imported id is not
+ * already owned by a different local collection.
+ */
+function collectionIdReplacementSuggestions(
+  current: CollectionSchema[],
+  imported: CollectionSchema[] | null
+): CollectionIdReplacement[] {
+  if (!imported?.length) return [];
+  const currentById = new Map(current.map((collection) => [collection.id, collection]));
+  const currentByName = new Map(current.map((collection) => [collection.name, collection]));
+  const importNameCounts = new Map<string, number>();
+  for (const collection of imported) {
+    importNameCounts.set(collection.name, (importNameCounts.get(collection.name) ?? 0) + 1);
+  }
+
+  return imported.flatMap((collection) => {
+    const fromId = String(collection.id ?? "").trim();
+    const existing = currentByName.get(collection.name);
+    if (
+      !fromId ||
+      !existing ||
+      existing.id === fromId ||
+      existing.type !== collection.type ||
+      importNameCounts.get(collection.name) !== 1 ||
+      currentById.has(fromId)
+    ) {
+      return [];
+    }
+    return [{ name: collection.name, fromId, toId: existing.id }];
+  });
+}
+
+/** Rewrites only schema positions that are documented to store collection ids. */
+function replaceCollectionIdsInImportPayload(value: string, replacements: CollectionIdReplacement[]) {
+  if (replacements.length === 0) return "";
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const payload = Array.isArray(parsed)
+      ? parsed
+      : isPlainObject(parsed) && Array.isArray(parsed.collections)
+        ? parsed.collections
+        : null;
+    if (!payload) return "";
+
+    const idMap = new Map(replacements.map((replacement) => [replacement.fromId, replacement.toId]));
+    const replaceId = (candidate: unknown) =>
+      typeof candidate === "string" ? (idMap.get(candidate) ?? candidate) : candidate;
+    const replaceIds = (candidate: unknown) =>
+      Array.isArray(candidate) ? candidate.map((id) => replaceId(id)) : candidate;
+
+    for (const rawCollection of payload) {
+      if (!isPlainObject(rawCollection)) continue;
+      rawCollection.id = replaceId(rawCollection.id);
+      if (!Array.isArray(rawCollection.fields)) continue;
+      for (const rawField of rawCollection.fields) {
+        if (!isPlainObject(rawField)) continue;
+        rawField.collectionId = replaceId(rawField.collectionId);
+        rawField.collectionIds = replaceIds(rawField.collectionIds);
+        // The current schema keeps relation ids at the field root. Retain this
+        // compatibility branch for exports created by older Java UI revisions.
+        if (isPlainObject(rawField.options)) {
+          rawField.options.collectionId = replaceId(rawField.options.collectionId);
+          rawField.options.collectionIds = replaceIds(rawField.options.collectionIds);
+        }
+      }
+    }
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return "";
+  }
+}
+
 function collectionImportChanges(current: CollectionSchema[], imported: CollectionSchema[] | null, deleteMissing: boolean) {
   if (!imported?.length) return { added: [] as CollectionSchema[], changed: [] as { previous: CollectionSchema; next: CollectionSchema }[], deleted: [] as CollectionSchema[] };
   const currentCollections = sortedCollectionsForTransfer(current);
@@ -6235,6 +9095,38 @@ function collectionImportChanges(current: CollectionSchema[], imported: Collecti
     .map((collection) => ({ previous: currentById.get(collection.id) as CollectionSchema, next: collection }));
   const deleted = deleteMissing ? currentCollections.filter((collection) => !importedById.has(collection.id)) : [];
   return { added, changed, deleted };
+}
+
+function collectionFieldChanges(previous: CollectionSchema, next: CollectionSchema): CollectionFieldChange[] {
+  const previousFields = previous.fields ?? [];
+  const nextFields = next.fields ?? [];
+  const previousByIdentity = new Map(previousFields.map((field) => [fieldIdentity(field), field]));
+  const nextByIdentity = new Map(nextFields.map((field) => [fieldIdentity(field), field]));
+  const changes: CollectionFieldChange[] = [];
+
+  for (const field of previousFields) {
+    const incoming = nextByIdentity.get(fieldIdentity(field));
+    if (!incoming) {
+      changes.push({ kind: "Deleted", previous: field, changedKeys: [] });
+      continue;
+    }
+    const changedKeys = Object.keys({ ...field, ...incoming }).filter((key) => {
+      if (key === "id") return false;
+      return stableJsonStringify(field[key as keyof FieldSchema]) !== stableJsonStringify(incoming[key as keyof FieldSchema]);
+    });
+    if (changedKeys.length > 0) changes.push({ kind: "Changed", previous: field, next: incoming, changedKeys });
+  }
+
+  for (const field of nextFields) {
+    if (!previousByIdentity.has(fieldIdentity(field))) {
+      changes.push({ kind: "Added", next: field, changedKeys: [] });
+    }
+  }
+  return changes;
+}
+
+function fieldIdentity(field: FieldSchema) {
+  return field.id ? `id:${field.id}` : `name:${field.name}`;
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -6256,6 +9148,35 @@ function downloadJsonFile(value: unknown, filename: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function compareSqlValues(left: unknown, right: unknown) {
+  if (left === right) return 0;
+  if (left === null || left === undefined) return -1;
+  if (right === null || right === undefined) return 1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function csvCell(value: unknown) {
+  const serialized = value === null || value === undefined || typeof value === "string" ? value : JSON.stringify(value);
+  const raw = serialized === null || serialized === undefined ? "" : String(serialized);
+  // Spreadsheet applications evaluate quoted CSV cells that start with formula
+  // sigils. Preserve untrusted SQL strings as literal text instead.
+  const text = typeof serialized === "string" && /^\s*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadCsvFile(columns: string[], rows: unknown[][], filename: string) {
+  const source = [columns, ...rows];
+  const csv = source.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function settingsObject(settings: AppSettings | null, section: string) {
@@ -6299,6 +9220,42 @@ function readThemeMode(): ThemeMode {
   return value === "light" || value === "dark" || value === "auto" ? value : "auto";
 }
 
+function readSidebarWidth() {
+  const value = Number.parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY) || "", 10);
+  return Number.isFinite(value) ? clampSidebarWidth(value) : 240;
+}
+
+function settingsApplicationName(settings: AppSettings | null) {
+  if (!settings || !isPlainObject(settings.meta)) return "";
+  const value = settings.meta.appName;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function settingsHideControls(settings: AppSettings | null) {
+  return Boolean(settings && isPlainObject(settings.meta) && settings.meta.hideControls);
+}
+
+function settingsAccentColor(settings: AppSettings | null) {
+  if (!settings || !isPlainObject(settings.meta)) return "";
+  return normalizeAccentColor(settings.meta.accentColor);
+}
+
+function normalizeAccentColor(value: unknown) {
+  if (typeof value !== "string") return "";
+  const color = value.trim().toLowerCase();
+  // CSS custom-property values must never be sourced from arbitrary settings
+  // text. The native color input and PocketBase's own picker both use #RRGGBB.
+  return /^#[0-9a-f]{6}$/.test(color) ? color : "";
+}
+
+function isDarkEnoughForWhiteText(color: string) {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return false;
+  const red = Number.parseInt(color.slice(1, 3), 16);
+  const green = Number.parseInt(color.slice(3, 5), 16);
+  const blue = Number.parseInt(color.slice(5, 7), 16);
+  return (red * 299 + green * 587 + blue * 114) / 1000 < 128;
+}
+
 function resolveThemeMode(mode: ThemeMode): ResolvedTheme {
   if (mode === "auto") {
     return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
@@ -6313,6 +9270,30 @@ function readStringArray(key: string) {
   } catch {
     return [];
   }
+}
+
+function readSearchHistory(key: string) {
+  // Filters can contain personal data. Keep suggestions only for this browser
+  // session and clear the previous persistent implementation on first use.
+  localStorage.removeItem(key);
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(key) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSearchHistory(key: string, value: string) {
+  const term = value.trim();
+  const previous = readSearchHistory(key);
+  const next = term ? [term, ...previous.filter((item) => item !== term)].slice(0, SEARCH_HISTORY_LIMIT) : previous;
+  try {
+    sessionStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Search suggestions are an enhancement; quota/privacy mode must not block the query.
+  }
+  return next;
 }
 
 function readStringArrayRecord(key: string) {
@@ -6333,7 +9314,12 @@ function readStringArrayRecord(key: string) {
 function readRecordDraft(key: string) {
   try {
     const parsed = JSON.parse(localStorage.getItem(key) || "null");
-    return isPlainObject(parsed) ? parsed : null;
+    if (!isPlainObject(parsed)) return null;
+    const sanitized = sanitizeRecordForExport(parsed);
+    if (JSON.stringify(sanitized) !== JSON.stringify(parsed)) {
+      localStorage.setItem(key, JSON.stringify(sanitized));
+    }
+    return sanitized;
   } catch {
     localStorage.removeItem(key);
     return null;
@@ -6361,7 +9347,9 @@ function collectionModalTabs(type: string, t: TFunction) {
     return [
       { id: "fields", label: t("collections.fields", "Fields") },
       { id: "rules", label: t("collections.api_rules", "API rules") },
-      { id: "auth", label: t("common.options", "Options") }
+      { id: "auth", label: t("common.options", "Options") },
+      { id: "templates", label: t("parity.collection.email_templates", "Email templates") },
+      { id: "tokens", label: t("parity.collection.token_options", "Token options") }
     ];
   }
   return [
@@ -6372,6 +9360,7 @@ function collectionModalTabs(type: string, t: TFunction) {
 
 function collectionRuleKeys(type: string): RuleKey[] {
   if (type === "view") return ["listRule", "viewRule"];
+  if (type === "auth") return ["listRule", "viewRule", "createRule", "updateRule", "deleteRule", "authRule", "manageRule"];
   return ["listRule", "viewRule", "createRule", "updateRule", "deleteRule"];
 }
 
@@ -6381,7 +9370,9 @@ function collectionRuleLabel(key: RuleKey, t: TFunction) {
     viewRule: t("collections.view_rule", "View rule"),
     createRule: t("collections.create_rule", "Create rule"),
     updateRule: t("collections.update_rule", "Update rule"),
-    deleteRule: t("collections.delete_rule", "Delete rule")
+    deleteRule: t("collections.delete_rule", "Delete rule"),
+    authRule: t("parity.collection.auth_rule", "Auth rule"),
+    manageRule: t("parity.collection.manage_rule", "Manage rule")
   };
   return labels[key];
 }
@@ -6395,8 +9386,145 @@ function uniqueFieldName(fields: FieldSchema[], type: string) {
   return `${base}_${index}`;
 }
 
+function nextDuplicateCollectionName(name: string, collections: CollectionSchema[]) {
+  const existing = new Set(collections.map((collection) => collection.name.toLowerCase()));
+  const base = `${name}_copy`.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 58) || "collection_copy";
+  if (!existing.has(base.toLowerCase())) return base;
+  let index = 2;
+  while (existing.has(`${base}_${index}`.toLowerCase())) index += 1;
+  return `${base}_${index}`.slice(0, 63);
+}
+
+function duplicateCollectionPayload(collection: CollectionSchema, name: string): CollectionPayload {
+  const fields = (collection.fields ?? [])
+    .filter((field) => !field.system)
+    .map(({ id: _id, system: _system, ...field }) => ({ ...field }));
+  const copyToken = (token?: TokenConfig): TokenConfig => ({ duration: token?.duration });
+  return {
+    name,
+    type: collection.type,
+    fields: collection.type === "view" ? [] : fields,
+    ...(collection.type === "view"
+      ? {}
+      : { indexes: (collection.indexes ?? []).map((index, position) => duplicateIndexSql(index, name, position + 1)) }),
+    listRule: collection.listRule ?? null,
+    viewRule: collection.viewRule ?? null,
+    createRule: collection.createRule ?? null,
+    updateRule: collection.updateRule ?? null,
+    deleteRule: collection.deleteRule ?? null,
+    viewQuery: collection.viewQuery ?? null,
+    ...(collection.type === "auth"
+      ? {
+          passwordAuth: collection.passwordAuth,
+          otp: collection.otp,
+          mfa: collection.mfa,
+          oauth2: collection.oauth2,
+          authAlert: collection.authAlert,
+          authToken: copyToken(collection.authToken),
+          passwordResetToken: copyToken(collection.passwordResetToken),
+          verificationToken: copyToken(collection.verificationToken),
+          emailChangeToken: copyToken(collection.emailChangeToken),
+          fileToken: copyToken(collection.fileToken),
+          verificationTemplate: collection.verificationTemplate,
+          resetPasswordTemplate: collection.resetPasswordTemplate,
+          confirmEmailChangeTemplate: collection.confirmEmailChangeTemplate,
+          authRule: collection.authRule ?? null,
+          manageRule: collection.manageRule ?? null
+        }
+      : {})
+  };
+}
+
+function duplicateIndexSql(index: string, collectionName: string, position: number) {
+  const identifier = `idx_${collectionName}_${position}`;
+  const quote = index.includes("`") ? "`" : "";
+  const named = index.replace(
+    /(CREATE\s+(?:UNIQUE\s+)?INDEX\s+)(?:IF\s+NOT\s+EXISTS\s+)?(?:`[^`]+`|"[^"]+"|\[[^\]]+\]|[^\s(]+)/i,
+    `$1${quote}${identifier}${quote}`
+  );
+  return named.replace(
+    /(\bON\s+)(?:`[^`]+`|"[^"]+"|\[[^\]]+\]|[^\s(]+)/i,
+    `$1${quote}${collectionName}${quote}`
+  );
+}
+
 function splitCsv(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function ipRuleAllows(ip: string, rule: string) {
+  const trimmed = rule.trim();
+  if (!trimmed) return false;
+  const parts = trimmed.split("/");
+  if (parts.length > 2) return false;
+  const address = parseIpLiteral(ip);
+  const network = parseIpLiteral(parts[0] ?? "");
+  if (!address || !network || address.length !== network.length) return false;
+  let prefix = address.length * 8;
+  if (parts.length === 2) {
+    const raw = parts[1] ?? "";
+    if (!/^\d+$/.test(raw)) return false;
+    prefix = Number(raw);
+  }
+  if (!Number.isSafeInteger(prefix) || prefix < 0 || prefix > address.length * 8) return false;
+  const fullBytes = Math.floor(prefix / 8);
+  const remainingBits = prefix % 8;
+  for (let index = 0; index < fullBytes; index += 1) {
+    if (address[index] !== network[index]) return false;
+  }
+  if (remainingBits === 0) return true;
+  const mask = (0xff << (8 - remainingBits)) & 0xff;
+  return (address[fullBytes] & mask) === (network[fullBytes] & mask);
+}
+
+function parseIpLiteral(value: string): number[] | null {
+  const candidate = value.trim();
+  if (!candidate || candidate.includes("%")) return null;
+  if (!candidate.includes(":")) return parseIpv4Literal(candidate);
+  if (!/^[0-9A-Fa-f:.]+$/.test(candidate)) return null;
+
+  let normalized = candidate;
+  if (normalized.includes(".")) {
+    // Match the server's only IPv4-in-IPv6 normalization: an IPv4-mapped
+    // literal written with the `::ffff:` marker.
+    if (!normalized.toLowerCase().includes("::ffff:")) return null;
+    const separator = normalized.lastIndexOf(":");
+    const ipv4 = parseIpv4Literal(normalized.slice(separator + 1));
+    if (!ipv4) return null;
+    normalized = `${normalized.slice(0, separator)}:${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+  }
+
+  const compression = normalized.indexOf("::");
+  if (compression !== -1 && normalized.indexOf("::", compression + 2) !== -1) return null;
+  const left = compression === -1 ? normalized : normalized.slice(0, compression);
+  const right = compression === -1 ? "" : normalized.slice(compression + 2);
+  const leftGroups = left ? left.split(":") : [];
+  const rightGroups = right ? right.split(":") : [];
+  const groups = [...leftGroups, ...rightGroups];
+  if (groups.some((group) => !/^[0-9A-Fa-f]{1,4}$/.test(group))) return null;
+  if (compression === -1 && groups.length !== 8) return null;
+  if (compression !== -1 && groups.length >= 8) return null;
+  const expanded =
+    compression === -1
+      ? groups
+      : [...leftGroups, ...Array.from({ length: 8 - groups.length }, () => "0"), ...rightGroups];
+  return expanded.flatMap((group) => {
+    const parsed = Number.parseInt(group, 16);
+    return [parsed >> 8, parsed & 0xff];
+  });
+}
+
+function parseIpv4Literal(value: string): number[] | null {
+  const groups = value.split(".");
+  if (groups.length !== 4) return null;
+  const octets: number[] = [];
+  for (const group of groups) {
+    if (!/^\d+$/.test(group) || (group.length > 1 && group.startsWith("0"))) return null;
+    const octet = Number(group);
+    if (!Number.isSafeInteger(octet) || octet < 0 || octet > 255) return null;
+    octets.push(octet);
+  }
+  return octets;
 }
 
 function parseSortValue(value: string): { field: string; direction: SortDirection } {
@@ -6410,6 +9538,15 @@ function parseSortValue(value: string): { field: string; direction: SortDirectio
 function formatSortValue(field: string, direction: SortDirection) {
   const cleanField = field.trim() || "created";
   return direction === "desc" ? `-${cleanField}` : cleanField;
+}
+
+/**
+ * The server alone can decide whether a changed row still satisfies an
+ * arbitrary PocketBase filter. Keep the optimistic row update, but flag the
+ * refresh affordance when its order or membership may have changed.
+ */
+function recordListMayNeedRefresh(query: QueryState) {
+  return Boolean(query.filter.trim()) || query.sort.trim() !== "-created";
 }
 
 function compactSelectWidth(labels: string[]) {

@@ -9112,6 +9112,94 @@ class LocalPocketBaseServerTest {
   }
 
   @Test
+  void uploadedFilesCannotBeServedAsActiveSameOriginDocuments() throws Exception {
+    start();
+    bootstrapSuperuser();
+    String token = loginToken();
+
+    request(
+        "POST",
+        "/api/collections",
+        token,
+        Map.of(
+            "name", "untrusted_assets",
+            "listRule", "",
+            "viewRule", "",
+            "fields", List.of(Map.of("name", "attachment", "type", "file", "required", true))));
+
+    JsonNode created =
+        multipartRequest(
+            "POST",
+            "/api/collections/untrusted_assets/records",
+            token,
+            Map.of(),
+            Map.of(
+                "attachment",
+                new MultipartFile(
+                    "unsafe.svg",
+                    "image/svg+xml",
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"
+                        .getBytes(StandardCharsets.UTF_8))));
+    String filename = created.get("attachment").asText();
+    String path = "/api/files/untrusted_assets/" + created.get("id").asText() + "/" + filename;
+
+    HttpResponse<byte[]> response =
+        http.send(
+            HttpRequest.newBuilder(URI.create(server.baseUrl() + path))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofByteArray());
+
+    assertEquals(200, response.statusCode());
+    assertEquals("application/octet-stream", response.headers().firstValue("Content-Type").orElse(""));
+    assertEquals("nosniff", response.headers().firstValue("X-Content-Type-Options").orElse(""));
+    assertTrue(
+        response
+            .headers()
+            .firstValue("Content-Security-Policy")
+            .orElse("")
+            .contains("sandbox"));
+    assertEquals(
+        "attachment; filename=\"" + filename + "\"",
+        response.headers().firstValue("Content-Disposition").orElse(""));
+
+    // The extension alone must not make an active document previewable as a raster image.
+    JsonNode disguised =
+        multipartRequest(
+            "POST",
+            "/api/collections/untrusted_assets/records",
+            token,
+            Map.of(),
+            Map.of(
+                "attachment",
+                new MultipartFile(
+                    "looks-like-an-image.png",
+                    "image/png",
+                    "<!doctype html><script>alert(1)</script>".getBytes(StandardCharsets.UTF_8))));
+    String disguisedFilename = disguised.get("attachment").asText();
+    HttpResponse<byte[]> disguisedResponse =
+        http.send(
+            HttpRequest.newBuilder(
+                    URI.create(
+                        server.baseUrl()
+                            + "/api/files/untrusted_assets/"
+                            + disguised.get("id").asText()
+                            + "/"
+                            + disguisedFilename))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofByteArray());
+
+    assertEquals(200, disguisedResponse.statusCode());
+    assertEquals(
+        "application/octet-stream",
+        disguisedResponse.headers().firstValue("Content-Type").orElse(""));
+    assertEquals(
+        "attachment; filename=\"" + disguisedFilename + "\"",
+        disguisedResponse.headers().firstValue("Content-Disposition").orElse(""));
+  }
+
+  @Test
   void fileFieldsValidateMimeTypesAndMaxSize() throws Exception {
     start();
     bootstrapSuperuser();

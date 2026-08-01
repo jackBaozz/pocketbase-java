@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { PasswordInput } from "./components/PasswordInput";
 import type { TFunction } from "i18next";
 
 const DEFAULT_COLLECTION = "users";
@@ -10,6 +11,8 @@ type RouteKind =
   | "confirmPasswordReset"
   | "confirmVerification"
   | "confirmEmailChange"
+  | "oauth2RedirectSuccess"
+  | "oauth2RedirectFailure"
   | "unknown";
 
 type AuthActionRoute = {
@@ -50,8 +53,55 @@ export function AuthActionPages() {
     setStatus(null);
   }, [route.kind, route.collection, route.token]);
 
+  const oauthRedirect =
+    route.kind === "oauth2RedirectSuccess" || route.kind === "oauth2RedirectFailure";
+
+  useEffect(() => {
+    if (!oauthRedirect) return;
+    // The Java endpoint redirects OAuth test popups here after relaying the
+    // result through SSE. A direct navigation cannot be closed by browsers,
+    // so it remains a readable completion page with an explicit Close button.
+    const timer = window.setTimeout(() => window.close(), 0);
+    return () => window.clearTimeout(timer);
+  }, [oauthRedirect]);
+
   if (route.kind === "unknown") {
     return null;
+  }
+
+  if (oauthRedirect) {
+    const successful = route.kind === "oauth2RedirectSuccess";
+    return (
+      <div className="app-shell">
+        <main className="auth-layout oauth-redirect-page">
+          <section className="auth-copy">
+            <div>
+              <h2>
+                {successful
+                  ? t("auth_actions.oauth2_redirect_success.title", "OAuth2 sign-in complete")
+                  : t("auth_actions.oauth2_redirect_failure.title", "OAuth2 sign-in failed")}
+              </h2>
+              <p className="settings-intro">
+                {successful
+                  ? t(
+                      "auth_actions.oauth2_redirect_success.description",
+                      "You can return to the application. This window will close automatically."
+                    )
+                  : t(
+                      "auth_actions.oauth2_redirect_failure.description",
+                      "The OAuth2 authorization did not complete. You can close this window and try again."
+                    )}
+              </p>
+            </div>
+          </section>
+          <section className="auth-form">
+            <button type="button" className="primary submit" onClick={() => window.close()}>
+              {t("actions.close", "Close")}
+            </button>
+          </section>
+        </main>
+      </div>
+    );
   }
 
   const needsCollection = route.kind !== "install";
@@ -188,8 +238,7 @@ export function AuthActionPages() {
           {needsPassword ? (
             <label>
               {route.kind === "confirmEmailChange" ? t("auth.current_password", "Current password") : t("auth.password", "Password")}
-              <input
-                type="password"
+              <PasswordInput
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 autoComplete={route.kind === "confirmEmailChange" ? "current-password" : "new-password"}
@@ -201,8 +250,7 @@ export function AuthActionPages() {
           {needsPasswordConfirm ? (
             <label>
               {t("auth.confirm_password", "Confirm password")}
-              <input
-                type="password"
+              <PasswordInput
                 value={passwordConfirm}
                 onChange={(event) => setPasswordConfirm(event.target.value)}
                 autoComplete="new-password"
@@ -283,6 +331,22 @@ function parseAuthActionRoute(hash: string): AuthActionRoute {
       descriptionKey: "auth_actions.confirm_email_change.description",
       collection,
       token: decodeHashPart(path.slice("#/auth/confirm-email-change/".length))
+    };
+  }
+  if (path === "#/auth/oauth2-redirect-success" || path === "#/auth/oauth2-redirect-success/") {
+    return {
+      kind: "oauth2RedirectSuccess",
+      titleKey: "",
+      descriptionKey: "",
+      collection
+    };
+  }
+  if (path === "#/auth/oauth2-redirect-failure" || path === "#/auth/oauth2-redirect-failure/") {
+    return {
+      kind: "oauth2RedirectFailure",
+      titleKey: "",
+      descriptionKey: "",
+      collection
     };
   }
   return {
