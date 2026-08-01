@@ -6,7 +6,8 @@
     "users": "Users",
     "open_collections": "Open collections",
     "primary": "Primary",
-    "resize_sidebar": "Resize sidebar"
+    "resize_sidebar": "Resize sidebar",
+    "manage_superusers": "Manage superusers"
   },
   "editor": {
     "toolbar": "Rich text formatting",

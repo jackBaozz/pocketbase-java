@@ -6,7 +6,8 @@
     "users": "ユーザー",
     "open_collections": "コレクションを開く",
     "primary": "メイン",
-    "resize_sidebar": "サイドバーの幅を変更"
+    "resize_sidebar": "サイドバーの幅を変更",
+    "manage_superusers": "スーパーユーザーを管理"
   },
   "editor": {
     "toolbar": "リッチテキストの書式設定",

@@ -6,7 +6,8 @@
     "users": "Utilisateurs",
     "open_collections": "Ouvrir les collections",
     "primary": "Principal",
-    "resize_sidebar": "Redimensionner la barre latérale"
+    "resize_sidebar": "Redimensionner la barre latérale",
+    "manage_superusers": "Gérer les superutilisateurs"
   },
   "editor": {
     "toolbar": "Mise en forme du texte enrichi",

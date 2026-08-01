@@ -6,7 +6,8 @@
     "users": "Usuários",
     "open_collections": "Abrir coleções",
     "primary": "Principal",
-    "resize_sidebar": "Redimensionar barra lateral"
+    "resize_sidebar": "Redimensionar barra lateral",
+    "manage_superusers": "Gerenciar superusuários"
   },
   "editor": {
     "toolbar": "Formatação de texto rico",

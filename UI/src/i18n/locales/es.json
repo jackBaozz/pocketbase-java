@@ -6,7 +6,8 @@
     "users": "Usuarios",
     "open_collections": "Abrir colecciones",
     "primary": "Principal",
-    "resize_sidebar": "Cambiar ancho de la barra lateral"
+    "resize_sidebar": "Cambiar ancho de la barra lateral",
+    "manage_superusers": "Administrar superusuarios"
   },
   "editor": {
     "toolbar": "Formato de texto enriquecido",

@@ -276,9 +276,8 @@ h2 {
 .logo {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
   min-height: 34px;
-  padding: 3px 8px 3px 4px;
+  padding: 3px 4px;
   color: var(--primaryTxtColor);
   border-radius: var(--borderRadius);
   font-weight: 700;
@@ -286,23 +285,17 @@ h2 {
 
 .logo:hover:not(:disabled),
 .logo:focus-visible {
-  background: var(--primaryAlt1Color);
+  background: transparent;
 }
 
+/* Same asset as the browser tab favicon (UI/public/favicon.svg) */
 .brand-mark {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--borderRadius);
-  background: var(--accentColor);
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 900;
-}
-
-.brand-title {
-  white-space: nowrap;
+  display: block;
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
 }
 
 .app-main-nav {
@@ -340,6 +333,75 @@ h2 {
   align-items: center;
   gap: 7px;
   flex-shrink: 0;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-menu-trigger {
+  max-width: 220px;
+  gap: 4px;
+}
+
+.account-menu-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.account-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 120;
+  display: flex;
+  min-width: 196px;
+  padding: 5px;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+  color: var(--surfaceTxtColor);
+}
+
+.account-menu-dropdown button {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  background: transparent;
+  color: var(--surfaceTxtColor);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 150ms,
+    background 150ms;
+}
+
+.account-menu-dropdown button:hover,
+.account-menu-dropdown button:focus-visible {
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}
+
+.account-menu-dropdown button.danger {
+  color: var(--dangerColor, #c0392b);
+}
+
+.account-menu-dropdown button.danger:hover,
+.account-menu-dropdown button.danger:focus-visible {
+  background: color-mix(in srgb, var(--dangerColor, #c0392b) 12%, transparent);
+  color: var(--dangerColor, #c0392b);
 }
 
 .theme-selector {
@@ -1507,6 +1569,15 @@ tbody tr:hover td {
 
 tbody tr.selected td {
   background: var(--surfaceAccentColor);
+}
+
+/* The record list uses a roving tab stop. Keep the focus ring distinct from
+   selection so keyboard users can still tell which row Enter/Delete targets. */
+.records-table tbody tr.record-row:focus-visible {
+  position: relative;
+  z-index: 2;
+  outline: 2px solid var(--accentColor);
+  outline-offset: -2px;
 }
 
 td code {
@@ -3956,9 +4027,6 @@ td.row-actions .icon-button:last-child {
     overflow-x: auto;
   }
 
-  .brand-title {
-    display: none;
-  }
 }
 .field-builder-row.editing {
   background: var(--surfaceAlt1Color);

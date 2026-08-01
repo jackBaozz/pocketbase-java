@@ -6,7 +6,8 @@
     "users": "使用者管理",
     "open_collections": "開啟集合",
     "primary": "主導覽",
-    "resize_sidebar": "調整側欄寬度"
+    "resize_sidebar": "調整側欄寬度",
+    "manage_superusers": "管理超級使用者"
   },
   "editor": {
     "toolbar": "富文字格式",

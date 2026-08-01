@@ -2,6 +2,7 @@ import {
   Activity,
   Archive,
   CheckSquare2,
+  ChevronDown,
   ChevronRight,
   Clock3,
   Code2,
@@ -38,11 +39,12 @@ import {
   Trash2,
   Unlock,
   Upload,
+  Users,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode, RefObject } from "react";
+import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
 import type { TFunction } from "i18next";
 import { AuthActionPages } from "./AuthActionPages";
 import { DropdownSelect } from "./components/DropdownSelect";
@@ -67,7 +69,12 @@ import {
   OidcDiscoveryAssistant
 } from "./components/OAuthProviderAssistants";
 import type { AppleClientSecretInput } from "./components/OAuthProviderAssistants";
-import { recordSummary } from "./components/RelationPicker";
+import {
+  recordListRelationExpandPaths,
+  recordSummary,
+  relationSearchFilter,
+  relationTarget
+} from "./components/RelationPicker";
 import type { RelationCollection, RelationFetcher, RelationRecord } from "./components/RelationPicker";
 import { useModalInteraction } from "./components/useModalInteraction";
 
@@ -599,6 +606,7 @@ function App() {
   }, []);
 
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
+  const [authRecord, setAuthRecord] = useState<RecordItem | null>(null);
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
   const [setupRequired, setSetupRequired] = useState(true);
   const [confirmState, setConfirmState] = useState<PendingConfirm | null>(null);
@@ -725,7 +733,28 @@ function App() {
   );
 
   const navigateTo = useCallback(
-    (nextView: ViewName, collectionName = selectedName) => {
+    (
+      nextView: ViewName,
+      collectionName = selectedName,
+      options: { resetRecordQuery?: boolean } = {}
+    ) => {
+      // Filters and sort fields are collection-specific. A cross-collection
+      // shortcut must not carry an invalid field reference into its target.
+      const resetRecordQuery = nextView === "records" && options.resetRecordQuery;
+      const nextRecordQuery = resetRecordQuery
+        ? { ...query, filter: "", sort: "-created" }
+        : query;
+      if (resetRecordQuery) {
+        setQuery((current) =>
+          current.filter === nextRecordQuery.filter &&
+          current.sort === nextRecordQuery.sort &&
+          current.perPage === nextRecordQuery.perPage
+            ? current
+            : nextRecordQuery
+        );
+        setRecordRoutePage(1);
+        setRecordRouteId("");
+      }
       if ((nextView === "records" || nextView === "schema") && collectionName) {
         setSelectedName(collectionName);
       }
@@ -734,7 +763,7 @@ function App() {
         nextView,
         collectionName,
         nextView === "records"
-          ? recordRouteParams(query, 1)
+          ? recordRouteParams(nextRecordQuery, 1)
           : nextView === "logs"
             ? logRouteParams(logFilter, 1, includeSuperuserRequests, "", logTimeRange)
             : {}
@@ -879,11 +908,11 @@ function App() {
     ) => {
       if (!token || !collectionName) return null;
       const collection = collections.find((item) => item.name === collectionName);
-      // Eagerly expand first-level relations so cells can show summaries instead of raw ids.
-      const relationFields = (collection?.fields ?? [])
-        .filter((field) => field.type === "relation" && !field.hidden)
-        .map((field) => field.name);
-      const filter = normalizeSearchFilter(nextQuery.filter, collection);
+      // Relation summaries can themselves contain presentable relations. Request
+      // those paths up front so a list row never falls back to raw ids while its
+      // nested summary is available from the existing records API.
+      const relationFields = recordListRelationExpandPaths(collection, collections);
+      const filter = relationSearchFilter(nextQuery.filter, collection, collections);
       const scope = JSON.stringify({
         collectionName,
         perPage: nextQuery.perPage,
@@ -1020,7 +1049,8 @@ function App() {
         page: params.page,
         perPage: params.perPage,
         sort: "-created",
-        filter: normalizeSearchFilter(params.filter, collection)
+        filter: relationSearchFilter(params.filter, collection, collections),
+        expand: params.expand
       });
       return apiRequest(`/api/collections/${encodeURIComponent(collectionName)}/records?${qs}`, token);
     },
@@ -1224,12 +1254,30 @@ function App() {
     setAuthMethods(data);
   }, [collections, selectedName, token]);
 
+  const refreshAuthRecord = useCallback(async (authToken = token) => {
+    if (!authToken) {
+      setAuthRecord(null);
+      return null;
+    }
+    try {
+      // Display-only identity load. Do not rotate the stored token here — auth-refresh
+      // can mint a new JWT on every call and would retrigger the bootstrap effect loop.
+      const auth = await apiRequest<AuthResponse>("/api/collections/_superusers/auth-refresh", authToken, {
+        method: "POST"
+      });
+      setAuthRecord(auth.record ?? null);
+      return auth;
+    } catch {
+      // Keep the existing session until a real request is rejected as unauthorized.
+      return null;
+    }
+  }, [token]);
+
   const refreshAll = useCallback(async () => {
     try {
       const [, bootstrap] = await Promise.all([refreshHealth(), refreshBootstrapStatus()]);
       if (token && !bootstrap.required) {
-        await refreshCollections();
-        await refreshOauthProviders();
+        await Promise.all([refreshCollections(), refreshOauthProviders()]);
       }
     } catch (error) {
       notify(errorMessage(error), "error");
@@ -1239,6 +1287,12 @@ function App() {
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // Restore the signed-in superuser identity after a page reload (token is in localStorage).
+  useEffect(() => {
+    if (!token || authRecord) return;
+    void refreshAuthRecord();
+  }, [authRecord, refreshAuthRecord, token]);
 
   useEffect(() => {
     const handleUnauthorized = () => {
@@ -1534,6 +1588,7 @@ function App() {
 
   async function completeAuth(auth: AuthResponse) {
     setAuthToken(auth.token);
+    setAuthRecord(auth.record ?? null);
     setAuthEmail("");
     setAuthPassword("");
     setMfaChallenge(null);
@@ -1642,6 +1697,7 @@ function App() {
 
   function logout() {
     setAuthToken("");
+    setAuthRecord(null);
     setLoading(false);
     setCollections([]);
     setRecords([]);
@@ -2114,12 +2170,21 @@ function App() {
     });
   }
 
-  function toggleCurrentPageSelection(checked: boolean) {
+  function clearRecordSelection() {
+    setSelectedRecordIds([]);
+    lastSelectedId.current = null;
+  }
+
+  function toggleCurrentPageSelection(checked: boolean, anchorId?: string) {
     if (!checked) {
-      setSelectedRecordIds([]);
+      clearRecordSelection();
       return;
     }
-    setSelectedRecordIds(records.map((record) => record.id));
+    const ids = records.map((record) => record.id);
+    setSelectedRecordIds(ids);
+    // Ctrl/Cmd+A has an active row, while the header checkbox deliberately
+    // leaves no range anchor behind for a subsequent Shift action.
+    lastSelectedId.current = anchorId && ids.includes(anchorId) ? anchorId : null;
   }
 
   function toggleColumn(column: string) {
@@ -2300,6 +2365,7 @@ function App() {
         try {
           const refreshed = await api<AuthResponse>("/api/collections/_superusers/auth-refresh", { method: "POST" });
           if (refreshed.token) setAuthToken(refreshed.token);
+          if (refreshed.record) setAuthRecord(refreshed.record);
         } catch (error) {
           notify(
             `${t("settings.superuser_ip_refresh_failed", "The IP restriction was saved, but this browser is no longer authorized.")} ${errorMessage(error)}`,
@@ -2495,8 +2561,15 @@ function App() {
           }}
           aria-label={t("nav.open_collections", "Open collections")}
         >
-          <span className="brand-mark">PB</span>
-          <span className="brand-title">pocketbase-java</span>
+          <img
+            className="brand-mark"
+            src={`${import.meta.env.BASE_URL}favicon.svg`}
+            alt=""
+            aria-hidden="true"
+            width={30}
+            height={30}
+            draggable={false}
+          />
         </button>
         <nav className="app-main-nav" aria-label={t("nav.primary", "Primary")}>
           <button
@@ -2531,13 +2604,13 @@ function App() {
             localStorage.setItem(THEME_KEY, nextMode);
             broadcastSync("theme", nextMode);
           }} />
-          <StatusPill health={health} loading={loading} />
-          <button className="icon-button header-icon" onClick={refreshAll} title={t("actions.refresh")} aria-label={t("actions.refresh")}>
-            <RefreshCw size={17} />
-          </button>
-          <button className="icon-button header-icon danger" onClick={logout} title={t("actions.logout")} aria-label={t("actions.logout")} disabled={!token}>
-            <LogOut size={17} />
-          </button>
+          {authenticated && (
+            <AccountMenu
+              email={typeof authRecord?.email === "string" ? authRecord.email : ""}
+              onManageSuperusers={() => navigateTo("records", "_superusers", { resetRecordQuery: true })}
+              onLogout={logout}
+            />
+          )}
         </div>
       </header>
 
@@ -2810,7 +2883,7 @@ function App() {
                     onResetColumns={resetColumns}
                     onToggleSelected={toggleRecordSelection}
                     onToggleAll={toggleCurrentPageSelection}
-                    onClearSelection={() => setSelectedRecordIds([])}
+                    onClearSelection={clearRecordSelection}
                     onOpenFile={openFile}
                   />
                 ) : (
@@ -3338,12 +3411,12 @@ type RecordsViewProps = {
   onApiPreview: () => void;
   onNew: () => void;
   onEdit: (record: RecordItem) => void;
-  onDelete: (record: RecordItem) => void;
+  onDelete: (record: RecordItem) => void | Promise<void>;
   onDeleteSelected: () => void;
   onToggleColumn: (column: string) => void;
   onResetColumns: () => void;
   onToggleSelected: (id: string, extendRange?: boolean) => void;
-  onToggleAll: (checked: boolean) => void;
+  onToggleAll: (checked: boolean, anchorId?: string) => void;
   onClearSelection: () => void;
   onOpenFile: (record: RecordItem, filename: string) => void;
 };
@@ -3352,12 +3425,18 @@ function RecordsView(props: RecordsViewProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(props.query);
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [activeRecordId, setActiveRecordId] = useState(() => props.records[0]?.id ?? "");
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+  const deleteInFlight = useRef(false);
   const searchHistoryKey = useMemo(
     () => `pbj_record_search_history:${props.collection.id || props.collection.name}`,
     [props.collection.id, props.collection.name]
   );
   const [searchHistory, setSearchHistory] = useState<string[]>(() => readSearchHistory(searchHistoryKey));
   const selectedSet = useMemo(() => new Set(props.selectedIds), [props.selectedIds]);
+  const focusedRecordId = props.records.some((record) => record.id === activeRecordId)
+    ? activeRecordId
+    : props.records[0]?.id ?? "";
   const allVisibleSelected =
     props.records.length > 0 && props.records.every((record) => selectedSet.has(record.id));
   const canCreateRecord = props.collection.type !== "view";
@@ -3386,6 +3465,11 @@ function RecordsView(props: RecordsViewProps) {
 
   useEffect(() => setDraft(props.query), [props.query]);
   useEffect(() => setSearchHistory(readSearchHistory(searchHistoryKey)), [searchHistoryKey]);
+  useEffect(() => {
+    setActiveRecordId((current) =>
+      props.records.some((record) => record.id === current) ? current : props.records[0]?.id ?? ""
+    );
+  }, [props.records]);
 
   function rememberSearch(value: string) {
     const next = writeSearchHistory(searchHistoryKey, value);
@@ -3416,6 +3500,89 @@ function RecordsView(props: RecordsViewProps) {
     const next = { ...draft, sort: formatSortValue(column, direction) };
     setDraft(next);
     props.onApply(next);
+  }
+
+  function focusRecord(recordId: string) {
+    setActiveRecordId(recordId);
+    window.requestAnimationFrame(() => rowRefs.current.get(recordId)?.focus());
+  }
+
+  function moveRecordFocus(index: number, extendSelection = false) {
+    const target = props.records[Math.max(0, Math.min(index, props.records.length - 1))];
+    if (!target) return;
+    focusRecord(target.id);
+    if (extendSelection) props.onToggleSelected(target.id, true);
+  }
+
+  function visibleRowStep(recordId: string) {
+    const row = rowRefs.current.get(recordId);
+    const viewport = row?.closest<HTMLElement>(".page-table-wrapper");
+    const rowHeight = Math.max(1, row?.getBoundingClientRect().height || 44);
+    return Math.max(1, Math.floor((viewport?.clientHeight || window.innerHeight) / rowHeight) - 1);
+  }
+
+  function handleRecordRowKeyDown(event: ReactKeyboardEvent<HTMLTableRowElement>, record: RecordItem, index: number) {
+    // Buttons and field controls inside a row retain their native keyboard
+    // behavior. The roving row target is the only element that owns these keys.
+    if (event.target !== event.currentTarget) return;
+
+    const extendSelection = event.shiftKey;
+    const move = (nextIndex: number) => {
+      event.preventDefault();
+      const targetIndex = Math.max(0, Math.min(nextIndex, props.records.length - 1));
+      if (targetIndex !== index) moveRecordFocus(targetIndex, extendSelection);
+    };
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      props.onToggleAll(true, record.id);
+      return;
+    }
+
+    switch (event.key) {
+      case "ArrowUp":
+        move(index - 1);
+        return;
+      case "ArrowDown":
+        move(index + 1);
+        return;
+      case "Home":
+        move(0);
+        return;
+      case "End":
+        move(props.records.length - 1);
+        return;
+      case "PageUp":
+        move(index - visibleRowStep(record.id));
+        return;
+      case "PageDown":
+        move(index + visibleRowStep(record.id));
+        return;
+      case "Enter":
+        event.preventDefault();
+        props.onEdit(record);
+        return;
+      case " ":
+      case "Spacebar":
+        event.preventDefault();
+        props.onToggleSelected(record.id, extendSelection);
+        return;
+      case "Escape":
+        event.preventDefault();
+        props.onClearSelection();
+        return;
+      case "Delete":
+      case "Backspace":
+        if (!canDeleteRecords || deleteInFlight.current) return;
+        event.preventDefault();
+        deleteInFlight.current = true;
+        void Promise.resolve(props.onDelete(record)).finally(() => {
+          deleteInFlight.current = false;
+        });
+        return;
+      default:
+        return;
+    }
   }
 
   return (
@@ -3637,10 +3804,21 @@ function RecordsView(props: RecordsViewProps) {
                 </td>
               </tr>
             ) : (
-              props.records.map((record) => {
+              props.records.map((record, index) => {
                 const selected = selectedSet.has(record.id);
                 return (
-                  <tr className={selected ? "selected" : ""} key={record.id}>
+                  <tr
+                    ref={(node) => {
+                      if (node) rowRefs.current.set(record.id, node);
+                      else rowRefs.current.delete(record.id);
+                    }}
+                    className={`record-row${selected ? " selected" : ""}`}
+                    key={record.id}
+                    tabIndex={focusedRecordId === record.id ? 0 : -1}
+                    aria-selected={selected}
+                    onFocus={() => setActiveRecordId(record.id)}
+                    onKeyDown={(event) => handleRecordRowKeyDown(event, record, index)}
+                  >
                     <td className="select-col">
                       <button
                         className="checkbox-button"
@@ -3730,14 +3908,15 @@ function CellValue({ collection, collections, column, record, onOpenFile }: Cell
 
   if (field?.type === "relation" && value) {
     const ids = (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
-    const target = collections?.find((item) => item.id === field.collectionId);
-    const expand = isPlainObject(record.expand) ? (record.expand as Record<string, unknown>) : undefined;
+    const target = collections ? relationTarget(field, collections) : undefined;
+    const rawExpand = record.expand ?? record["@expand"];
+    const expand = isPlainObject(rawExpand) ? (rawExpand as Record<string, unknown>) : undefined;
     const expanded = expand?.[column];
     const expandedList = expanded === undefined ? [] : Array.isArray(expanded) ? expanded : [expanded];
     const summaries = new Map<string, string>();
     for (const item of expandedList) {
       if (isPlainObject(item) && typeof item.id === "string") {
-        summaries.set(item.id, recordSummary(item as RecordItem, target));
+        summaries.set(item.id, recordSummary(item as RelationRecord, target, collections ?? []));
       }
     }
     const shown = ids.slice(0, 3);
@@ -7885,6 +8064,12 @@ function RecordModal({
     downloadJsonFile(exportRecord, `pocketbase-${collection.name}-${id}.json`);
   }
 
+  function handleRecordFormKeyDown(event: ReactKeyboardEvent<HTMLFormElement>) {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    if (canSubmit) void submit(null, true);
+  }
+
   if (readOnly) {
     return (
       <Modal
@@ -7927,7 +8112,11 @@ function RecordModal({
       onClose={requestClose}
       wide
     >
-      <form className="modal-grid record-upsert-form" onSubmit={(event) => submit(event, true)}>
+      <form
+        className="modal-grid record-upsert-form"
+        onSubmit={(event) => submit(event, true)}
+        onKeyDown={handleRecordFormKeyDown}
+      >
         {initialDraft && (
           <div className="draft-alert">
             <div>
@@ -8270,12 +8459,85 @@ function OAuthResultModal({ result, onClose }: OAuthResultModalProps) {
   );
 }
 
-function StatusPill({ health, loading }: { health: HealthResponse["data"] | null; loading: boolean }) {
+
+function AccountMenu({
+  email,
+  onManageSuperusers,
+  onLogout
+}: {
+  email: string;
+  onManageSuperusers: () => void;
+  onLogout: () => void;
+}) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const label = email.trim() || t("auth.superuser", "Superuser");
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!dropdownRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
   return (
-    <span className={loading ? "status busy" : health ? "status ready" : "status offline"}>
-      {loading ? t("status.syncing", "syncing") : health ? t("status.online", "online") : t("status.offline", "offline")}
-    </span>
+    <div className="account-menu" ref={dropdownRef}>
+      <button
+        type="button"
+        className={open ? "header-link account-menu-trigger active" : "header-link account-menu-trigger"}
+        title={label}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="account-menu-email">{label}</span>
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div className="account-menu-dropdown" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onManageSuperusers();
+            }}
+          >
+            <Users size={15} aria-hidden="true" />
+            {t("nav.manage_superusers", "Manage superusers")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={() => {
+              setOpen(false);
+              onLogout();
+            }}
+          >
+            <LogOut size={15} aria-hidden="true" />
+            {t("actions.logout", "Logout")}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

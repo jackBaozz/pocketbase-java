@@ -329,12 +329,17 @@
 | **登录重置入口与 OAuth2 回调页** | 超级用户登录页直接跳转到 `#/request-password-reset?collection=_superusers`；Java `/api/oauth2-redirect` 的 success/failure 哈希页会自动尝试关闭授权弹窗，若浏览器禁止关闭则保留可读状态与手动关闭按钮。 | UI 类型检查 + Java 路由契约核对 + 构建。 |
 | **SQL 批处理确认** | 危险关键字不再只检查首词，`SELECT …; DROP …`、CTE 后的写入语句同样会触发确认，避免批量 SQL 绕过原有前缀判断。 | UI 类型检查 + 构建。 |
 
+### 第七轮修复（2026-08-01，记录页收尾）
+
+| 项目 | 实现要点 | 验证方式 |
+| --- | --- | --- |
+| **记录行键盘操作与 relation 规则** | 记录表采用 roving focus：↑/↓、Home/End、PageUp/PageDown 移动焦点；Shift+移动/Space 支持范围选择；Cmd/Ctrl+A 选中当前已加载行，Escape 清空并重置范围锚点，Enter 打开，Delete/Backspace 复用删除确认。记录编辑器支持 Cmd/Ctrl+S。relation 摘要会沿 presentable relation 递归展开至 3 层并防环，列表和选择器请求对应 `expand`；普通词与 `field:value` 同时支持集合 schema 已知的嵌套 relation 路径，生成式搜索优先当前层字段并受关系分支、字段数及服务端 3500 字符 filter 上限约束，显式 PocketBase filter 保持原样透传。 | UI 类型检查 + 构建；隔离实例浏览器实测 `Ada / Math` 摘要、`author:Math` 与 picker `team:Math` 过滤，以及 Space、Shift+↓、Escape、Ctrl+A、Enter、Ctrl+S。 |
+
 ### 仍未完成（按剩余价值排序）
 
-1. **记录页的非核心细节** — 更完整的行级键盘操作，以及复杂 relation 过滤/摘要规则仍可继续对齐；当前已覆盖多层内联新建/编辑、排序及安全的父草稿保留。
-2. **集合编辑器的深度工作流** — Microsoft/Lark 等 provider 的完整专属字段、OIDC host 冲突检测，以及更丰富的字段编辑细节仍可继续补齐。
-3. **日志和设置的细粒度视觉/状态对齐** — 当前图表实现了可用的框选、平移与提示，但不是官方 uPlot 的像素级实现；个别设置页的视觉/状态细节仍有空间。
-4. **全局细节** — 自绘 tooltip、所有复制控件的原位成功态、更多无障碍快捷键与辅助功能仍有空间。
-5. **明确的 Java 实现边界** — 不机械移植 Go 运行时的动态插件加载（`/_/extensions.js` / server-side JS hooks）和 TinyMCE 插件生态；Java 目前也没有与 PocketBase 品牌资源等价的、受控的 favicon 配置/上传契约。受保护文件不会生成可长期写入 editor HTML 的 URL。若未来需要这些能力，应设计 Java SPI、品牌资源端点或签名 URL 的等价机制，而不是保存会过期的 token。
+1. **集合编辑器的深度工作流** — Microsoft/Lark 等 provider 的完整专属字段、OIDC host 冲突检测，以及更丰富的字段编辑细节仍可继续补齐。
+2. **日志和设置的细粒度视觉/状态对齐** — 当前图表实现了可用的框选、平移与提示，但不是官方 uPlot 的像素级实现；个别设置页的视觉/状态细节仍有空间。
+3. **全局细节** — 自绘 tooltip、所有复制控件的原位成功态、更多无障碍快捷键与辅助功能仍有空间。
+4. **明确的 Java 实现边界** — 不机械移植 Go 运行时的动态插件加载（`/_/extensions.js` / server-side JS hooks）和 TinyMCE 插件生态；Java 目前也没有与 PocketBase 品牌资源等价的、受控的 favicon 配置/上传契约。受保护文件不会生成可长期写入 editor HTML 的 URL。若未来需要这些能力，应设计 Java SPI、品牌资源端点或签名 URL 的等价机制，而不是保存会过期的 token。
 
 > 本文仍以 v0.39.9 差异基线为准；上述修复仅关闭已验证或由当前 Java API 支撑的条目，不代表约 100 项原始差异已全部消除。
