@@ -320,7 +320,7 @@ public class AuthRepository extends BaseRepository {
         payload.put("email", oauthUser.email());
       }
       if (!payload.hasNonNull("password")) {
-        String generatedPassword = IdGenerator.prefixed("oauth2_") + IdGenerator.id();
+        String generatedPassword = IdGenerator.randomPassword();
         payload.put("password", generatedPassword);
         payload.put("passwordConfirm", generatedPassword);
       }

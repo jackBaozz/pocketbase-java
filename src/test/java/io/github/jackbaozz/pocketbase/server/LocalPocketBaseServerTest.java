@@ -81,7 +81,7 @@ class LocalPocketBaseServerTest {
 
     PocketBaseClient client = PocketBaseClient.builder(server.baseUrl()).build();
     AuthResponse auth =
-        client.collection("_superusers").authWithPassword("root@example.com", "secret123");
+        client.collection("_superusers").authWithPassword("root@example.com", "Secret_123");
     assertNotNull(auth.token());
 
     JsonNode collection =
@@ -466,14 +466,14 @@ class LocalPocketBaseServerTest {
         null,
         Map.of(
             "email", "hidden-password@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456"));
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456"));
     JsonNode auth =
         request(
             "POST",
             "/api/collections/hidden_field_auth/auth-with-password",
             null,
-            Map.of("identity", "hidden-password@example.com", "password", "secret456"));
+            Map.of("identity", "hidden-password@example.com", "password", "Secret_456"));
     assertTrue(auth.hasNonNull("token"));
   }
 
@@ -1572,7 +1572,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     assertFalse(superuserAuth.get("record").get("emailVisibility").asBoolean());
     assertTrue(superuserAuth.get("record").get("verified").asBoolean());
 
@@ -1595,8 +1595,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "legacy@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "displayName", "Legacy"));
     assertFalse(record.get("emailVisibility").asBoolean());
     assertFalse(record.get("verified").asBoolean());
@@ -2114,8 +2114,8 @@ class LocalPocketBaseServerTest {
         rootToken,
         Map.of(
             "email", "regular@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456"));
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456"));
     String regularToken =
         request(
             "POST",
@@ -2123,7 +2123,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "regular@example.com",
-                "password", "secret456"))
+                "password", "Secret_456"))
             .get("token")
             .asText();
     assertEquals(
@@ -2137,8 +2137,8 @@ class LocalPocketBaseServerTest {
             rootToken,
             Map.of(
                 "email", "second-root@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "verified", false));
     String secondId = second.get("id").asText();
     assertTrue(second.get("verified").asBoolean());
@@ -2162,7 +2162,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "second-root@example.com",
-                "password", "secret456"))
+                "password", "Secret_456"))
             .get("token")
             .asText();
     JsonNode renamed =
@@ -2185,7 +2185,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "renamed-root@example.com",
-                "password", "secret456"))
+                "password", "Secret_456"))
             .get("token")
             .asText();
     request(
@@ -2193,8 +2193,8 @@ class LocalPocketBaseServerTest {
         "/api/collections/_superusers/records/" + secondId,
         rootToken,
         Map.of(
-            "password", "changed456",
-            "passwordConfirm", "changed456"));
+            "password", "Changed_456",
+            "passwordConfirm", "Changed_456"));
     assertEquals(
         401,
         rawRequest("POST", "/api/collections/_superusers/auth-refresh", renamedToken, null)
@@ -2206,7 +2206,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "renamed-root@example.com",
-                "password", "changed456"))
+                "password", "Changed_456"))
             .hasNonNull("token"));
 
     assertEquals(
@@ -2246,8 +2246,8 @@ class LocalPocketBaseServerTest {
             rootToken,
             Map.of(
                 "email", "system-owner@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456"));
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456"));
     String ownerId = owner.get("id").asText();
     String ownerToken =
         request(
@@ -2256,7 +2256,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "system-owner@example.com",
-                "password", "secret456"))
+                "password", "Secret_456"))
             .get("token")
             .asText();
 
@@ -2289,7 +2289,7 @@ class LocalPocketBaseServerTest {
                 "recordRef",
                 ownerId,
                 "password",
-                "12345678",
+                "Pass_1234",
                 "sentTo",
                 "system-owner@example.com"));
 
@@ -2485,7 +2485,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/" + SystemCollections.LEGACY_SUPERUSERS_ID + "/auth-with-password",
             null,
-            Map.of("identity", "root@example.com", "password", "secret123"));
+            Map.of("identity", "root@example.com", "password", "Secret_123"));
     assertEquals(
         SystemCollections.SUPERUSERS_ID,
         legacyAliasAuth.get("record").get("collectionId").asText());
@@ -2663,14 +2663,14 @@ class LocalPocketBaseServerTest {
         rootToken,
         Map.of(
             "email", "health-user@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456"));
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456"));
     String userToken =
         request(
             "POST",
             "/api/collections/health_users/auth-with-password",
             null,
-            Map.of("identity", "health-user@example.com", "password", "secret456"))
+            Map.of("identity", "health-user@example.com", "password", "Secret_456"))
             .get("token")
             .asText();
 
@@ -2738,14 +2738,14 @@ class LocalPocketBaseServerTest {
         rootToken,
         Map.of(
             "email", "limited@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456"));
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456"));
     String userToken =
         request(
             "POST",
             "/api/collections/rate_limit_users/auth-with-password",
             null,
-            Map.of("identity", "limited@example.com", "password", "secret456"))
+            Map.of("identity", "limited@example.com", "password", "Secret_456"))
             .get("token")
             .asText();
 
@@ -2904,7 +2904,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/rate_limit_users/auth-with-password",
             null,
-            Map.of("identity", "limited@example.com", "password", "secret456"))
+            Map.of("identity", "limited@example.com", "password", "Secret_456"))
             .statusCode());
     assertEquals(
         429,
@@ -2912,7 +2912,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/rate_limit_users/auth-with-password",
             null,
-            Map.of("identity", "limited@example.com", "password", "secret456"))
+            Map.of("identity", "limited@example.com", "password", "Secret_456"))
             .statusCode());
 
     request("PATCH", "/api/settings", rootToken, Map.of("rateLimits", Map.of("enabled", false)));
@@ -2944,8 +2944,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "ip-user@example.com",
-            "password", "secret123",
-            "passwordConfirm", "secret123",
+            "password", "Secret_123",
+            "passwordConfirm", "Secret_123",
             "verified", true));
     String userToken =
         request(
@@ -2954,7 +2954,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "ip-user@example.com",
-                "password", "secret123"))
+                "password", "Secret_123"))
             .get("token")
             .asText();
 
@@ -3000,7 +3000,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/_superusers/auth-with-password",
             null,
-            Map.of("identity", "root@example.com", "password", "secret123"),
+            Map.of("identity", "root@example.com", "password", "Secret_123"),
             Map.of("X-Test-IP", "127.0.0.1"));
     assertEquals(403, blockedLogin.statusCode());
 
@@ -3009,7 +3009,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/_superusers/auth-with-password",
             null,
-            Map.of("identity", "root@example.com", "password", "secret123"),
+            Map.of("identity", "root@example.com", "password", "Secret_123"),
             Map.of("X-Test-IP", "invalid, 127.0.0.1, 10.2.3.4, invalid"));
     String allowedToken = allowedLogin.get("token").asText();
     assertEquals(
@@ -3484,7 +3484,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "dev@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     assertEquals(400, baseAuth.statusCode());
     assertErrorEnvelope(baseAuth, 400, "The collection is not an auth collection.");
 
@@ -3554,8 +3554,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "long-name@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456"));
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456"));
 
     server.close();
     start();
@@ -3565,7 +3565,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/" + collectionName + "/auth-with-password",
             null,
-            Map.of("identity", "long-name@example.com", "password", "secret456"));
+            Map.of("identity", "long-name@example.com", "password", "Secret_456"));
     assertTrue(authenticated.hasNonNull("token"));
   }
 
@@ -4370,8 +4370,8 @@ class LocalPocketBaseServerTest {
         token,
         Map.of(
             "email", "mail@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
 
     try (FakeSmtpServer smtp = FakeSmtpServer.start()) {
@@ -4459,8 +4459,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "alert@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "verified", true));
     String recordId = user.get("id").asText();
 
@@ -4470,7 +4470,7 @@ class LocalPocketBaseServerTest {
         null,
         Map.of(
             "identity", "alert@example.com",
-            "password", "secret456"),
+            "password", "Secret_456"),
         Map.of("User-Agent", "Device-A"));
     assertEquals(1, authOriginCount("alert_users", recordId));
     assertEquals(0, authOutboxCount("authAlert", "alert@example.com"));
@@ -4484,7 +4484,7 @@ class LocalPocketBaseServerTest {
         null,
         Map.of(
             "identity", "alert@example.com",
-            "password", "secret456"),
+            "password", "Secret_456"),
         Map.of("User-Agent", "Device-A"));
     assertEquals(1, authOriginCount("alert_users", recordId));
 
@@ -4506,7 +4506,7 @@ class LocalPocketBaseServerTest {
           null,
           Map.of(
               "identity", "alert@example.com",
-              "password", "secret456"),
+              "password", "Secret_456"),
           Map.of("User-Agent", "Device-B"));
       String message = smtp.message();
       assertTrue(message.contains("Device-B"));
@@ -4522,7 +4522,7 @@ class LocalPocketBaseServerTest {
           null,
           Map.of(
               "identity", "alert@example.com",
-              "password", "secret456"),
+              "password", "Secret_456"),
           Map.of("User-Agent", device));
     }
     assertEquals(5, authOriginCount("alert_users", recordId));
@@ -4532,8 +4532,8 @@ class LocalPocketBaseServerTest {
         "/api/collections/alert_users/records/" + recordId,
         token,
         Map.of(
-            "password", "updated456",
-            "passwordConfirm", "updated456"));
+            "password", "Updated_456",
+            "passwordConfirm", "Updated_456"));
     assertEquals(0, authOriginCount("alert_users", recordId));
 
     requestWithHeaders(
@@ -4542,7 +4542,7 @@ class LocalPocketBaseServerTest {
         null,
         Map.of(
             "identity", "alert@example.com",
-            "password", "updated456"),
+            "password", "Updated_456"),
         Map.of("User-Agent", "Device-G"));
     assertEquals(1, authOriginCount("alert_users", recordId));
   }
@@ -4582,8 +4582,8 @@ class LocalPocketBaseServerTest {
             superuser,
             Map.of(
                 "email", "manager@example.com",
-                "password", "manager456",
-                "passwordConfirm", "manager456",
+                "password", "Manager_456",
+                "passwordConfirm", "Manager_456",
                 "verified", true,
                 "displayName", "Manager"));
     JsonNode user =
@@ -4593,8 +4593,8 @@ class LocalPocketBaseServerTest {
             superuser,
             Map.of(
                 "email", "user@example.com",
-                "password", "userpass456",
-                "passwordConfirm", "userpass456",
+                "password", "UserPass_456",
+                "passwordConfirm", "UserPass_456",
                 "verified", false,
                 "displayName", "User"));
 
@@ -4636,7 +4636,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "user@example.com",
-                "password", "userpass456"));
+                "password", "UserPass_456"));
     assertEquals(403, blockedLogin.statusCode());
     assertErrorEnvelope(
         blockedLogin,
@@ -4650,7 +4650,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "manager@example.com",
-                "password", "manager456"));
+                "password", "Manager_456"));
     String managerToken = managerAuth.get("token").asText();
     server.close();
     server = null;
@@ -4686,8 +4686,8 @@ class LocalPocketBaseServerTest {
         Map.of(
             "email", "user-next@example.com",
             "verified", true,
-            "password", "managed456",
-            "passwordConfirm", "managed456"));
+            "password", "Managed_456",
+            "passwordConfirm", "Managed_456"));
 
     JsonNode userAuth =
         request(
@@ -4696,7 +4696,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "user-next@example.com",
-                "password", "managed456"));
+                "password", "Managed_456"));
     String userToken = userAuth.get("token").asText();
 
     request("PATCH", "/api/collections/managed_users", superuser, Map.of("viewRule", ""));
@@ -4740,7 +4740,7 @@ class LocalPocketBaseServerTest {
             "PATCH",
             "/api/collections/managed_users/records/" + user.get("id").asText(),
             userToken,
-            Map.of("password", "selfchange456", "passwordConfirm", "selfchange456"));
+            Map.of("password", "SelfChange_456", "passwordConfirm", "SelfChange_456"));
     assertEquals(400, missingOldPassword.statusCode());
     assertTrue(mapper.readTree(missingOldPassword.body()).get("data").has("oldPassword"));
 
@@ -4749,9 +4749,9 @@ class LocalPocketBaseServerTest {
         "/api/collections/managed_users/records/" + user.get("id").asText(),
         userToken,
         Map.of(
-            "password", "selfchange456",
-            "passwordConfirm", "selfchange456",
-            "oldPassword", "managed456"));
+            "password", "SelfChange_456",
+            "passwordConfirm", "SelfChange_456",
+            "oldPassword", "Managed_456"));
     JsonNode changedAuth =
         request(
             "POST",
@@ -4759,7 +4759,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "user-next@example.com",
-                "password", "selfchange456"));
+                "password", "SelfChange_456"));
 
     ObjectNode denyAllAuth = mapper.createObjectNode();
     denyAllAuth.putNull("authRule");
@@ -4795,7 +4795,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "manager@example.com",
-                "password", "manager456"))
+                "password", "Manager_456"))
             .statusCode());
     request(
         "PATCH",
@@ -4809,7 +4809,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "manager@example.com",
-                "password", "manager456"))
+                "password", "Manager_456"))
             .hasNonNull("token"));
     String freshUserToken =
         request(
@@ -4818,7 +4818,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "user-next@example.com",
-                "password", "selfchange456"))
+                "password", "SelfChange_456"))
             .get("token")
             .asText();
 
@@ -4985,13 +4985,13 @@ class LocalPocketBaseServerTest {
         superuser,
         Map.of(
             "email", "header-auth@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
     Map<String, String> credentials =
         Map.of(
             "identity", "header-auth@example.com",
-            "password", "secret456");
+            "password", "Secret_456");
     assertEquals(
         403,
         rawRequest(
@@ -5134,15 +5134,15 @@ class LocalPocketBaseServerTest {
         superuser,
         Map.of(
             "email", "context-auth@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
     assertTrue(
         request(
             "POST",
             "/api/collections/context_auth_users/auth-with-password",
             null,
-            Map.of("identity", "context-auth@example.com", "password", "secret456"))
+            Map.of("identity", "context-auth@example.com", "password", "Secret_456"))
             .hasNonNull("token"));
 
     request(
@@ -5255,8 +5255,8 @@ class LocalPocketBaseServerTest {
         token,
         Map.of(
             "email", "sql-user@example.com",
-            "password", "secret123",
-            "passwordConfirm", "secret123",
+            "password", "Secret_123",
+            "passwordConfirm", "Secret_123",
             "verified", true));
     JsonNode userAuth =
         request(
@@ -5265,7 +5265,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "sql-user@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     assertEquals(
         403,
         rawRequest("POST", "/api/sql", userAuth.get("token").asText(), Map.of("query", "select 1"))
@@ -5498,8 +5498,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "batch-auth@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456"));
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456"));
     HttpResponse<String> failedSystemBatch =
         rawRequest(
             "POST",
@@ -6043,8 +6043,8 @@ class LocalPocketBaseServerTest {
         token,
         Map.of(
             "email", "demo@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Demo"));
 
     JsonNode auth =
@@ -6054,7 +6054,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "demo@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertTrue(auth.hasNonNull("token"));
     assertFalse(auth.get("record").has("password"));
     HttpResponse<String> idAsIdentity =
@@ -6062,7 +6062,7 @@ class LocalPocketBaseServerTest {
             "POST",
             "/api/collections/users/auth-with-password",
             null,
-            Map.of("identity", auth.get("record").get("id").asText(), "password", "secret456"));
+            Map.of("identity", auth.get("record").get("id").asText(), "password", "Secret_456"));
     assertEquals(400, idAsIdentity.statusCode());
     assertErrorEnvelope(idAsIdentity, 400, "Failed to authenticate.");
     HttpResponse<String> disabledIdentityField =
@@ -6073,7 +6073,7 @@ class LocalPocketBaseServerTest {
             Map.of(
                 "identityField", "username",
                 "identity", "demo@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertEquals(400, disabledIdentityField.statusCode());
     assertErrorEnvelope(disabledIdentityField, 400, "Failed to authenticate.");
 
@@ -6130,8 +6130,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "otp@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "verified", false));
 
     JsonNode methods = request("GET", "/api/collections/otp_users/auth-methods", null, null);
@@ -6193,7 +6193,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "otp@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertEquals(400, passwordAfterOtp.statusCode());
     assertErrorEnvelope(passwordAfterOtp, 400, "Failed to authenticate.");
 
@@ -7027,8 +7027,8 @@ class LocalPocketBaseServerTest {
             Map.of(
                 "email", "custom-identity@example.com",
                 "handle", "custom-login",
-                "password", "secret456",
-                "passwordConfirm", "secret456"));
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456"));
     JsonNode auth =
         request(
             "POST",
@@ -7036,7 +7036,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "custom-login",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertEquals(record.get("id").asText(), auth.get("record").get("id").asText());
 
     HttpResponse<String> invalidUpdate =
@@ -7152,8 +7152,8 @@ class LocalPocketBaseServerTest {
             superuserToken,
             Map.of(
                 "email", "token-user@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "verified", false));
 
     JsonNode auth =
@@ -7163,7 +7163,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "token-user@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertTokenLifetime(auth.get("token").asText(), 61);
 
     JsonNode refreshed =
@@ -7195,7 +7195,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "token-user@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     request(
         "POST",
         "/api/collections/token_users/request-email-change",
@@ -7241,8 +7241,8 @@ class LocalPocketBaseServerTest {
             superuserToken,
             Map.of(
                 "email", "secret-user@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "verified", true));
 
     JsonNode auth =
@@ -7252,7 +7252,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "secret-user@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String authToken = auth.get("token").asText();
 
     request(
@@ -7288,7 +7288,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "secret-user@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String freshToken = freshAuth.get("token").asText();
 
     request(
@@ -7373,8 +7373,8 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "token", resetToken,
-                "password", "newsecret456",
-                "passwordConfirm", "newsecret456"));
+                "password", "NewSecret_456",
+                "passwordConfirm", "NewSecret_456"));
     assertEquals(400, staleResetToken.statusCode());
     assertFieldError(
         staleResetToken,
@@ -7417,8 +7417,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "timed@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
     request(
         "POST",
@@ -7426,8 +7426,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "other@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
 
     JsonNode auth =
@@ -7437,7 +7437,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "timed@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String expiredAuthToken = expiredToken(auth.get("token").asText(), "timed_users", "authToken");
     assertEquals(
         401,
@@ -7457,8 +7457,8 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "token", resetToken,
-                "password", "newsecret456",
-                "passwordConfirm", "newsecret456"));
+                "password", "NewSecret_456",
+                "passwordConfirm", "NewSecret_456"));
     assertEquals(400, wrongCollectionReset.statusCode());
     assertFieldError(
         wrongCollectionReset,
@@ -7475,8 +7475,8 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "token", expiredResetToken,
-                "password", "newsecret456",
-                "passwordConfirm", "newsecret456"));
+                "password", "NewSecret_456",
+                "passwordConfirm", "NewSecret_456"));
     assertEquals(400, expiredReset.statusCode());
     assertFieldError(
         expiredReset,
@@ -7515,8 +7515,8 @@ class LocalPocketBaseServerTest {
         token,
         Map.of(
             "email", "mfa@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "verified", true));
 
     HttpResponse<String> passwordFirst =
@@ -7526,7 +7526,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "mfa@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertEquals(401, passwordFirst.statusCode(), passwordFirst.body());
     String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
 
@@ -7537,7 +7537,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "mfa@example.com",
-                "password", "secret456",
+                "password", "Secret_456",
                 "mfaId", passwordMfaId));
     assertEquals(400, samePasswordMethod.statusCode());
     assertFieldError(
@@ -7573,7 +7573,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "mfa@example.com",
-                "password", "secret456",
+                "password", "Secret_456",
                 "mfaId", passwordMfaId));
     assertEquals(400, reusedMfaId.statusCode());
     assertFieldError(
@@ -7636,7 +7636,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "mfa@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertTrue(otpCompleted.hasNonNull("token"));
 
     try (FakeOAuth2Server oauth = FakeOAuth2Server.start()) {
@@ -7684,8 +7684,8 @@ class LocalPocketBaseServerTest {
           token,
           Map.of(
               "email", "oidc@example.com",
-              "password", "secret456",
-              "passwordConfirm", "secret456",
+              "password", "Secret_456",
+              "passwordConfirm", "Secret_456",
               "verified", true));
 
       JsonNode methods =
@@ -7732,7 +7732,7 @@ class LocalPocketBaseServerTest {
               null,
               Map.of(
                   "identity", "oidc@example.com",
-                  "password", "secret456",
+                  "password", "Secret_456",
                   "mfaId", oauthMfaId));
       assertTrue(oauthCompleted.hasNonNull("token"));
     }
@@ -7846,7 +7846,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     assertEquals(401, passwordFirst.statusCode(), passwordFirst.body());
     String passwordMfaId = mapper.readTree(passwordFirst.body()).get("mfaId").asText();
 
@@ -7877,7 +7877,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123",
+                "password", "Secret_123",
                 "mfaId", passwordMfaId));
     assertEquals(400, sameMethod.statusCode());
     assertFieldError(
@@ -8460,8 +8460,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "refresh@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "displayName", "Refresh"));
 
     JsonNode auth =
@@ -8471,7 +8471,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "refresh@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     JsonNode refreshed =
         request("POST", "/api/collections/users/auth-refresh", auth.get("token").asText(), null);
 
@@ -8506,8 +8506,8 @@ class LocalPocketBaseServerTest {
             superuserToken,
             Map.of(
                 "email", "lifecycle@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "displayName", "Lifecycle",
                 "verified", false));
     String userId = user.get("id").asText();
@@ -8519,7 +8519,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "lifecycle@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String userToken = auth.get("token").asText();
 
     HttpResponse<String> verificationRequest =
@@ -8597,7 +8597,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "lifecycle@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertEquals(400, oldPassword.statusCode());
     assertErrorEnvelope(oldPassword, 400, "Failed to authenticate.");
 
@@ -8727,8 +8727,8 @@ class LocalPocketBaseServerTest {
             token,
             Map.of(
                 "email", "query@example.com",
-                "password", "secret456",
-                "passwordConfirm", "secret456",
+                "password", "Secret_456",
+                "passwordConfirm", "Secret_456",
                 "displayName", "Query",
                 "team", team.get("id").asText()));
 
@@ -8740,7 +8740,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "query@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     assertTrue(auth.hasNonNull("token"));
     assertEquals(user.get("id").asText(), auth.get("record").get("id").asText());
     assertFalse(auth.get("record").has("email"));
@@ -8813,8 +8813,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "alice@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Alice"));
     request(
         "POST",
@@ -8822,8 +8822,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "bob@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Bob"));
 
     JsonNode aliceAuth =
@@ -8833,7 +8833,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "alice@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     JsonNode bobAuth =
         request(
             "POST",
@@ -8841,7 +8841,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "bob@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String aliceToken = aliceAuth.get("token").asText();
     String aliceId = aliceAuth.get("record").get("id").asText();
     String bobToken = bobAuth.get("token").asText();
@@ -9301,8 +9301,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "alice-file@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Alice"));
     request(
         "POST",
@@ -9310,8 +9310,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "bob-file@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Bob"));
     JsonNode aliceAuth =
         request(
@@ -9320,7 +9320,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "alice-file@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     JsonNode bobAuth =
         request(
             "POST",
@@ -9328,7 +9328,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "bob-file@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String aliceToken = aliceAuth.get("token").asText();
     String bobToken = bobAuth.get("token").asText();
     String aliceId = aliceAuth.get("record").get("id").asText();
@@ -9659,8 +9659,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "alice-realtime@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Alice"));
     request(
         "POST",
@@ -9668,8 +9668,8 @@ class LocalPocketBaseServerTest {
         superuserToken,
         Map.of(
             "email", "bob-realtime@example.com",
-            "password", "secret456",
-            "passwordConfirm", "secret456",
+            "password", "Secret_456",
+            "passwordConfirm", "Secret_456",
             "displayName", "Bob"));
     JsonNode aliceAuth =
         request(
@@ -9678,7 +9678,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "alice-realtime@example.com",
-                "password", "secret456"));
+                "password", "Secret_456"));
     String aliceToken = aliceAuth.get("token").asText();
     String aliceId = aliceAuth.get("record").get("id").asText();
 
@@ -10004,7 +10004,7 @@ class LocalPocketBaseServerTest {
         null,
         Map.of(
             "email", "root@example.com",
-            "password", "secret123"));
+            "password", "Secret_123"));
   }
 
   private String loginToken() throws Exception {
@@ -10015,7 +10015,7 @@ class LocalPocketBaseServerTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     return auth.get("token").asText();
   }
 

@@ -94,7 +94,7 @@ class RealtimeSmokeTest {
         null,
         Map.of(
             "email", "root@example.com",
-            "password", "secret123"));
+            "password", "Secret_123"));
   }
 
   private String loginToken() throws Exception {
@@ -105,7 +105,7 @@ class RealtimeSmokeTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     return auth.get("token").asText();
   }
 

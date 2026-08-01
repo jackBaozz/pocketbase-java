@@ -168,8 +168,6 @@ mvn -gs settings.xml -s settings.xml clean install
 ```text
 pocketbase-java/
 ├── docs/                               # Documentation
-│   ├── API-Design.md
-│   └── Technical-Architecture-and-Development-Standards.md
 ├── UI/                                 # Admin UI React + Vite codebase
 │   ├── package.json
 │   ├── vite.config.ts

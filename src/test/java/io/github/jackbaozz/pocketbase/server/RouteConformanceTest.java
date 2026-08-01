@@ -169,7 +169,7 @@ public class RouteConformanceTest {
             .header("Content-Type", "application/json")
             .POST(
                 HttpRequest.BodyPublishers.ofString(
-                    "{\"email\":\"route@example.com\",\"password\":\"password123\"}"))
+                    "{\"email\":\"route@example.com\",\"password\":\"Password_123\"}"))
             .build();
     httpClient.send(bootstrap, HttpResponse.BodyHandlers.ofString());
 
@@ -179,7 +179,7 @@ public class RouteConformanceTest {
             .header("Content-Type", "application/json")
             .POST(
                 HttpRequest.BodyPublishers.ofString(
-                    "{\"identity\":\"route@example.com\",\"password\":\"password123\"}"))
+                    "{\"identity\":\"route@example.com\",\"password\":\"Password_123\"}"))
             .build();
     HttpResponse<String> response = httpClient.send(login, HttpResponse.BodyHandlers.ofString());
     return mapper.readTree(response.body()).get("token").asText();

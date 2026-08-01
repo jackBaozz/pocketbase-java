@@ -60,8 +60,8 @@ class AuthActionPersistenceTest {
         superuser,
         Map.of(
             "email", "reset@example.com",
-            "password", "secret123",
-            "passwordConfirm", "secret123",
+            "password", "Secret_123",
+            "passwordConfirm", "Secret_123",
             "verified", true));
     request(
         "POST",
@@ -79,7 +79,7 @@ class AuthActionPersistenceTest {
             null,
             Map.of(
                 "token", token,
-                "password", "newsecret123",
+                "password", "NewSecret_123",
                 "passwordConfirm", "does-not-match"));
     assertEquals(400, rejected.statusCode());
     assertEquals(
@@ -91,8 +91,8 @@ class AuthActionPersistenceTest {
         null,
         Map.of(
             "token", token,
-            "password", "newsecret123",
-            "passwordConfirm", "newsecret123"));
+            "password", "NewSecret_123",
+            "passwordConfirm", "NewSecret_123"));
     assertEquals(0, authRequestCount(token));
 
     HttpResponse<String> reused =
@@ -102,8 +102,8 @@ class AuthActionPersistenceTest {
             null,
             Map.of(
                 "token", token,
-                "password", "anothersecret123",
-                "passwordConfirm", "anothersecret123"));
+                "password", "AnotherSecret_123",
+                "passwordConfirm", "AnotherSecret_123"));
     assertEquals(400, reused.statusCode());
     assertEquals(
         "Invalid or expired token.", mapper.readTree(reused.body()).get("message").asText());
@@ -131,8 +131,8 @@ class AuthActionPersistenceTest {
         superuser,
         Map.of(
             "email", "otp-expiry@example.com",
-            "password", "secret123",
-            "passwordConfirm", "secret123",
+            "password", "Secret_123",
+            "passwordConfirm", "Secret_123",
             "verified", false));
 
     JsonNode otp =
@@ -166,7 +166,7 @@ class AuthActionPersistenceTest {
         null,
         Map.of(
             "email", "root@example.com",
-            "password", "secret123"));
+            "password", "Secret_123"));
   }
 
   private String loginSuperuser() throws Exception {
@@ -177,7 +177,7 @@ class AuthActionPersistenceTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     return auth.get("token").asText();
   }
 

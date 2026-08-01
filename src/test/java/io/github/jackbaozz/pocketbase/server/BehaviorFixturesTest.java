@@ -57,7 +57,7 @@ public class BehaviorFixturesTest {
             .header("Content-Type", "application/json")
             .POST(
                 HttpRequest.BodyPublishers.ofString(
-                    "{\"email\":\"admin@example.com\",\"password\":\"password123\"}"))
+                    "{\"email\":\"admin@example.com\",\"password\":\"Password_123\"}"))
             .build();
     httpClient.send(bootstrap, HttpResponse.BodyHandlers.ofString());
   }
@@ -69,7 +69,7 @@ public class BehaviorFixturesTest {
             .header("Content-Type", "application/json")
             .POST(
                 HttpRequest.BodyPublishers.ofString(
-                    "{\"identity\":\"admin@example.com\",\"password\":\"password123\"}"))
+                    "{\"identity\":\"admin@example.com\",\"password\":\"Password_123\"}"))
             .build();
     HttpResponse<String> response = httpClient.send(login, HttpResponse.BodyHandlers.ofString());
     return mapper.readTree(response.body()).get("token").asText();
@@ -157,7 +157,7 @@ public class BehaviorFixturesTest {
         HttpRequest.newBuilder()
             .uri(URI.create(baseUrl + "/api/collections/_superusers/auth-with-password"))
             .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString("{\"password\":\"password123\"}"))
+            .POST(HttpRequest.BodyPublishers.ofString("{\"password\":\"Password_123\"}"))
             .build();
 
     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

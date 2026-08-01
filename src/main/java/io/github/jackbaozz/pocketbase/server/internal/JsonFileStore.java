@@ -2697,7 +2697,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         payload.put("email", oauthUser.email());
       }
       if (!payload.hasNonNull(passwordField(collection))) {
-        String generatedPassword = IdGenerator.prefixed("oauth2_") + IdGenerator.id();
+        String generatedPassword = IdGenerator.randomPassword();
         payload.put(passwordField(collection), generatedPassword);
         payload.put("passwordConfirm", generatedPassword);
       }

@@ -88,8 +88,8 @@ class OAuth2SuccessTest {
         token,
         Map.of(
             "email", "mock@example.com",
-            "password", "password123",
-            "passwordConfirm", "password123"));
+            "password", "Password_123",
+            "passwordConfirm", "Password_123"));
 
     // Test OAuth2
     JsonNode response =
@@ -116,7 +116,7 @@ class OAuth2SuccessTest {
         null,
         Map.of(
             "email", "root@example.com",
-            "password", "secret123"));
+            "password", "Secret_123"));
   }
 
   private String loginToken() throws Exception {
@@ -127,7 +127,7 @@ class OAuth2SuccessTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     return auth.get("token").asText();
   }
 

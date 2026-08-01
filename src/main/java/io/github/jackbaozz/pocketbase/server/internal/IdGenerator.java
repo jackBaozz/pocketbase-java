@@ -36,6 +36,10 @@ public final class IdGenerator {
     return random(50);
   }
 
+  public static String randomPassword() {
+    return random(30);
+  }
+
   public static String collectionId(String type, String name) {
     return "pbc_" + crc32(text(type) + text(name));
   }

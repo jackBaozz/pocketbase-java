@@ -118,7 +118,7 @@ public class AdminUiPlaywrightTest {
     page.waitForSelector("input[type='email']");
     page.fill("input[type='email']", email);
     for (var input : page.querySelectorAll("input[type='password']")) {
-      input.fill("password123456");
+      input.fill("Password_123456");
     }
     page.click("button[type='submit']");
     page.waitForSelector(".page-header", new Page.WaitForSelectorOptions().setTimeout(10000));
@@ -216,8 +216,8 @@ public class AdminUiPlaywrightTest {
                     headers,
                     body: JSON.stringify({
                       email: 'oauth-ui@example.com',
-                      password: 'password123456',
-                      passwordConfirm: 'password123456'
+                      password: 'Password_123456',
+                      passwordConfirm: 'Password_123456'
                     })
                   });
                   if (!record.ok) {
@@ -288,7 +288,7 @@ public class AdminUiPlaywrightTest {
     page.navigate(baseUrl + "/_/");
     page.waitForSelector("input[type='email']");
     page.fill("input[type='email']", "admin@example.com");
-    page.fill("input[type='password']", "password123456");
+    page.fill("input[type='password']", "Password_123456");
     page.click("button[type='submit']");
 
     // After bootstrap, the dashboard should load

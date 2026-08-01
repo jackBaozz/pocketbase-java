@@ -196,7 +196,7 @@ class S3BackupRepositoryTest {
         null,
         Map.of(
             "email", "root@example.com",
-            "password", "secret123"));
+            "password", "Secret_123"));
   }
 
   private String loginSuperuser() throws Exception {
@@ -207,7 +207,7 @@ class S3BackupRepositoryTest {
             null,
             Map.of(
                 "identity", "root@example.com",
-                "password", "secret123"));
+                "password", "Secret_123"));
     return auth.get("token").asText();
   }
 
