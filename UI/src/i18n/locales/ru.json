@@ -583,7 +583,7 @@
     "search_aria": "Поиск или фильтр",
     "search_placeholder": "Поиск или фильтр вроде `level > 0`",
     "hourly_events": "Событий за час: {{count}}",
-    "time": "Время",
+    "time": "Создано",
     "method": "Метод",
     "status": "Статус",
     "auth": "Auth",

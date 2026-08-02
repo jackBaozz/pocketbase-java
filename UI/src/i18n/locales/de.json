@@ -583,7 +583,7 @@
     "search_aria": "Suchbegriff oder Filter",
     "search_placeholder": "Suchbegriff oder Filter wie `level > 0`",
     "hourly_events": "{{count}} stündliche Ereignisse",
-    "time": "Zeit",
+    "time": "Erstellt",
     "method": "Methode",
     "status": "Status",
     "auth": "Auth",

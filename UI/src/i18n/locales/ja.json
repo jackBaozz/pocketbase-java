@@ -583,7 +583,7 @@
     "search_aria": "検索語またはフィルター",
     "search_placeholder": "`level > 0` のような検索語またはフィルター",
     "hourly_events": "{{count}} 時間イベント",
-    "time": "時刻",
+    "time": "作成日時",
     "method": "メソッド",
     "status": "状態",
     "auth": "認証",

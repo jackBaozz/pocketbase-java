@@ -583,7 +583,7 @@
     "search_aria": "Search term or filter",
     "search_placeholder": "Search term or filter like `level > 0`",
     "hourly_events": "{{count}} hourly events",
-    "time": "Time",
+    "time": "Created",
     "method": "Method",
     "status": "Status",
     "auth": "Auth",

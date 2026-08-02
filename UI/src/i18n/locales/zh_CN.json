@@ -583,7 +583,7 @@
     "search_aria": "搜索词或过滤条件",
     "search_placeholder": "搜索词或过滤条件，例如 `level > 0`",
     "hourly_events": "{{count}} 个小时事件",
-    "time": "时间",
+    "time": "创建时间",
     "method": "方法",
     "status": "状态",
     "auth": "认证",

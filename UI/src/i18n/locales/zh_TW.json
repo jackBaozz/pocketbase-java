@@ -583,7 +583,7 @@
     "search_aria": "搜尋詞或過濾條件",
     "search_placeholder": "搜尋詞或過濾條件，例如 `level > 0`",
     "hourly_events": "{{count}} 個小時事件",
-    "time": "時間",
+    "time": "建立時間",
     "method": "方法",
     "status": "狀態",
     "auth": "認證",

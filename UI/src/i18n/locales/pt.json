@@ -583,7 +583,7 @@
     "search_aria": "Termo ou filtro",
     "search_placeholder": "Termo ou filtro como `level > 0`",
     "hourly_events": "{{count}} eventos por hora",
-    "time": "Hora",
+    "time": "Criado",
     "method": "Método",
     "status": "Status",
     "auth": "Auth",
