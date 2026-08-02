@@ -759,7 +759,16 @@
       "verification_token_help": "Used by email verification links.",
       "view_preview": "Live query preview",
       "view_preview_empty": "The query is valid but returned no sample rows.",
-      "view_preview_rows": "{{count}} sample row(s)"
+      "view_preview_rows": "{{count}} sample row(s)",
+      "fields_and_relations": "Fields and relations",
+      "rules_tab": "Rules",
+      "system_collections": "System collections",
+      "public": "Public",
+      "hidden_badge": "Hidden",
+      "single": "single",
+      "multiple": "multiple",
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

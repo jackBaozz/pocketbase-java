@@ -759,7 +759,16 @@
       "verification_token_help": "Используется ссылками подтверждения e-mail.",
       "view_preview": "Предпросмотр запроса в реальном времени",
       "view_preview_empty": "Запрос корректен, но не вернул строк примера.",
-      "view_preview_rows": "{{count}} строк(и) примера"
+      "view_preview_rows": "{{count}} строк(и) примера",
+      "fields_and_relations": "Поля и связи",
+      "rules_tab": "Правила",
+      "system_collections": "Системные коллекции",
+      "public": "Публичный",
+      "hidden_badge": "Скрыто",
+      "single": "один",
+      "multiple": "несколько",
+      "zoom_in": "Увеличить",
+      "zoom_out": "Уменьшить"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

@@ -759,7 +759,16 @@
       "verification_token_help": "Usado por links de verificação de e-mail.",
       "view_preview": "Prévia de consulta ao vivo",
       "view_preview_empty": "A consulta é válida, mas não retornou linhas de exemplo.",
-      "view_preview_rows": "{{count}} linha(s) de exemplo"
+      "view_preview_rows": "{{count}} linha(s) de exemplo",
+      "fields_and_relations": "Campos e relações",
+      "rules_tab": "Regras",
+      "system_collections": "Coleções do sistema",
+      "public": "Público",
+      "hidden_badge": "Oculto",
+      "single": "único",
+      "multiple": "múltiplo",
+      "zoom_in": "Aumentar zoom",
+      "zoom_out": "Diminuir zoom"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

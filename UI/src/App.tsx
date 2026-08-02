@@ -6493,6 +6493,8 @@ function LogsView(props: LogsViewProps) {
         </button>
       </div>
 
+      {/* Official: white panel with top rounded corners sitting over the blue chart. */}
+      <div className="logs-content">
       <header className="page-header logs-page-header">
         <nav className="breadcrumbs" aria-label={t("common.breadcrumb", "Breadcrumb")}>
           <span>{t("nav.logs", "Logs")}</span>
@@ -6652,6 +6654,7 @@ function LogsView(props: LogsViewProps) {
         <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
         <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
       </footer>
+      </div>
     </section>
   );
 }

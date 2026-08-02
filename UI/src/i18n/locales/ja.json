@@ -759,7 +759,16 @@
       "verification_token_help": "メール検証リンクに使用されます。",
       "view_preview": "ライブクエリプレビュー",
       "view_preview_empty": "クエリは有効ですが、サンプル行は返されませんでした。",
-      "view_preview_rows": "{{count}} 件のサンプル行"
+      "view_preview_rows": "{{count}} 件のサンプル行",
+      "fields_and_relations": "フィールドとリレーション",
+      "rules_tab": "ルール",
+      "system_collections": "システムコレクション",
+      "public": "公開",
+      "hidden_badge": "非表示",
+      "single": "単一",
+      "multiple": "複数",
+      "zoom_in": "拡大",
+      "zoom_out": "縮小"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

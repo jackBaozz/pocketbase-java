@@ -759,7 +759,16 @@
       "verification_token_help": "用于邮箱验证链接。",
       "view_preview": "实时查询预览",
       "view_preview_empty": "查询有效，但未返回任何示例行。",
-      "view_preview_rows": "{{count}} 条示例记录"
+      "view_preview_rows": "{{count}} 条示例记录",
+      "fields_and_relations": "字段与关联",
+      "rules_tab": "规则",
+      "system_collections": "系统集合",
+      "public": "公开",
+      "hidden_badge": "隐藏",
+      "single": "单选",
+      "multiple": "多选",
+      "zoom_in": "放大",
+      "zoom_out": "缩小"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

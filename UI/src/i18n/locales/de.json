@@ -759,7 +759,16 @@
       "verification_token_help": "Wird für Links zur E-Mail-Bestätigung verwendet.",
       "view_preview": "Live-Abfragevorschau",
       "view_preview_empty": "Die Abfrage ist gültig, hat aber keine Beispielzeilen zurückgegeben.",
-      "view_preview_rows": "{{count}} Beispielzeile(n)"
+      "view_preview_rows": "{{count}} Beispielzeile(n)",
+      "fields_and_relations": "Felder und Relationen",
+      "rules_tab": "Regeln",
+      "system_collections": "Systemkollektionen",
+      "public": "Öffentlich",
+      "hidden_badge": "Versteckt",
+      "single": "einzeln",
+      "multiple": "mehrfach",
+      "zoom_in": "Vergrößern",
+      "zoom_out": "Verkleinern"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

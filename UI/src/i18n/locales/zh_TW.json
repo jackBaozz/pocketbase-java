@@ -759,7 +759,16 @@
       "verification_token_help": "用於電子郵件驗證連結。",
       "view_preview": "即時查詢預覽",
       "view_preview_empty": "查詢有效，但未傳回任何範例列。",
-      "view_preview_rows": "{{count}} 筆範例列"
+      "view_preview_rows": "{{count}} 筆範例列",
+      "fields_and_relations": "欄位與關聯",
+      "rules_tab": "規則",
+      "system_collections": "系統集合",
+      "public": "公開",
+      "hidden_badge": "隱藏",
+      "single": "單選",
+      "multiple": "多選",
+      "zoom_in": "放大",
+      "zoom_out": "縮小"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

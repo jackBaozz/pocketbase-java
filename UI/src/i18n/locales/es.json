@@ -759,7 +759,16 @@
       "verification_token_help": "Se usa en enlaces de verificación de correo.",
       "view_preview": "Vista previa de consulta en vivo",
       "view_preview_empty": "La consulta es válida, pero no devolvió filas de muestra.",
-      "view_preview_rows": "{{count}} fila(s) de muestra"
+      "view_preview_rows": "{{count}} fila(s) de muestra",
+      "fields_and_relations": "Campos y relaciones",
+      "rules_tab": "Reglas",
+      "system_collections": "Colecciones del sistema",
+      "public": "Público",
+      "hidden_badge": "Oculto",
+      "single": "único",
+      "multiple": "múltiple",
+      "zoom_in": "Acercar",
+      "zoom_out": "Alejar"
     },
     "files": {
       "max_files": "Up to {{count}} file(s)",

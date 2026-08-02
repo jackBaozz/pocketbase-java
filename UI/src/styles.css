@@ -458,6 +458,13 @@ h2 {
   border-top-right-radius: var(--lgBorderRadius);
 }
 
+/* Logs page chart is full-bleed under the header — square top corners so the
+   dark app-shell background does not show through the body radius. */
+.app-body-wide {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -806,6 +813,16 @@ button.subtle.outline-button:focus-visible,
 
 .app-body-wide .workspace {
   max-width: none;
+}
+
+/* Logs: blue chart full-bleed; white content panel has official top radii over blue. */
+.app-body-wide .workspace-flush {
+  padding: 0;
+  background: var(--accentColor);
+}
+
+.app-body-wide .logs-chart-strip {
+  margin: 0;
 }
 
 .topbar {
@@ -1396,9 +1413,34 @@ button.subtle.outline-button:focus-visible,
   min-width: 0;
 }
 
+.logs-page {
+  /* Chart stays in accent; content panel covers the rest. */
+  background: var(--accentColor);
+}
+
 .records-page-header,
 .logs-page-header {
   flex-shrink: 0;
+}
+
+/*
+ * Official logs layout: white panel with large top-left / top-right radii
+ * sitting on the blue chart so the accent color shows in the corner cutouts
+ * (not the dark app-shell background).
+ */
+.logs-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  padding: var(--spacing);
+  padding-top: 18px;
+  border-top-left-radius: var(--lgBorderRadius);
+  border-top-right-radius: var(--lgBorderRadius);
+  background: var(--surfaceColor);
+  position: relative;
+  z-index: 1;
 }
 
 .records-searchbar-row {
@@ -1429,9 +1471,12 @@ button.subtle.outline-button:focus-visible,
   align-items: end;
   justify-content: center;
   gap: 10px;
+  flex-shrink: 0;
   min-height: 142px;
-  margin: calc(-1 * var(--spacing)) calc(-1 * var(--spacing)) 20px;
-  padding: 20px var(--spacing) 14px;
+  margin: 0;
+  /* Extra bottom padding so blue peeks under the content panel's top radii. */
+  padding: 20px var(--spacing) 22px;
+  border-radius: 0;
   background: var(--accentColor);
   color: var(--primaryTxtColor);
 }
@@ -1625,6 +1670,11 @@ button.subtle.outline-button:focus-visible,
   border: 1px solid var(--surfaceAlt2Color);
   border-radius: var(--borderRadius);
   background: var(--surfaceColor);
+}
+
+/* Table itself stays square; the panel radii live on .logs-content. */
+.logs-page .page-table-wrapper {
+  border-radius: var(--borderRadius);
 }
 
 table {
@@ -4043,9 +4093,14 @@ td.row-actions .icon-button:last-child {
 
   .logs-chart-strip {
     min-height: 110px;
-    margin: calc(-1 * var(--spacing)) calc(-1 * var(--spacing)) 15px;
+    margin: 0;
     padding-top: 14px;
-    padding-bottom: 10px;
+    padding-bottom: 16px;
+  }
+
+  .logs-content {
+    padding: var(--spacing);
+    padding-top: 14px;
   }
 
   .logs-chart-bars {
