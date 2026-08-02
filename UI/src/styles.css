@@ -569,7 +569,44 @@ h2 {
   border-width: 0 0 1px;
   border-radius: 0;
   background: var(--surfaceAlt1Color);
-  padding: 0 10px 0 15px;
+  /* Official: no leading search icon; right-side circle addon buttons. */
+  gap: 0;
+  padding: 0 5px 0 15px;
+}
+
+.sidebar-search input {
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-search-addons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.sidebar-search-addon-btn {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.sidebar-search-addon-btn:hover:not(:disabled),
+.sidebar-search-addon-btn:focus-visible {
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt2Color);
+}
+
+/* Official link-faded: overview icon is quieter until hover. */
+.sidebar-search-overview-btn {
+  color: var(--surfaceTxtDisabledColor);
+}
+
+.sidebar-search-overview-btn:hover:not(:disabled),
+.sidebar-search-overview-btn:focus-visible {
+  color: var(--surfaceTxtColor);
 }
 
 .search-box input {

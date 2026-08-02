@@ -24,6 +24,7 @@ import {
   Mail,
   Minus,
   Moon,
+  Network,
   Pin,
   PinOff,
   Plus,
@@ -3205,7 +3206,6 @@ function CollectionSidebar(props: CollectionSidebarProps) {
   return (
     <aside className="sidebar collections-sidebar">
       <div className="search-box sidebar-search">
-        <Search size={15} />
         <input
           id="collection-search"
           name="collectionSearch"
@@ -3213,12 +3213,31 @@ function CollectionSidebar(props: CollectionSidebarProps) {
           value={props.search}
           onChange={(event) => props.onSearch(event.target.value)}
           placeholder={t("collections.search_placeholder", "Search collections...")}
+          aria-label={t("collections.search_placeholder", "Search collections...")}
         />
-        {props.search && (
-          <button className="icon-button tiny" onClick={() => props.onSearch("")} title={t("actions.clear_search", "Clear search")} aria-label={t("actions.clear_search", "Clear search")}>
-            <X size={14} />
+        {/* Official: Clear only when input has content; overview always visible. */}
+        <div className="sidebar-search-addons">
+          {props.search.trim().length > 0 && (
+            <button
+              type="button"
+              className="icon-button page-circle sidebar-search-addon-btn"
+              onClick={() => props.onSearch("")}
+              title={t("actions.clear", "Clear")}
+              aria-label={t("actions.clear", "Clear")}
+            >
+              <X size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button page-circle sidebar-search-addon-btn sidebar-search-overview-btn"
+            onClick={props.onOverview}
+            title={t("parity.collection.overview", "Collections overview")}
+            aria-label={t("parity.collection.overview", "Collections overview")}
+          >
+            <Network size={16} />
           </button>
-        )}
+        </div>
       </div>
 
       {noMatches ? (

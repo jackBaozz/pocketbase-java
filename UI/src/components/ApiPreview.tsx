@@ -39,7 +39,10 @@ export type ApiPreviewProps = {
 
 type Translate = (key: string, fallback: string) => string;
 
-type Sdk = "js" | "dart";
+type Sdk = "js" | "dart" | "curl";
+
+/** JS/Dart samples during build; curl is attached in finalizeEndpoints. */
+type SdkPair = { js: string; dart: string };
 
 type ParamRow = {
   name: string;
@@ -73,12 +76,18 @@ type Endpoint = {
   divider?: boolean;
 };
 
+type EndpointDraft = Omit<Endpoint, "sdk"> & { sdk: SdkPair };
+
 const SDK_STORAGE_KEY = "pbLastSDK";
 const SDK_CHANGE_EVENT = "pb-last-sdk-change";
 
+/** Official order: List/Search → View → Create → Update → Delete → Realtime → Batch (+ auth after). */
+const RECORD_NAV_ORDER = ["list", "view", "create", "update", "delete", "realtime", "batch"] as const;
+
 const SDK_TABS: ReadonlyArray<{ id: Sdk; label: string }> = [
   { id: "js", label: "JS SDK" },
-  { id: "dart", label: "Dart SDK" }
+  { id: "dart", label: "Dart SDK" },
+  { id: "curl", label: "curl" }
 ];
 
 /* -------------------------------------------------------------------------- */
@@ -127,6 +136,168 @@ function apiError(status: number, message: string, data: Record<string, unknown>
 
 function requiredError(field: string): Record<string, unknown> {
   return { [field]: { code: "validation_required", message: "Missing required value." } };
+}
+
+/** Official-style curl sample (Authorization header + optional -X / -d). */
+function formatCurl(opts: { method?: string; url: string; body?: string }): string {
+  const lines = ["curl \\"];
+  const method = (opts.method ?? "GET").toUpperCase();
+  if (method !== "GET") {
+    lines.push(`  -X ${method} \\`);
+  }
+  lines.push(`  -H 'Authorization:TOKEN' \\`);
+  if (opts.body !== undefined) {
+    lines.push(`  -H 'Content-Type: application/json' \\`);
+    lines.push(`  -d '${opts.body.replace(/'/g, `'\\''`)}' \\`);
+  }
+  lines.push(`  '${opts.url}'`);
+  return lines.join("\n");
+}
+
+function generateCurl(
+  endpoint: { id: string; method: string; path: string },
+  baseUrl: string,
+  collectionName: string,
+  bodies: { create: string; update: string }
+): string {
+  const base = baseUrl.replace(/\/$/, "");
+  const path = endpoint.path.replace(/:id/g, "RECORD_ID");
+  const url = `${base}${path}`;
+  const root = `/api/collections/${collectionName}`;
+
+  switch (endpoint.id) {
+    case "list":
+      return formatCurl({ url: `${url}?perPage=50` });
+    case "view":
+    case "auth-methods":
+    case "auth-refresh":
+      return formatCurl({ url });
+    case "create":
+      return formatCurl({ method: "POST", url, body: bodies.create });
+    case "update":
+      return formatCurl({ method: "PATCH", url, body: bodies.update });
+    case "delete":
+      return formatCurl({ method: "DELETE", url });
+    case "realtime":
+      return formatCurl({
+        method: "POST",
+        url: `${base}/api/realtime`,
+        body: JSON.stringify({
+          clientId: "CLIENT_ID",
+          subscriptions: [`${collectionName}/*`]
+        })
+      });
+    case "batch":
+      return formatCurl({
+        method: "POST",
+        url: `${base}/api/batch`,
+        body: JSON.stringify({
+          requests: [
+            { method: "POST", url: `${root}/records`, body: {} },
+            { method: "PATCH", url: `${root}/records/RECORD_ID`, body: {} },
+            { method: "DELETE", url: `${root}/records/RECORD_ID` }
+          ]
+        })
+      });
+    case "auth-with-password":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ identity: "YOUR_EMAIL_OR_USERNAME", password: "YOUR_PASSWORD" })
+      });
+    case "auth-with-oauth2":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({
+          provider: "google",
+          code: "CODE",
+          codeVerifier: "CODE_VERIFIER",
+          redirectUrl: "REDIRECT_URL"
+        })
+      });
+    case "request-verification":
+    case "request-password-reset":
+    case "request-otp":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ email: "test@example.com" })
+      });
+    case "confirm-verification":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ token: "VERIFICATION_TOKEN" })
+      });
+    case "confirm-password-reset":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({
+          token: "PASSWORD_RESET_TOKEN",
+          password: "12345678",
+          passwordConfirm: "12345678"
+        })
+      });
+    case "request-email-change":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ newEmail: "new@example.com" })
+      });
+    case "confirm-email-change":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ token: "EMAIL_CHANGE_TOKEN", password: "12345678" })
+      });
+    case "auth-with-otp":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ otpId: "OTP_ID", password: "OTP_PASSWORD" })
+      });
+    case "impersonate":
+      return formatCurl({
+        method: "POST",
+        url,
+        body: JSON.stringify({ duration: 3600 })
+      });
+    default: {
+      const method = endpoint.method.split("/")[0].toUpperCase();
+      if (method === "GET" || method === "HEAD") return formatCurl({ url });
+      if (method === "DELETE") return formatCurl({ method: "DELETE", url });
+      return formatCurl({ method, url, body: "{}" });
+    }
+  }
+}
+
+/**
+ * Official nav order for record endpoints, then remaining (auth) endpoints.
+ * Also attaches curl samples next to JS/Dart SDK snippets.
+ */
+function finalizeEndpoints(
+  drafts: EndpointDraft[],
+  baseUrl: string,
+  collectionName: string,
+  bodies: { create: string; update: string }
+): Endpoint[] {
+  const rank = (id: string, fallback: number) => {
+    const index = (RECORD_NAV_ORDER as readonly string[]).indexOf(id);
+    return index === -1 ? 1000 + fallback : index;
+  };
+
+  return [...drafts]
+    .sort((a, b) => rank(a.id, drafts.indexOf(a)) - rank(b.id, drafts.indexOf(b)))
+    .map((endpoint) => ({
+      ...endpoint,
+      sdk: {
+        js: endpoint.sdk.js,
+        dart: endpoint.sdk.dart,
+        curl: generateCurl(endpoint, baseUrl, collectionName, bodies)
+      }
+    }));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -208,6 +379,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
   const isAuth = collection.type === "auth";
   const isView = collection.type === "view";
   const root = `/api/collections/${name}`;
+  // curl bodies are compact JSON (official style)
 
   const visibleFields = (collection.fields ?? []).filter((field) => !field.hidden);
   const recordFields = visibleFields.length > 0 ? visibleFields : FALLBACK_FIELDS;
@@ -365,7 +537,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
   const superuserNote = tr("api_preview.requires_superuser", "Requires superuser Authorization:TOKEN header");
   const authNote = tr("api_preview.requires_auth", "Requires Authorization:TOKEN header");
 
-  const sdkHeader = (lang: Sdk): string =>
+  const sdkHeader = (lang: "js" | "dart"): string =>
     lang === "js"
       ? code`
         import PocketBase from 'pocketbase';
@@ -382,7 +554,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
         ...
       `;
 
-  const sample = (lang: Sdk, body: string): string => `${sdkHeader(lang)}\n\n${dedent(body)}`;
+  const sample = (lang: "js" | "dart", body: string): string => `${sdkHeader(lang)}\n\n${dedent(body)}`;
 
   const verificationHint = isAuth
     ? "\n\n" +
@@ -394,7 +566,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
 
   /* --------------------------------------------------------------- records */
 
-  const endpoints: Endpoint[] = [
+  const endpoints: EndpointDraft[] = [
     {
       id: "list",
       nav: tr("api_preview.nav.list", "List/Search"),
@@ -1790,7 +1962,11 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
     );
   }
 
-  return endpoints;
+  // Official menu order + attach curl samples for every endpoint.
+  return finalizeEndpoints(endpoints, baseUrl, name, {
+    create: JSON.stringify(submitPayload(false, false)),
+    update: JSON.stringify(submitPayload(true, false))
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1825,7 +2001,9 @@ function useSdkPreference(): [Sdk, (next: Sdk) => void] {
 
 function readStoredSdk(): Sdk {
   try {
-    return window.localStorage.getItem(SDK_STORAGE_KEY) === "dart" ? "dart" : "js";
+    const value = window.localStorage.getItem(SDK_STORAGE_KEY);
+    if (value === "dart" || value === "curl" || value === "js") return value;
+    return "js";
   } catch {
     return "js";
   }
