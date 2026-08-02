@@ -290,7 +290,15 @@
     "token_url": "トークン URL",
     "user_info_url": "ユーザー情報 URL",
     "scopes": "スコープ",
-    "missing_credentials": "認証情報がありません"
+    "missing_credentials": "認証情報がありません",
+    "logs_settings_title": "ログ設定",
+    "max_days_retention": "最大保持日数",
+    "max_days_retention_help": "0 にするとログの永続化を無効にします。",
+    "min_log_level": "最小ログレベル",
+    "min_log_level_help": "最小レベル未満のログは無視されます。",
+    "default_log_levels": "デフォルトのログレベル:",
+    "enable_ip_logging": "IP ログを有効化",
+    "enable_auth_id_logging": "Auth Id ログを有効化"
   },
   "auth": {
     "login": "ログイン",
@@ -599,7 +607,9 @@
     "load_older": "過去のログを読み込む（残り {{count}} 件）",
     "include_superuser_requests": "スーパーユーザーのリクエストを含める",
     "export_selected": "JSON をダウンロード",
-    "exported_selected": "選択したログをダウンロードしました"
+    "exported_selected": "選択したログをダウンロードしました",
+    "details_title": "ログの詳細",
+    "download_json": "JSON をダウンロード"
   },
   "notifications": {
     "superuser_created": "スーパーユーザーを作成しました",

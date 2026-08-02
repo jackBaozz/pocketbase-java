@@ -1,0 +1,370 @@
+/* ---------------------------------------------------------------------------
+ * Log details — right-edge drawer (official PB style).
+ * Namespaced with `logd-` to avoid collisions with styles.css.
+ * ------------------------------------------------------------------------- */
+
+.logd-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  background: var(--modalOverlayColor);
+  backdrop-filter: blur(2px);
+  animation: logd-fade 0.15s ease-out;
+}
+
+.logd-drawer {
+  display: flex;
+  flex-direction: column;
+  /* Outer drawer width — a bit wider for long URL / userAgent rows. */
+  width: min(640px, 100%);
+  max-width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceColor);
+  border-left: 1px solid var(--surfaceAlt2Color);
+  box-shadow: -12px 0 40px -16px rgba(0, 0, 0, 0.4);
+  animation: logd-slide-in 0.22s ease-out;
+  /* Shared horizontal inset for header / content card / footer (equal L/R). */
+  --logd-inline: 20px;
+}
+
+@keyframes logd-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes logd-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* ------------------------------------------------------------------ header */
+
+.logd-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px var(--logd-inline) 12px;
+}
+
+.logd-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.logd-head-actions {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.logd-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--surfaceTxtHintColor);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.logd-icon-btn:hover,
+.logd-icon-btn:focus-visible {
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt2Color);
+}
+
+.logd-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 36px;
+  z-index: 2;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow);
+}
+
+.logd-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  background: transparent;
+  color: var(--surfaceTxtColor);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logd-menu button:hover {
+  background: var(--surfaceAlt1Color);
+}
+
+/* -------------------------------------------------------------------- body */
+
+.logd-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* Vertical scroll only — long values wrap instead of expanding width. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  /*
+   * Equal L/R inset via padding (not margin).
+   * scrollbar-gutter keeps the right gap from being eaten by the scrollbar.
+   */
+  padding: 8px var(--logd-inline) 20px;
+  box-sizing: border-box;
+  scrollbar-gutter: stable;
+}
+
+/* Inner display panel (the bordered card in the official drawer). */
+.logd-panel {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: 10px;
+  /* Do not clip multi-line wrapped values. */
+  overflow: visible;
+  background: var(--surfaceColor);
+}
+
+.logd-table {
+  /* Override global `table { min-width: 820px }` which overflows the drawer
+     and clips the right inset (looks like unequal L/R gaps). */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0 !important;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: var(--surfaceColor);
+}
+
+.logd-table th,
+.logd-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+  vertical-align: top;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.45;
+  /* Force long tokens/URLs to wrap inside the cell. */
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: normal;
+  overflow: visible;
+}
+
+.logd-table tr:last-child th,
+.logd-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.logd-table th {
+  /* Narrow key column so values get more room (e.g. data.userAgent). */
+  width: 135px;
+  max-width: 135px;
+  color: var(--surfaceTxtHintColor);
+  font-weight: 500;
+  font-family: var(--monospaceFontFamily);
+  background: transparent;
+  /* Keys can soft-wrap if needed, but prefer keeping them readable. */
+  word-break: break-word;
+}
+
+.logd-table td {
+  width: auto;
+  background: transparent;
+}
+
+.logd-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.logd-value {
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  white-space: normal;
+}
+
+.logd-copy {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-top: -2px;
+  color: var(--surfaceTxtDisabledColor);
+  background: transparent;
+  border: 0;
+  border-radius: var(--borderRadius);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.logd-table tr:hover .logd-copy,
+.logd-copy:focus-visible {
+  opacity: 1;
+}
+
+.logd-copy:hover,
+.logd-copy:focus-visible {
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt2Color);
+}
+
+.logd-prewrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  /* normal + break-all: wrap anywhere when the cell is full (userAgent/url). */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  overflow: visible;
+  font-family: var(--monospaceFontFamily);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.logd-created {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.logd-created-utc {
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-family: var(--monospaceFontFamily);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.logd-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}
+
+.logd-level-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.logd-level-success {
+  color: var(--successColor);
+  background: color-mix(in srgb, var(--successColor) 14%, var(--surfaceColor));
+}
+
+.logd-level-warning {
+  color: var(--warningColor);
+  background: color-mix(in srgb, var(--warningColor) 14%, var(--surfaceColor));
+}
+
+.logd-level-danger {
+  color: var(--dangerColor);
+  background: color-mix(in srgb, var(--dangerColor) 14%, var(--surfaceColor));
+}
+
+/* ------------------------------------------------------------------ footer */
+
+.logd-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px var(--logd-inline) 18px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+  background: var(--surfaceColor);
+}
+
+.logd-btn-close {
+  min-height: var(--btnHeight);
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  background: transparent;
+  color: var(--surfaceTxtColor);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.logd-btn-close:hover,
+.logd-btn-close:focus-visible {
+  background: var(--surfaceAlt1Color);
+}
+
+.logd-btn-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--btnHeight);
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  background: var(--primaryColor);
+  color: var(--primaryTxtColor);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.logd-btn-download:hover,
+.logd-btn-download:focus-visible {
+  background: var(--primaryAlt1Color);
+}
+
+@media (max-width: 520px) {
+  .logd-drawer {
+    width: 100%;
+  }
+}

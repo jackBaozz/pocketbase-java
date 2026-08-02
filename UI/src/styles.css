@@ -3915,6 +3915,239 @@ td.row-actions .icon-button:last-child {
   gap: 8px;
 }
 
+/* ------------------------------------------------------------------ Logs settings (official layout) */
+
+.logs-settings-backdrop {
+  z-index: 120;
+}
+
+.logs-settings-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 36px));
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--surfaceColor);
+  color: var(--surfaceTxtColor);
+  box-shadow: var(--shadow), 0 18px 48px -18px rgba(0, 0, 0, 0.35);
+}
+
+.logs-settings-head {
+  flex: 0 0 auto;
+  padding: 22px 24px 8px;
+  text-align: center;
+  border-bottom: 0;
+}
+
+.logs-settings-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.logs-settings-body {
+  display: grid;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 24px 8px;
+}
+
+.logs-settings-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.logs-settings-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.logs-settings-required {
+  color: var(--dangerColor);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.logs-settings-field input[type="number"] {
+  width: 100%;
+  min-height: var(--btnHeight);
+  border: 0;
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 600;
+}
+
+.logs-settings-field input[type="number"]:focus {
+  outline: 2px solid color-mix(in srgb, var(--accentColor) 55%, transparent);
+  outline-offset: 0;
+  background: var(--surfaceAlt3Color);
+}
+
+.logs-settings-field input[type="number"]:disabled {
+  opacity: 0.6;
+}
+
+.logs-settings-help {
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.logs-level-chip {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 3px 0 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--monospaceFontFamily);
+  white-space: nowrap;
+}
+
+.logs-level-chip-info {
+  color: var(--successColor);
+  background: color-mix(in srgb, var(--successColor) 14%, var(--surfaceColor));
+}
+
+.logs-level-chip-warn {
+  color: var(--warningColor);
+  background: color-mix(in srgb, var(--warningColor) 14%, var(--surfaceColor));
+}
+
+.logs-level-chip-error {
+  color: var(--dangerColor);
+  background: color-mix(in srgb, var(--dangerColor) 14%, var(--surfaceColor));
+}
+
+.logs-level-chip-debug {
+  color: var(--surfaceTxtHintColor);
+  background: var(--surfaceAlt2Color);
+}
+
+.logs-settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  cursor: pointer;
+  user-select: none;
+  color: var(--surfaceTxtColor);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.logs-settings-toggle.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.logs-settings-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.logs-settings-toggle-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--surfaceAlt3Color);
+  transition: background 0.15s ease;
+}
+
+.logs-settings-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease;
+}
+
+.logs-settings-toggle input:checked + .logs-settings-toggle-track {
+  background: var(--successColor);
+}
+
+.logs-settings-toggle input:checked + .logs-settings-toggle-track::after {
+  transform: translateX(18px);
+}
+
+.logs-settings-toggle input:focus-visible + .logs-settings-toggle-track {
+  outline: 2px solid var(--accentColor);
+  outline-offset: 2px;
+}
+
+.logs-settings-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.logs-settings-btn-close,
+.logs-settings-btn-save {
+  min-height: var(--btnHeight);
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.logs-settings-btn-close {
+  background: transparent;
+  color: var(--surfaceTxtColor);
+}
+
+.logs-settings-btn-close:hover:not(:disabled),
+.logs-settings-btn-close:focus-visible {
+  background: var(--surfaceAlt1Color);
+}
+
+.logs-settings-btn-save {
+  background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
+}
+
+.logs-settings-btn-save:hover:not(:disabled),
+.logs-settings-btn-save:focus-visible {
+  background: var(--surfaceAlt3Color);
+}
+
+.logs-settings-btn-save:disabled,
+.logs-settings-btn-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .collection-upsert-form > .modal-actions {
   border-top: 1px solid var(--surfaceAlt2Color);
   padding: 15px;

@@ -290,7 +290,15 @@
     "token_url": "URL do token",
     "user_info_url": "URL de informações do usuário",
     "scopes": "Scopes",
-    "missing_credentials": "credenciais ausentes"
+    "missing_credentials": "credenciais ausentes",
+    "logs_settings_title": "Configurações de logs",
+    "max_days_retention": "Dias máximos de retenção",
+    "max_days_retention_help": "Defina 0 para desativar a persistência de logs.",
+    "min_log_level": "Nível mínimo de log",
+    "min_log_level_help": "Logs abaixo do nível mínimo serão ignorados.",
+    "default_log_levels": "Níveis de log padrão:",
+    "enable_ip_logging": "Ativar registro de IP",
+    "enable_auth_id_logging": "Ativar registro de Auth Id"
   },
   "auth": {
     "login": "Entrar",
@@ -599,7 +607,9 @@
     "load_older": "Carregar anteriores ({{count}} restantes)",
     "include_superuser_requests": "Incluir solicitações de superusuários",
     "export_selected": "Baixar JSON",
-    "exported_selected": "Logs selecionados baixados"
+    "exported_selected": "Logs selecionados baixados",
+    "details_title": "Detalhes do log",
+    "download_json": "Baixar JSON"
   },
   "notifications": {
     "superuser_created": "Superusuário criado",

@@ -290,7 +290,15 @@
     "token_url": "權杖 URL",
     "user_info_url": "使用者資訊 URL",
     "scopes": "授權範圍",
-    "missing_credentials": "缺少憑證"
+    "missing_credentials": "缺少憑證",
+    "logs_settings_title": "日誌設定",
+    "max_days_retention": "最大保留天數",
+    "max_days_retention_help": "設為 0 可停用日誌持久化。",
+    "min_log_level": "最低日誌等級",
+    "min_log_level_help": "低於最低等級的日誌將被忽略。",
+    "default_log_levels": "預設日誌等級：",
+    "enable_ip_logging": "啟用 IP 記錄",
+    "enable_auth_id_logging": "啟用 Auth Id 記錄"
   },
   "auth": {
     "login": "登入",
@@ -599,7 +607,9 @@
     "load_older": "載入更早（剩餘 {{count}} 筆）",
     "include_superuser_requests": "包含超級使用者請求",
     "export_selected": "下載 JSON",
-    "exported_selected": "已下載選取的日誌"
+    "exported_selected": "已下載選取的日誌",
+    "details_title": "日誌詳情",
+    "download_json": "下載 JSON"
   },
   "notifications": {
     "superuser_created": "超級使用者已建立",

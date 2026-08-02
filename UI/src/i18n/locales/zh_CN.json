@@ -290,7 +290,15 @@
     "token_url": "令牌 URL",
     "user_info_url": "用户信息 URL",
     "scopes": "授权范围",
-    "missing_credentials": "缺少凭据"
+    "missing_credentials": "缺少凭据",
+    "logs_settings_title": "日志设置",
+    "max_days_retention": "最大保留天数",
+    "max_days_retention_help": "设为 0 可禁用日志持久化。",
+    "min_log_level": "最低日志级别",
+    "min_log_level_help": "低于最低级别的日志将被忽略。",
+    "default_log_levels": "默认日志级别：",
+    "enable_ip_logging": "启用 IP 记录",
+    "enable_auth_id_logging": "启用 Auth Id 记录"
   },
   "auth": {
     "login": "登录",
@@ -599,7 +607,9 @@
     "load_older": "加载更早（剩余 {{count}} 条）",
     "include_superuser_requests": "包含超级用户请求",
     "export_selected": "下载 JSON",
-    "exported_selected": "已下载选中的日志"
+    "exported_selected": "已下载选中的日志",
+    "details_title": "日志详情",
+    "download_json": "下载 JSON"
   },
   "notifications": {
     "superuser_created": "超级用户已创建",

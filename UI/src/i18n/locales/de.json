@@ -529,7 +529,15 @@
     "token_url": "Token-URL",
     "user_info_url": "User-Info-URL",
     "scopes": "Scopes",
-    "missing_credentials": "Zugangsdaten fehlen"
+    "missing_credentials": "Zugangsdaten fehlen",
+    "logs_settings_title": "Log-Einstellungen",
+    "max_days_retention": "Max. Aufbewahrungstage",
+    "max_days_retention_help": "Auf 0 setzen, um die Log-Persistenz zu deaktivieren.",
+    "min_log_level": "Min. Log-Level",
+    "min_log_level_help": "Logs unter dem Mindestlevel werden ignoriert.",
+    "default_log_levels": "Standard-Log-Level:",
+    "enable_ip_logging": "IP-Protokollierung aktivieren",
+    "enable_auth_id_logging": "Auth-Id-Protokollierung aktivieren"
   },
   "transfer": {
     "export_intro": "Unten findest du die aktuelle Sammlungskonfiguration, die du in eine andere PocketBase-Umgebung importieren kannst.",
@@ -599,7 +607,9 @@
     "load_older": "Ältere laden ({{count}} verbleibend)",
     "include_superuser_requests": "Anfragen von Superusern einschließen",
     "export_selected": "JSON herunterladen",
-    "exported_selected": "Ausgewählte Protokolle heruntergeladen"
+    "exported_selected": "Ausgewählte Protokolle heruntergeladen",
+    "details_title": "Log-Details",
+    "download_json": "JSON herunterladen"
   },
   "notifications": {
     "superuser_created": "Superuser erstellt",

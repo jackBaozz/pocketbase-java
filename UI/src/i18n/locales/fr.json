@@ -290,7 +290,15 @@
     "token_url": "URL du jeton",
     "user_info_url": "URL infos utilisateur",
     "scopes": "Scopes",
-    "missing_credentials": "identifiants manquants"
+    "missing_credentials": "identifiants manquants",
+    "logs_settings_title": "Paramètres des journaux",
+    "max_days_retention": "Rétention max. (jours)",
+    "max_days_retention_help": "Mettre 0 pour désactiver la persistance des journaux.",
+    "min_log_level": "Niveau de journal min.",
+    "min_log_level_help": "Les journaux sous le niveau minimum seront ignorés.",
+    "default_log_levels": "Niveaux de journal par défaut :",
+    "enable_ip_logging": "Activer la journalisation IP",
+    "enable_auth_id_logging": "Activer la journalisation Auth Id"
   },
   "auth": {
     "login": "Connexion",
@@ -599,7 +607,9 @@
     "load_older": "Charger plus anciens ({{count}} restants)",
     "include_superuser_requests": "Inclure les requêtes des superutilisateurs",
     "export_selected": "Télécharger le JSON",
-    "exported_selected": "Journaux sélectionnés téléchargés"
+    "exported_selected": "Journaux sélectionnés téléchargés",
+    "details_title": "Détails du journal",
+    "download_json": "Télécharger JSON"
   },
   "notifications": {
     "superuser_created": "Superutilisateur créé",

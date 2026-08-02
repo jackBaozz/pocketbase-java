@@ -290,7 +290,15 @@
     "token_url": "URL токена",
     "user_info_url": "URL информации пользователя",
     "scopes": "Scopes",
-    "missing_credentials": "нет учетных данных"
+    "missing_credentials": "нет учетных данных",
+    "logs_settings_title": "Настройки журналов",
+    "max_days_retention": "Макс. дней хранения",
+    "max_days_retention_help": "Укажите 0, чтобы отключить сохранение журналов.",
+    "min_log_level": "Мин. уровень журнала",
+    "min_log_level_help": "Записи ниже минимального уровня будут игнорироваться.",
+    "default_log_levels": "Уровни журнала по умолчанию:",
+    "enable_ip_logging": "Включить запись IP",
+    "enable_auth_id_logging": "Включить запись Auth Id"
   },
   "auth": {
     "login": "Войти",
@@ -599,7 +607,9 @@
     "load_older": "Загрузить ранние (осталось {{count}})",
     "include_superuser_requests": "Включать запросы суперпользователей",
     "export_selected": "Скачать JSON",
-    "exported_selected": "Выбранные логи скачаны"
+    "exported_selected": "Выбранные логи скачаны",
+    "details_title": "Сведения о журнале",
+    "download_json": "Скачать JSON"
   },
   "notifications": {
     "superuser_created": "Суперпользователь создан",

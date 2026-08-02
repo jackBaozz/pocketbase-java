@@ -66,6 +66,7 @@ import { PasswordInput } from "./components/PasswordInput";
 import { AuthRecordActions } from "./components/AuthRecordActions";
 import type { AuthRecordLink, ImpersonationResult } from "./components/AuthRecordActions";
 import { CollectionsOverview } from "./components/CollectionsOverview";
+import { LogDetailsDrawer } from "./components/LogDetailsDrawer";
 import { ResizableSidebar, clampSidebarWidth } from "./components/ResizableSidebar";
 import {
   AppleClientSecretAssistant,
@@ -3005,38 +3006,7 @@ function App() {
       )}
 
       {view === "logs" && selectedLog && (
-        <Modal
-          title={t("logs.log_title", { id: selectedLog.id, defaultValue: "Log {{id}}" })}
-          onClose={closeLogDetails}
-          wide
-        >
-          <div className="modal-grid">
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="subtle"
-                onClick={() => {
-                  navigator.clipboard.writeText(JSON.stringify(selectedLog, null, 2)).then(
-                    () => notify(t("notifications.copied", "Copied")),
-                    (error) => notify(errorMessage(error), "error")
-                  );
-                }}
-              >
-                <Copy size={16} />
-                {t("actions.copy_json", "Copy JSON")}
-              </button>
-              <button
-                type="button"
-                className="subtle"
-                onClick={() => downloadJsonFile(selectedLog, `pocketbase-log-${selectedLog.id}.json`)}
-              >
-                <Download size={16} />
-                {t("actions.download_json", "Download as JSON")}
-              </button>
-            </div>
-            <pre className="json-panel log-json">{JSON.stringify(selectedLog, null, 2)}</pre>
-          </div>
-        </Modal>
+        <LogDetailsDrawer log={selectedLog} onClose={closeLogDetails} onNotify={notify} />
       )}
 
       {logsSettingsOpen && (
@@ -5154,6 +5124,9 @@ type LogSettingsModalProps = {
  * stream, not in the broader application settings page. Keep an isolated draft
  * here so cancelling the dialog cannot overwrite edits the user already made
  * in another settings section.
+ *
+ * Layout matches official "Logs settings": stacked filled fields, helper text,
+ * pill toggles, Close left / Save changes right.
  */
 function LogSettingsModal(props: LogSettingsModalProps) {
   const { t } = useTranslation();
@@ -5162,10 +5135,18 @@ function LogSettingsModal(props: LogSettingsModalProps) {
   const draftSettings = useMemo(() => parseSettingsDraft(draft, props.settings), [draft, props.settings]);
   const logs = settingsObject(draftSettings, "logs");
   const disabled = props.loading || saving;
+  const dirty = draft !== props.draft;
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(() => {
+    if (!saving) props.onClose();
+  });
 
   useEffect(() => {
     if (!saving) setDraft(props.draft);
   }, [props.draft, saving]);
+
+  function closeUnlessSaving() {
+    if (!saving) props.onClose();
+  }
 
   function updateSetting(key: string, value: unknown) {
     const next = cloneJsonObject(draftSettings);
@@ -5174,7 +5155,7 @@ function LogSettingsModal(props: LogSettingsModalProps) {
   }
 
   async function save() {
-    if (disabled) return;
+    if (disabled || !dirty) return;
     setSaving(true);
     props.onDraft(draft);
     const saved = await props.onSave(draft);
@@ -5182,76 +5163,132 @@ function LogSettingsModal(props: LogSettingsModalProps) {
     if (saved) props.onClose();
   }
 
-  const close = () => {
-    if (!saving) props.onClose();
-  };
+  const levelHints = [
+    { value: "0", label: "INFO" },
+    { value: "4", label: "WARN" },
+    { value: "8", label: "ERROR" },
+    { value: "-4", label: "DEBUG" }
+  ] as const;
 
   return (
-    <Modal title={t("settings.logs_title", "Logs")} onClose={close}>
-      <div className="modal-grid">
-        <p className="settings-footnote">{t("settings.logs_desc", "Retention and request metadata")}</p>
-        <div className="settings-form-row two">
-          <label>
-            {t("settings.max_days", "Max days")}
+    <div
+      className="modal-backdrop logs-settings-backdrop"
+      role="presentation"
+      onMouseDown={onBackdropMouseDown}
+      onMouseUp={onBackdropMouseUp}
+    >
+      <section
+        ref={dialogRef}
+        className="logs-settings-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("settings.logs_settings_title", "Logs settings")}
+        tabIndex={-1}
+      >
+        <header className="logs-settings-head">
+          <h2>{t("settings.logs_settings_title", "Logs settings")}</h2>
+        </header>
+
+        <div className="logs-settings-body">
+          <label className="logs-settings-field">
+            <span className="logs-settings-label">
+              {t("settings.max_days_retention", "Max days retention")}
+              <em className="logs-settings-required" aria-hidden="true">
+                *
+              </em>
+            </span>
             <input
               id="logs-max-days"
               name="logs.maxDays"
               type="number"
-              min="0"
-              max="3650"
+              min={0}
+              max={3650}
               value={String(logs.maxDays ?? 5)}
-              onChange={(event) => updateSetting("maxDays", Math.max(0, Math.min(3650, Number(event.target.value || 0))))}
+              onChange={(event) =>
+                updateSetting("maxDays", Math.max(0, Math.min(3650, Number(event.target.value || 0))))
+              }
               disabled={disabled}
             />
+            <span className="logs-settings-help">
+              {t("settings.max_days_retention_help", "Set to 0 to disable logs persistence.")}
+            </span>
           </label>
-          <label>
-            {t("settings.min_level", "Min level")}
+
+          <label className="logs-settings-field">
+            <span className="logs-settings-label">
+              {t("settings.min_log_level", "Min log level")}
+              <em className="logs-settings-required" aria-hidden="true">
+                *
+              </em>
+            </span>
             <input
               id="logs-min-level"
               name="logs.minLevel"
               type="number"
-              min="0"
-              max="16"
+              min={-8}
+              max={16}
               value={String(logs.minLevel ?? 0)}
-              onChange={(event) => updateSetting("minLevel", Math.max(0, Math.min(16, Number(event.target.value || 0))))}
+              onChange={(event) =>
+                updateSetting("minLevel", Math.max(-8, Math.min(16, Number(event.target.value || 0))))
+              }
               disabled={disabled}
             />
+            <span className="logs-settings-help">
+              {t(
+                "settings.min_log_level_help",
+                "Logs with level below the minimum will be ignored."
+              )}{" "}
+              {t("settings.default_log_levels", "Default log levels:")}{" "}
+              {levelHints.map((hint) => (
+                <span key={hint.value} className={`logs-level-chip logs-level-chip-${hint.label.toLowerCase()}`}>
+                  {hint.value}:{hint.label}
+                </span>
+              ))}
+            </span>
+          </label>
+
+          <label className={`logs-settings-toggle${disabled ? " is-disabled" : ""}`}>
+            <input
+              id="logs-log-ip"
+              name="logs.logIP"
+              type="checkbox"
+              checked={Boolean(logs.logIP)}
+              onChange={(event) => updateSetting("logIP", event.target.checked)}
+              disabled={disabled}
+            />
+            <span className="logs-settings-toggle-track" aria-hidden="true" />
+            <span>{t("settings.enable_ip_logging", "Enable IP logging")}</span>
+          </label>
+
+          <label className={`logs-settings-toggle${disabled ? " is-disabled" : ""}`}>
+            <input
+              id="logs-log-auth-id"
+              name="logs.logAuthId"
+              type="checkbox"
+              checked={Boolean(logs.logAuthId)}
+              onChange={(event) => updateSetting("logAuthId", event.target.checked)}
+              disabled={disabled}
+            />
+            <span className="logs-settings-toggle-track" aria-hidden="true" />
+            <span>{t("settings.enable_auth_id_logging", "Enable Auth Id logging")}</span>
           </label>
         </div>
-        <label className="check-row switch-row">
-          <input
-            id="logs-log-ip"
-            name="logs.logIP"
-            type="checkbox"
-            checked={Boolean(logs.logIP)}
-            onChange={(event) => updateSetting("logIP", event.target.checked)}
-            disabled={disabled}
-          />
-          {t("settings.log_request_ip", "Log request IP")}
-        </label>
-        <label className="check-row switch-row">
-          <input
-            id="logs-log-auth-id"
-            name="logs.logAuthId"
-            type="checkbox"
-            checked={Boolean(logs.logAuthId)}
-            onChange={(event) => updateSetting("logAuthId", event.target.checked)}
-            disabled={disabled}
-          />
-          {t("settings.log_auth_id", "Log auth record id")}
-        </label>
-        <div className="modal-actions">
-          <button type="button" className="subtle" onClick={close} disabled={saving}>
-            <X size={16} />
-            {t("actions.cancel", "Cancel")}
+
+        <footer className="logs-settings-foot">
+          <button type="button" className="logs-settings-btn-close" onClick={closeUnlessSaving} disabled={saving}>
+            {t("actions.close", "Close")}
           </button>
-          <button type="button" className="primary" onClick={() => void save()} disabled={disabled}>
-            <Save size={16} />
-            {saving ? t("common.submitting", "Submitting...") : t("actions.save", "Save")}
+          <button
+            type="button"
+            className="logs-settings-btn-save"
+            onClick={() => void save()}
+            disabled={disabled || !dirty}
+          >
+            {saving ? t("common.submitting", "Submitting...") : t("actions.save_changes", "Save changes")}
           </button>
-        </div>
-      </div>
-    </Modal>
+        </footer>
+      </section>
+    </div>
   );
 }
 
