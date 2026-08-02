@@ -609,7 +609,8 @@
     "export_selected": "Скачать JSON",
     "exported_selected": "Выбранные логи скачаны",
     "details_title": "Сведения о журнале",
-    "download_json": "Скачать JSON"
+    "download_json": "Скачать JSON",
+    "requests_count": "{{count}} запросов"
   },
   "notifications": {
     "superuser_created": "Суперпользователь создан",

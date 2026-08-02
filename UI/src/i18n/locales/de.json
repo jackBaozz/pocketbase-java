@@ -609,7 +609,8 @@
     "export_selected": "JSON herunterladen",
     "exported_selected": "Ausgewählte Protokolle heruntergeladen",
     "details_title": "Log-Details",
-    "download_json": "JSON herunterladen"
+    "download_json": "JSON herunterladen",
+    "requests_count": "{{count}} Anfragen"
   },
   "notifications": {
     "superuser_created": "Superuser erstellt",

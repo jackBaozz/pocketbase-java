@@ -609,7 +609,8 @@
     "export_selected": "JSON をダウンロード",
     "exported_selected": "選択したログをダウンロードしました",
     "details_title": "ログの詳細",
-    "download_json": "JSON をダウンロード"
+    "download_json": "JSON をダウンロード",
+    "requests_count": "{{count}} リクエスト"
   },
   "notifications": {
     "superuser_created": "スーパーユーザーを作成しました",

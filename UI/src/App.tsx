@@ -498,6 +498,86 @@ function nextLogHour(value: string) {
   return date ? formatLogHour(new Date(date.getTime() + 60 * 60 * 1000)) : "";
 }
 
+/** Nice ceiling for chart Y scale (e.g. 819 → 1000). */
+function niceChartCeil(value: number): number {
+  if (value <= 0) return 1;
+  const exp = Math.floor(Math.log10(value));
+  const base = Math.pow(10, exp);
+  const scaled = value / base;
+  const nice = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+  return nice * base;
+}
+
+function chartYTicks(maxValue: number): number[] {
+  const top = niceChartCeil(maxValue);
+  if (top <= 1) return [0, top];
+  if (top <= 2) return [0, top];
+  return [0, top / 2, top];
+}
+
+/** Official chart axis always uses compact English am/pm (7pm, 12am). */
+function formatLogChartHourAmPm(date: Date): string {
+  const h = date.getHours();
+  if (h === 0) return "12am";
+  if (h === 12) return "12pm";
+  return h < 12 ? `${h}am` : `${h - 12}pm`;
+}
+
+function formatLogChartMonthDay(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit" }).format(date);
+}
+
+function formatLogChartAxisLabel(value: string, showDate: boolean): { time: string; date?: string } {
+  const date = parseLogDate(value);
+  if (!date) return { time: value };
+  return showDate
+    ? { time: formatLogChartHourAmPm(date), date: formatLogChartMonthDay(date) }
+    : { time: formatLogChartHourAmPm(date) };
+}
+
+/** Tooltip range like official: "Aug 01 11pm-12am". */
+function formatLogChartHourRange(value: string): string {
+  const start = parseLogDate(value);
+  if (!start) return value;
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  return `${formatLogChartMonthDay(start)} ${formatLogChartHourAmPm(start)}-${formatLogChartHourAmPm(end)}`;
+}
+
+function formatChartYLabel(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+/**
+ * Official logs chart is a continuous step-area (not gapped bars).
+ * Path is built in a fixed viewBox so it scales with the container.
+ */
+function buildLogChartStepPaths(values: number[], yMax: number, vbW = 1000, vbH = 100) {
+  const n = values.length;
+  if (n === 0 || yMax <= 0) {
+    return { area: "", line: "" };
+  }
+  const barW = vbW / n;
+  const yAt = (v: number) => vbH - (Math.max(0, v) / yMax) * vbH;
+  let line = `M 0 ${yAt(values[0])}`;
+  let area = `M 0 ${vbH} L 0 ${yAt(values[0])}`;
+  for (let i = 0; i < n; i++) {
+    const x0 = i * barW;
+    const x1 = (i + 1) * barW;
+    const y = yAt(values[i]);
+    if (i === 0) {
+      line = `M ${x0} ${y}`;
+      area = `M ${x0} ${vbH} L ${x0} ${y}`;
+    } else {
+      line += ` L ${x0} ${y}`;
+      area += ` L ${x0} ${y}`;
+    }
+    line += ` L ${x1} ${y}`;
+    area += ` L ${x1} ${y}`;
+  }
+  area += ` L ${vbW} ${vbH} Z`;
+  return { area, line };
+}
+
 function combineLogFilters(...filters: string[]) {
   return filters
     .map((filter) => filter.trim())
@@ -6364,10 +6444,18 @@ function LogsView(props: LogsViewProps) {
   const total = props.logPage?.totalItems ?? props.logs.length;
   const hasMoreLogs = Boolean(props.logPage && props.logs.length > 0 && props.logs.length < total);
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const chartWindowSize = 28;
+  // Official shows a denser hourly strip; 24 keeps one day visible and readable.
+  const chartWindowSize = 24;
   const chartMaxStart = Math.max(0, chartStats.length - chartWindowSize);
   const visibleChartStats = chartStats.slice(chartWindowStart, chartWindowStart + chartWindowSize);
   const maxStat = Math.max(1, ...visibleChartStats.map((item) => Number(item.total || 0)));
+  const yMax = niceChartCeil(maxStat);
+  const yTicks = chartYTicks(maxStat);
+  const chartValues = useMemo(
+    () => visibleChartStats.map((item) => Number(item.total || 0)),
+    [visibleChartStats]
+  );
+  const chartPaths = useMemo(() => buildLogChartStepPaths(chartValues, yMax), [chartValues, yMax]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allVisibleSelected = props.logs.length > 0 && props.logs.every((log) => selectedSet.has(log.id));
   const selectedLogs = useMemo(() => props.logs.filter((log) => selectedSet.has(log.id)), [props.logs, selectedSet]);
@@ -6447,75 +6535,136 @@ function LogsView(props: LogsViewProps) {
         >
           <ChevronRight size={16} />
         </button>
-        <div
-          className="logs-chart-bars"
-          aria-label={t("logs.activity", "Log activity")}
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            const index = chartIndex(event);
-            if (index < 0) return;
-            chartSelectionStart.current = index;
-            setChartSelection({ start: index, end: index });
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerMove={(event) => {
-            const index = chartIndex(event);
-            if (index >= 0) setHoveredChartIndex(index);
-            if (index >= 0 && chartSelectionStart.current !== null) {
-              setChartSelection({ start: chartSelectionStart.current, end: index });
-            }
-          }}
-          onPointerUp={(event) => {
-            const start = chartSelectionStart.current;
-            const end = chartIndex(event);
-            chartSelectionStart.current = null;
-            setChartSelection(null);
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-            if (start !== null && end >= 0) selectChartRange(start, end);
-          }}
-          onPointerCancel={() => {
-            chartSelectionStart.current = null;
-            setChartSelection(null);
-          }}
-          onPointerLeave={() => {
-            if (chartSelectionStart.current === null) setHoveredChartIndex(null);
-          }}
-          onDoubleClick={resetChart}
-        >
-          {visibleChartStats.length === 0 ? (
-            <span className="logs-chart-empty">{t("logs.no_activity", "No log activity")}</span>
-          ) : (
-            visibleChartStats.map((item, index) => {
-              const totalValue = Number(item.total || 0);
-              const selected = chartSelection && index >= Math.min(chartSelection.start, chartSelection.end) && index <= Math.max(chartSelection.start, chartSelection.end);
-              return (
-                <span
-                  key={item.date}
-                  className={`logs-chart-bar${selected ? " selected" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  style={{ height: `${Math.max(8, (totalValue / maxStat) * 100)}%` }}
-                  title={`${item.date}: ${totalValue}`}
-                  aria-label={`${item.date}: ${totalValue}`}
-                  onFocus={() => setHoveredChartIndex(index)}
-                  onBlur={() => setHoveredChartIndex(null)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      selectChartRange(index, index);
-                    }
-                  }}
-                />
-              );
-            })
-          )}
-          {hoveredChartIndex !== null && visibleChartStats[hoveredChartIndex] && (
-            <span
-              className="logs-chart-tooltip"
-              style={{ left: `${((hoveredChartIndex + 0.5) / visibleChartStats.length) * 100}%` }}
+        <div className="logs-chart-main">
+          <div className="logs-chart-plot">
+            {visibleChartStats.length > 0 && (
+              <div className="logs-chart-y" aria-hidden="true">
+                {[...yTicks].reverse().map((tick) => (
+                  <span key={tick} className="logs-chart-y-tick">
+                    {formatChartYLabel(tick)}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div
+              className="logs-chart-canvas"
+              aria-label={t("logs.activity", "Log activity")}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                const index = chartIndex(event);
+                if (index < 0) return;
+                chartSelectionStart.current = index;
+                setChartSelection({ start: index, end: index });
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                const index = chartIndex(event);
+                if (index >= 0) setHoveredChartIndex(index);
+                if (index >= 0 && chartSelectionStart.current !== null) {
+                  setChartSelection({ start: chartSelectionStart.current, end: index });
+                }
+              }}
+              onPointerUp={(event) => {
+                const start = chartSelectionStart.current;
+                const end = chartIndex(event);
+                chartSelectionStart.current = null;
+                setChartSelection(null);
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }
+                if (start !== null && end >= 0) selectChartRange(start, end);
+              }}
+              onPointerCancel={() => {
+                chartSelectionStart.current = null;
+                setChartSelection(null);
+              }}
+              onPointerLeave={() => {
+                if (chartSelectionStart.current === null) setHoveredChartIndex(null);
+              }}
+              onDoubleClick={resetChart}
             >
-              {visibleChartStats[hoveredChartIndex].date} · {visibleChartStats[hoveredChartIndex].total}
-            </span>
+              {visibleChartStats.length === 0 ? (
+                <span className="logs-chart-empty">{t("logs.no_activity", "No log activity")}</span>
+              ) : (
+                <>
+                  {/* Continuous step-area fill (official style). */}
+                  <svg
+                    className="logs-chart-svg"
+                    viewBox="0 0 1000 100"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    <path className="logs-chart-area" d={chartPaths.area} />
+                    <path className="logs-chart-line" d={chartPaths.line} />
+                    {chartSelection &&
+                      (() => {
+                        const a = Math.min(chartSelection.start, chartSelection.end);
+                        const b = Math.max(chartSelection.start, chartSelection.end) + 1;
+                        const n = visibleChartStats.length || 1;
+                        const x = (a / n) * 1000;
+                        const w = ((b - a) / n) * 1000;
+                        return <rect className="logs-chart-selection" x={x} y={0} width={w} height={100} />;
+                      })()}
+                  </svg>
+                  {/* Per-hour hit targets for hover + keyboard. */}
+                  <div className="logs-chart-hits">
+                    {visibleChartStats.map((item, index) => (
+                      <button
+                        key={item.date}
+                        type="button"
+                        className={`logs-chart-hit${hoveredChartIndex === index ? " is-hover" : ""}`}
+                        tabIndex={0}
+                        aria-label={`${formatLogChartHourRange(item.date)}: ${item.total}`}
+                        onFocus={() => setHoveredChartIndex(index)}
+                        onBlur={() => setHoveredChartIndex(null)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            selectChartRange(index, index);
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+              {hoveredChartIndex !== null && visibleChartStats[hoveredChartIndex] && (
+                <span
+                  className="logs-chart-tooltip"
+                  style={{ left: `${((hoveredChartIndex + 0.5) / visibleChartStats.length) * 100}%` }}
+                >
+                  <strong>
+                    {t("logs.requests_count", {
+                      count: Number(visibleChartStats[hoveredChartIndex].total || 0),
+                      defaultValue: "{{count}} requests"
+                    })}
+                  </strong>
+                  <span>{formatLogChartHourRange(visibleChartStats[hoveredChartIndex].date)}</span>
+                </span>
+              )}
+            </div>
+          </div>
+          {visibleChartStats.length > 0 && (
+            <div className="logs-chart-x" aria-hidden="true">
+              {visibleChartStats.map((item, index) => {
+                const prev = index > 0 ? parseLogDate(visibleChartStats[index - 1].date) : null;
+                const cur = parseLogDate(item.date);
+                const showDate =
+                  Boolean(cur) &&
+                  (!prev ||
+                    prev.getFullYear() !== cur!.getFullYear() ||
+                    prev.getMonth() !== cur!.getMonth() ||
+                    prev.getDate() !== cur!.getDate());
+                // Official labels every hour; date only when the day rolls over.
+                const label = formatLogChartAxisLabel(item.date, showDate);
+                return (
+                  <span key={item.date} className="logs-chart-x-tick">
+                    <em>{label.time}</em>
+                    {label.date && <small>{label.date}</small>}
+                  </span>
+                );
+              })}
+            </div>
           )}
         </div>
         <button

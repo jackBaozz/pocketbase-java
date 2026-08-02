@@ -609,7 +609,8 @@
     "export_selected": "Télécharger le JSON",
     "exported_selected": "Journaux sélectionnés téléchargés",
     "details_title": "Détails du journal",
-    "download_json": "Télécharger JSON"
+    "download_json": "Télécharger JSON",
+    "requests_count": "{{count}} requêtes"
   },
   "notifications": {
     "superuser_created": "Superutilisateur créé",

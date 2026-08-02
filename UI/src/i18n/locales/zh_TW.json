@@ -609,7 +609,8 @@
     "export_selected": "下載 JSON",
     "exported_selected": "已下載選取的日誌",
     "details_title": "日誌詳情",
-    "download_json": "下載 JSON"
+    "download_json": "下載 JSON",
+    "requests_count": "{{count}} 個請求"
   },
   "notifications": {
     "superuser_created": "超級使用者已建立",
