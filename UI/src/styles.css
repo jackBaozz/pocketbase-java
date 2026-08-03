@@ -2373,12 +2373,23 @@ td.row-actions .icon-button:last-child {
   display: grid;
   gap: var(--smSpacing);
   align-content: start;
-  max-width: var(--lgWrapperWidth, 1150px);
   width: 100%;
 }
 
+/*
+ * Breadcrumb/header stays flush-left in the workspace; only the page body
+ * (forms, lists, panels) is width-capped and centered.
+ */
 .settings-page-header {
   margin-bottom: 0;
+  width: 100%;
+  max-width: none;
+}
+
+.settings-page > :not(.settings-page-header) {
+  max-width: var(--lgWrapperWidth, 1150px);
+  width: 100%;
+  justify-self: center;
 }
 
 .settings-page-toolbar {

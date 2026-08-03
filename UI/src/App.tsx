@@ -2427,9 +2427,11 @@ function App() {
     }
   }
 
-  async function saveSettings(draft = settingsDraft): Promise<boolean> {
+  async function saveSettings(draft?: string): Promise<boolean> {
+    // onClick={saveSettings} would pass a MouseEvent as the first arg — only accept real draft strings.
+    const source = typeof draft === "string" ? draft : settingsDraft;
     try {
-      const parsed = JSON.parse(draft || "{}") as AppSettings;
+      const parsed = JSON.parse(source || "{}") as AppSettings;
       // Rules are resolved in order, so normalise priority on save like the official UI.
       const limits = isPlainObject(parsed.rateLimits) ? parsed.rateLimits : null;
       if (limits && Array.isArray(limits.rules)) {
@@ -4650,7 +4652,7 @@ function BackupView(props: BackupViewProps) {
             </section>
 
             <div className="backup-options-actions">
-              <button className="primary" type="button" onClick={props.onSave} disabled={operationBusy || props.loading}>
+              <button className="primary" type="button" onClick={() => props.onSave()} disabled={operationBusy || props.loading}>
                 <Save size={16} />
                 {t("actions.save_changes", "Save changes")}
               </button>
@@ -4961,7 +4963,7 @@ function SettingsView(props: SettingsViewProps) {
         actions={
           <>
           <RefreshButton className="icon-button" onClick={props.onRefresh} title={t("actions.refresh_settings", "Refresh settings")} />
-          <button className="primary" onClick={props.onSave} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
@@ -5506,7 +5508,7 @@ function MailSettingsView(props: MailSettingsViewProps) {
       <SettingsPageHeader
         section={t("settings.nav.mail", "Mail settings")}
         actions={
-          <button className="primary" onClick={props.onSave} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
@@ -5781,7 +5783,7 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
       <SettingsPageHeader
         section={t("settings.nav.storage", "File storage")}
         actions={
-          <button className="primary" onClick={props.onSave} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
