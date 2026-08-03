@@ -21,17 +21,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macos-arm64
-            os: macos-latest
-            asset_suffix: darwin-arm64
-          - name: linux-amd64
-            os: ubuntu-latest
-            asset_suffix: linux-amd64
           - name: windows-amd64
             os: windows-latest
-            asset_suffix: windows-amd64.exe
+            asset_suffix: windows-amd64
     steps:
       - uses: actions/checkout@v5
+
+      - name: Resolve Version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.release_tag || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(grep -m1 -oP '<version>\K[^<]+' pom.xml | head -n1)
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
 
       - name: Setup GraalVM
         uses: graalvm/setup-graalvm@v1
@@ -60,16 +66,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cp target/pocketbase-java.exe dist/pocketbase-java-${{ matrix.asset_suffix }}
-          else
-            cp target/pocketbase-java dist/pocketbase-java-${{ matrix.asset_suffix }}
-          fi
+          cp target/pocketbase-java.exe dist/pocketbase-java-${{ matrix.asset_suffix }}-v${{ steps.version.outputs.version }}.exe
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pocketbase-java-${{ matrix.asset_suffix }}
+          name: pocketbase-java-${{ matrix.asset_suffix }}-v${{ steps.version.outputs.version }}
           path: dist/pocketbase-java-*
 
   release:
