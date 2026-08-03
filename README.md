@@ -61,7 +61,7 @@ mvn -gs settings.xml -s settings.xml test
 Compile the project and start the server:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.3.1-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
 Once started, open:
@@ -72,7 +72,7 @@ You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.2.0-SNAPSHOT-all.jar serve
+java -jar target/pocketbase-java-0.3.1-all.jar serve
 ```
 
 ### 2. Embed Programmatically in Java
