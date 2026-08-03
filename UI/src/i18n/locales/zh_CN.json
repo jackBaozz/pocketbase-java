@@ -464,7 +464,10 @@
       "request_email_change": "请求更换邮箱",
       "confirm_email_change": "确认更换邮箱",
       "request_otp": "请求 OTP",
-      "impersonate": "身份模拟"
+      "impersonate": "身份模拟",
+      "verification": "验证",
+      "password_reset": "密码重置",
+      "email_change": "邮箱变更"
     },
     "list": {
       "desc": "获取支持排序与过滤的分页记录列表。"

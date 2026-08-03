@@ -464,7 +464,10 @@
       "request_email_change": "Demander le changement d’e-mail",
       "confirm_email_change": "Confirmer le changement d’e-mail",
       "request_otp": "Demander un OTP",
-      "impersonate": "Usurper"
+      "impersonate": "Usurper",
+      "verification": "Vérification",
+      "password_reset": "Réinitialisation du mot de passe",
+      "email_change": "Changement d'e-mail"
     },
     "list": {
       "desc": "Récupère une liste paginée d’enregistrements avec tri et filtrage."

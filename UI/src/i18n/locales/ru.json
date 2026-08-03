@@ -464,7 +464,10 @@
       "request_email_change": "Запрос смены email",
       "confirm_email_change": "Подтверждение смены email",
       "request_otp": "Запрос OTP",
-      "impersonate": "Имперсонация"
+      "impersonate": "Имперсонация",
+      "verification": "Верификация",
+      "password_reset": "Сброс пароля",
+      "email_change": "Смена email"
     },
     "list": {
       "desc": "Получает постраничный список записей с сортировкой и фильтрацией."

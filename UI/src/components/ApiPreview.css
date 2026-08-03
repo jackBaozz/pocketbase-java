@@ -274,6 +274,46 @@
   border-color: var(--dangerColor);
 }
 
+/* Official request/confirm segment under grouped auth endpoints. */
+.apx-action-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 16px 0 4px;
+  overflow: hidden;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: 999px;
+  background: var(--surfaceAlt1Color);
+}
+
+.apx-action-tab {
+  min-height: 34px;
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--surfaceTxtColor);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.apx-action-tab:hover {
+  background: var(--surfaceAlt2Color);
+}
+
+.apx-action-tab.is-active {
+  color: #fff;
+  background: var(--primaryColor);
+}
+
+.apx-action-tab.is-active:hover {
+  color: #fff;
+  background: var(--primaryColor);
+}
+
 /* -------------------------------------------------------------- code blocks */
 
 .apx-code {

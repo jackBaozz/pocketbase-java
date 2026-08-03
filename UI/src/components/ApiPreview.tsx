@@ -62,14 +62,28 @@ type ResponseSample = {
   body: string;
 };
 
-type Endpoint = {
+/** One action under a grouped nav item (e.g. Request / Confirm email change). */
+type EndpointVariantBase = {
+  id: string;
+  tab: string;
+  description: ReactNode[];
+  method: string;
+  path: string;
+  note?: string;
+  tables: ParamTable[];
+  responses: ResponseSample[];
+};
+
+type EndpointVariantDraft = EndpointVariantBase & { sdk: SdkPair };
+type EndpointVariant = EndpointVariantBase & { sdk: Record<Sdk, string> };
+
+type EndpointBase = {
   id: string;
   nav: string;
   description: ReactNode[];
   method: string;
   path: string;
   note?: string;
-  sdk: Record<Sdk, string>;
   tables: ParamTable[];
   responses: ResponseSample[];
   enabled: boolean;
@@ -77,13 +91,39 @@ type Endpoint = {
   divider?: boolean;
 };
 
-type EndpointDraft = Omit<Endpoint, "sdk"> & { sdk: SdkPair };
+type Endpoint = EndpointBase & {
+  sdk: Record<Sdk, string>;
+  /** Official groups Verification / Password reset / Email change / OTP under one nav item. */
+  variants?: EndpointVariant[];
+};
+
+type EndpointDraft = EndpointBase & {
+  sdk: SdkPair;
+  variants?: EndpointVariantDraft[];
+};
 
 const SDK_STORAGE_KEY = "pbLastSDK";
 const SDK_CHANGE_EVENT = "pb-last-sdk-change";
 
-/** Official order: List/Search → View → Create → Update → Delete → Realtime → Batch (+ auth after). */
-const RECORD_NAV_ORDER = ["list", "view", "create", "update", "delete", "realtime", "batch"] as const;
+/** Official order: records first, then auth (grouped request/confirm as single nav rows). */
+const NAV_ORDER = [
+  "list",
+  "view",
+  "create",
+  "update",
+  "delete",
+  "realtime",
+  "batch",
+  "auth-methods",
+  "auth-with-password",
+  "auth-with-oauth2",
+  "auth-with-otp",
+  "auth-refresh",
+  "verification",
+  "password-reset",
+  "email-change",
+  "impersonate"
+] as const;
 
 const SDK_TABS: ReadonlyArray<{ id: Sdk; label: string }> = [
   { id: "js", label: "JS SDK" },
@@ -254,6 +294,7 @@ function generateCurl(
         body: JSON.stringify({ token: "EMAIL_CHANGE_TOKEN", password: "12345678" })
       });
     case "auth-with-otp":
+    case "auth-with-otp-action":
       return formatCurl({
         method: "POST",
         url,
@@ -275,8 +316,8 @@ function generateCurl(
 }
 
 /**
- * Official nav order for record endpoints, then remaining (auth) endpoints.
- * Also attaches curl samples next to JS/Dart SDK snippets.
+ * Official nav order for record + auth endpoints.
+ * Also attaches curl samples next to JS/Dart SDK snippets (including grouped variants).
  */
 function finalizeEndpoints(
   drafts: EndpointDraft[],
@@ -285,20 +326,61 @@ function finalizeEndpoints(
   bodies: { create: string; update: string }
 ): Endpoint[] {
   const rank = (id: string, fallback: number) => {
-    const index = (RECORD_NAV_ORDER as readonly string[]).indexOf(id);
+    const index = (NAV_ORDER as readonly string[]).indexOf(id);
     return index === -1 ? 1000 + fallback : index;
   };
 
+  const withCurl = (
+    draft: { id: string; method: string; path: string; sdk: SdkPair }
+  ): Record<Sdk, string> => ({
+    js: draft.sdk.js,
+    dart: draft.sdk.dart,
+    curl: generateCurl(
+      { id: draft.id, method: draft.method, path: draft.path },
+      baseUrl,
+      collectionName,
+      bodies
+    )
+  });
+
   return [...drafts]
     .sort((a, b) => rank(a.id, drafts.indexOf(a)) - rank(b.id, drafts.indexOf(b)))
-    .map((endpoint) => ({
-      ...endpoint,
-      sdk: {
-        js: endpoint.sdk.js,
-        dart: endpoint.sdk.dart,
-        curl: generateCurl(endpoint, baseUrl, collectionName, bodies)
+    .map((endpoint): Endpoint => {
+      if (endpoint.variants && endpoint.variants.length > 0) {
+        const variants: EndpointVariant[] = endpoint.variants.map((variant) => ({
+          ...variant,
+          sdk: withCurl(variant)
+        }));
+        const first = variants[0];
+        return {
+          id: endpoint.id,
+          nav: endpoint.nav,
+          enabled: endpoint.enabled,
+          divider: endpoint.divider,
+          description: first.description,
+          method: first.method,
+          path: first.path,
+          note: first.note,
+          tables: first.tables,
+          responses: first.responses,
+          sdk: first.sdk,
+          variants
+        };
       }
-    }));
+      return {
+        id: endpoint.id,
+        nav: endpoint.nav,
+        enabled: endpoint.enabled,
+        divider: endpoint.divider,
+        description: endpoint.description,
+        method: endpoint.method,
+        path: endpoint.path,
+        note: endpoint.note,
+        tables: endpoint.tables,
+        responses: endpoint.responses,
+        sdk: withCurl(endpoint)
+      };
+    });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1413,6 +1495,157 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
           apiError(400, "An error occurred while submitting the form.", requiredError("provider"))
         ]
       },
+      // Official order after OAuth2: Auth with OTP → Auth refresh → Verification →
+      // Password reset → Email change → Impersonate. Request/Confirm are sub-tabs.
+      {
+        id: "auth-with-otp",
+        nav: tr("api_preview.nav.auth_otp", "Auth with OTP"),
+        description: [],
+        method: "POST",
+        path: `${root}/request-otp`,
+        enabled: otpEnabled,
+        sdk: { js: "", dart: "" },
+        tables: [],
+        responses: [],
+        variants: [
+          {
+            id: "request-otp",
+            tab: tr("api_preview.nav.request_otp", "Request OTP"),
+            description: [
+              tr(
+                "api_preview.request_otp.desc",
+                "Sends a one-time password (OTP) email to the specified auth record."
+              ),
+              tr(
+                "api_preview.request_otp.note",
+                "An otpId is returned even if a user with the provided email doesn't exist as a very basic enumeration protection."
+              )
+            ],
+            method: "POST",
+            path: `${root}/request-otp`,
+            sdk: {
+              js: sample(
+                "js",
+                `
+                // send an OTP email to the provided auth record
+                const req = await pb.collection('${name}').requestOTP('test@example.com');
+
+                // ... show a screen/popup to enter the password from the email ...
+                console.log(req.otpId);
+                `
+              ),
+              dart: sample(
+                "dart",
+                `
+                // send an OTP email to the provided auth record
+                final req = await pb.collection('${name}').requestOTP('test@example.com');
+
+                // ... show a screen/popup to enter the password from the email ...
+                print(req.otpId);
+                `
+              )
+            },
+            tables: [
+              {
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "email",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.email_otp",
+                      "The auth record email address to send the OTP request (if exists)."
+                    )
+                  }
+                ]
+              }
+            ],
+            responses: [
+              { status: "200", body: json({ otpId: "njvv1b1lkdbpp3m" }) },
+              {
+                status: "400",
+                body: json({
+                  status: 400,
+                  message: "An error occurred while validating the submitted data.",
+                  data: { email: { code: "validation_is_email", message: "Must be a valid email address." } }
+                })
+              },
+              apiError(429, "You've sent too many OTP requests, please try again later.")
+            ]
+          },
+          {
+            id: "auth-with-otp-action",
+            tab: tr("api_preview.nav.auth_otp", "Auth with OTP"),
+            description: [
+              tr("api_preview.auth_with_otp.desc", "Authenticate with a one-time/short-lived password (OTP)."),
+              tr(
+                "api_preview.auth_with_otp.note",
+                "On successful authentication the user is also marked as verified (if the OTP source is email and the user is not verified already)."
+              )
+            ],
+            method: "POST",
+            path: `${root}/auth-with-otp`,
+            sdk: {
+              js: sample(
+                "js",
+                `
+                // authenticate with the requested OTP id and the password from the email
+                const authData = await pb.collection('${name}').authWithOTP(
+                  'OTP_ID',
+                  'YOUR_OTP',
+                );
+
+                console.log(pb.authStore.isValid);
+                console.log(pb.authStore.token);
+                console.log(pb.authStore.record.id);
+                `
+              ),
+              dart: sample(
+                "dart",
+                `
+                // authenticate with the requested OTP id and the password from the email
+                final authData = await pb.collection('${name}').authWithOTP(
+                  'OTP_ID',
+                  'YOUR_OTP',
+                );
+
+                print(pb.authStore.isValid);
+                print(pb.authStore.token);
+                print(pb.authStore.record.id);
+                `
+              )
+            },
+            tables: [
+              {
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "otpId",
+                    type: "String",
+                    requirement: "required",
+                    description: tr("api_preview.param.otp_id", "The id of the OTP request.")
+                  },
+                  {
+                    name: "password",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.otp_password",
+                      "The one-time/short-lived password from the OTP request."
+                    )
+                  }
+                ]
+              },
+              expandFieldsTable
+            ],
+            responses: [
+              { status: "200", body: authSample },
+              apiError(400, "Failed to authenticate.", requiredError("otpId"))
+            ]
+          }
+        ]
+      },
       {
         id: "auth-refresh",
         nav: tr("api_preview.nav.auth_refresh", "Auth refresh"),
@@ -1463,429 +1696,328 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
         ]
       },
       {
-        id: "request-verification",
-        nav: tr("api_preview.nav.request_verification", "Request verification"),
-        description: [
-          tr(
-            "api_preview.request_verification.desc",
-            "Sends an account verification email request to the specified auth record."
-          )
-        ],
+        id: "verification",
+        nav: tr("api_preview.nav.verification", "Verification"),
+        description: [],
         method: "POST",
         path: `${root}/request-verification`,
         enabled: true,
-        sdk: {
-          js: sample("js", `await pb.collection('${name}').requestVerification('test@example.com');`),
-          dart: sample("dart", `await pb.collection('${name}').requestVerification('test@example.com');`)
-        },
-        tables: [
+        sdk: { js: "", dart: "" },
+        tables: [],
+        responses: [],
+        variants: [
           {
-            heading: bodyParams,
-            rows: [
+            id: "request-verification",
+            tab: tr("api_preview.nav.request_verification", "Request verification"),
+            description: [
+              tr(
+                "api_preview.request_verification.desc",
+                "Sends an account verification email request to the specified auth record."
+              )
+            ],
+            method: "POST",
+            path: `${root}/request-verification`,
+            sdk: {
+              js: sample("js", `await pb.collection('${name}').requestVerification('test@example.com');`),
+              dart: sample("dart", `await pb.collection('${name}').requestVerification('test@example.com');`)
+            },
+            tables: [
               {
-                name: "email",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.email_verification",
-                  "The auth record email address to send the verification request (if exists)."
-                )
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "email",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.email_verification",
+                      "The auth record email address to send the verification request (if exists)."
+                    )
+                  }
+                ]
               }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("email"))
+            ]
+          },
+          {
+            id: "confirm-verification",
+            tab: tr("api_preview.nav.confirm_verification", "Confirm verification"),
+            description: [
+              tr(
+                "api_preview.confirm_verification.desc",
+                "Confirms the account verification request with the token from the verification email."
+              )
+            ],
+            method: "POST",
+            path: `${root}/confirm-verification`,
+            sdk: {
+              js: sample("js", `await pb.collection('${name}').confirmVerification('VERIFICATION_TOKEN');`),
+              dart: sample("dart", `await pb.collection('${name}').confirmVerification('VERIFICATION_TOKEN');`)
+            },
+            tables: [
+              {
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "token",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.token_verification",
+                      "The token from the verification request email."
+                    )
+                  }
+                ]
+              }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
             ]
           }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("email"))
         ]
       },
       {
-        id: "confirm-verification",
-        nav: tr("api_preview.nav.confirm_verification", "Confirm verification"),
-        description: [
-          tr(
-            "api_preview.confirm_verification.desc",
-            "Confirms the account verification request with the token from the verification email."
-          )
-        ],
-        method: "POST",
-        path: `${root}/confirm-verification`,
-        enabled: true,
-        sdk: {
-          js: sample("js", `await pb.collection('${name}').confirmVerification('VERIFICATION_TOKEN');`),
-          dart: sample("dart", `await pb.collection('${name}').confirmVerification('VERIFICATION_TOKEN');`)
-        },
-        tables: [
-          {
-            heading: bodyParams,
-            rows: [
-              {
-                name: "token",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.token_verification",
-                  "The token from the verification request email."
-                )
-              }
-            ]
-          }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
-        ]
-      },
-      {
-        id: "request-password-reset",
-        nav: tr("api_preview.nav.request_password_reset", "Request password reset"),
-        description: [
-          tr(
-            "api_preview.request_password_reset.desc",
-            "Sends a password reset email request to the specified auth record."
-          )
-        ],
+        id: "password-reset",
+        nav: tr("api_preview.nav.password_reset", "Password reset"),
+        description: [],
         method: "POST",
         path: `${root}/request-password-reset`,
         enabled: passwordEnabled,
-        sdk: {
-          js: sample("js", `await pb.collection('${name}').requestPasswordReset('test@example.com');`),
-          dart: sample("dart", `await pb.collection('${name}').requestPasswordReset('test@example.com');`)
-        },
-        tables: [
+        sdk: { js: "", dart: "" },
+        tables: [],
+        responses: [],
+        variants: [
           {
-            heading: bodyParams,
-            rows: [
+            id: "request-password-reset",
+            tab: tr("api_preview.nav.request_password_reset", "Request password reset"),
+            description: [
+              tr(
+                "api_preview.request_password_reset.desc",
+                "Sends a password reset email request to the specified auth record."
+              )
+            ],
+            method: "POST",
+            path: `${root}/request-password-reset`,
+            sdk: {
+              js: sample("js", `await pb.collection('${name}').requestPasswordReset('test@example.com');`),
+              dart: sample("dart", `await pb.collection('${name}').requestPasswordReset('test@example.com');`)
+            },
+            tables: [
               {
-                name: "email",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.email_password_reset",
-                  "The auth record email address to send the password reset request (if exists)."
-                )
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "email",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.email_password_reset",
+                      "The auth record email address to send the password reset request (if exists)."
+                    )
+                  }
+                ]
               }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("email"))
+            ]
+          },
+          {
+            id: "confirm-password-reset",
+            tab: tr("api_preview.nav.confirm_password_reset", "Confirm password reset"),
+            description: [
+              tr(
+                "api_preview.confirm_password_reset.desc",
+                "Confirms the password reset request and sets a new password."
+              ),
+              tr(
+                "api_preview.confirm_password_reset.note",
+                "On successful password reset all previously issued tokens for the record are invalidated and the record is marked as verified."
+              )
+            ],
+            method: "POST",
+            path: `${root}/confirm-password-reset`,
+            sdk: {
+              js: sample(
+                "js",
+                `
+                await pb.collection('${name}').confirmPasswordReset(
+                  'RESET_TOKEN',
+                  'NEW_PASSWORD',
+                  'NEW_PASSWORD_CONFIRM',
+                );
+                `
+              ),
+              dart: sample(
+                "dart",
+                `
+                await pb.collection('${name}').confirmPasswordReset(
+                  'RESET_TOKEN',
+                  'NEW_PASSWORD',
+                  'NEW_PASSWORD_CONFIRM',
+                );
+                `
+              )
+            },
+            tables: [
+              {
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "token",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.token_password_reset",
+                      "The token from the password reset request email."
+                    )
+                  },
+                  {
+                    name: "password",
+                    type: "String",
+                    requirement: "required",
+                    description: tr("api_preview.param.new_password", "The new password to set.")
+                  },
+                  {
+                    name: "passwordConfirm",
+                    type: "String",
+                    requirement: "required",
+                    description: tr("api_preview.param.new_password_confirm", "Confirmation of the new password.")
+                  }
+                ]
+              }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
             ]
           }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("email"))
         ]
       },
       {
-        id: "confirm-password-reset",
-        nav: tr("api_preview.nav.confirm_password_reset", "Confirm password reset"),
-        description: [
-          tr(
-            "api_preview.confirm_password_reset.desc",
-            "Confirms the password reset request and sets a new password."
-          ),
-          tr(
-            "api_preview.confirm_password_reset.note",
-            "On successful password reset all previously issued tokens for the record are invalidated and the record is marked as verified."
-          )
-        ],
-        method: "POST",
-        path: `${root}/confirm-password-reset`,
-        enabled: passwordEnabled,
-        sdk: {
-          js: sample(
-            "js",
-            `
-            await pb.collection('${name}').confirmPasswordReset(
-              'RESET_TOKEN',
-              'NEW_PASSWORD',
-              'NEW_PASSWORD_CONFIRM',
-            );
-            `
-          ),
-          dart: sample(
-            "dart",
-            `
-            await pb.collection('${name}').confirmPasswordReset(
-              'RESET_TOKEN',
-              'NEW_PASSWORD',
-              'NEW_PASSWORD_CONFIRM',
-            );
-            `
-          )
-        },
-        tables: [
-          {
-            heading: bodyParams,
-            rows: [
-              {
-                name: "token",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.token_password_reset",
-                  "The token from the password reset request email."
-                )
-              },
-              {
-                name: "password",
-                type: "String",
-                requirement: "required",
-                description: tr("api_preview.param.new_password", "The new password to set.")
-              },
-              {
-                name: "passwordConfirm",
-                type: "String",
-                requirement: "required",
-                description: tr("api_preview.param.new_password_confirm", "Confirmation of the new password.")
-              }
-            ]
-          }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
-        ]
-      },
-      {
-        id: "request-email-change",
-        nav: tr("api_preview.nav.request_email_change", "Request email change"),
-        description: [
-          tr(
-            "api_preview.request_email_change.desc",
-            "Sends an email change request to the currently authenticated auth record."
-          )
-        ],
+        id: "email-change",
+        nav: tr("api_preview.nav.email_change", "Email change"),
+        description: [],
         method: "POST",
         path: `${root}/request-email-change`,
-        note: authNote,
         enabled: true,
-        sdk: {
-          js: sample("js", `await pb.collection('${name}').requestEmailChange('new@example.com');`),
-          dart: sample("dart", `await pb.collection('${name}').requestEmailChange('new@example.com');`)
-        },
-        tables: [
+        sdk: { js: "", dart: "" },
+        tables: [],
+        responses: [],
+        variants: [
           {
-            heading: bodyParams,
-            rows: [
+            id: "request-email-change",
+            tab: tr("api_preview.nav.request_email_change", "Request email change"),
+            description: [
+              tr(
+                "api_preview.request_email_change.desc",
+                "Sends an email change request to the currently authenticated auth record."
+              ),
+              tr(
+                "api_preview.confirm_email_change.note",
+                "On successful email change all previously issued tokens for the record are invalidated."
+              )
+            ],
+            method: "POST",
+            path: `${root}/request-email-change`,
+            note: authNote,
+            sdk: {
+              js: sample("js", `await pb.collection('${name}').requestEmailChange('new@example.com');`),
+              dart: sample("dart", `await pb.collection('${name}').requestEmailChange('new@example.com');`)
+            },
+            tables: [
               {
-                name: "newEmail",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.new_email",
-                  "The new email address to send the change email request."
-                )
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "newEmail",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.new_email",
+                      "The new email address to send the change email request."
+                    )
+                  }
+                ]
               }
-            ]
-          }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("newEmail")),
-          apiError(401, "The request requires valid record authorization token to be set."),
-          apiError(403, "The authorized record model is not allowed to perform this action.")
-        ]
-      },
-      {
-        id: "confirm-email-change",
-        nav: tr("api_preview.nav.confirm_email_change", "Confirm email change"),
-        description: [
-          tr(
-            "api_preview.confirm_email_change.desc",
-            "Confirms the email change request with the token from the confirmation email."
-          ),
-          tr(
-            "api_preview.confirm_email_change.note",
-            "On successful email change all previously issued tokens for the record are invalidated."
-          )
-        ],
-        method: "POST",
-        path: `${root}/confirm-email-change`,
-        enabled: true,
-        sdk: {
-          js: sample(
-            "js",
-            `
-            await pb.collection('${name}').confirmEmailChange(
-              'EMAIL_CHANGE_TOKEN',
-              'YOUR_PASSWORD',
-            );
-            `
-          ),
-          dart: sample(
-            "dart",
-            `
-            await pb.collection('${name}').confirmEmailChange(
-              'EMAIL_CHANGE_TOKEN',
-              'YOUR_PASSWORD',
-            );
-            `
-          )
-        },
-        tables: [
-          {
-            heading: bodyParams,
-            rows: [
-              {
-                name: "token",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.token_email_change",
-                  "The token from the change email request email."
-                )
-              },
-              {
-                name: "password",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.password_email_change",
-                  "The account password to confirm the email change."
-                )
-              }
-            ]
-          }
-        ],
-        responses: [
-          { status: "204", body: "null" },
-          apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
-        ]
-      },
-      {
-        id: "request-otp",
-        nav: tr("api_preview.nav.request_otp", "Request OTP"),
-        description: [
-          tr(
-            "api_preview.request_otp.desc",
-            "Sends a one-time password (OTP) email to the specified auth record."
-          ),
-          tr(
-            "api_preview.request_otp.note",
-            "An otpId is returned even if a user with the provided email doesn't exist as a very basic enumeration protection."
-          )
-        ],
-        method: "POST",
-        path: `${root}/request-otp`,
-        enabled: otpEnabled,
-        sdk: {
-          js: sample(
-            "js",
-            `
-            // send an OTP email to the provided auth record
-            const req = await pb.collection('${name}').requestOTP('test@example.com');
-
-            // ... show a screen/popup to enter the password from the email ...
-            console.log(req.otpId);
-            `
-          ),
-          dart: sample(
-            "dart",
-            `
-            // send an OTP email to the provided auth record
-            final req = await pb.collection('${name}').requestOTP('test@example.com');
-
-            // ... show a screen/popup to enter the password from the email ...
-            print(req.otpId);
-            `
-          )
-        },
-        tables: [
-          {
-            heading: bodyParams,
-            rows: [
-              {
-                name: "email",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.email_otp",
-                  "The auth record email address to send the OTP request (if exists)."
-                )
-              }
-            ]
-          }
-        ],
-        responses: [
-          { status: "200", body: json({ otpId: "njvv1b1lkdbpp3m" }) },
-          {
-            status: "400",
-            body: json({
-              status: 400,
-              message: "An error occurred while validating the submitted data.",
-              data: { email: { code: "validation_is_email", message: "Must be a valid email address." } }
-            })
-          },
-          apiError(429, "You've sent too many OTP requests, please try again later.")
-        ]
-      },
-      {
-        id: "auth-with-otp",
-        nav: tr("api_preview.nav.auth_otp", "Auth with OTP"),
-        description: [
-          tr("api_preview.auth_with_otp.desc", "Authenticate with a one-time/short-lived password (OTP)."),
-          tr(
-            "api_preview.auth_with_otp.note",
-            "On successful authentication the user is also marked as verified (if the OTP source is email and the user is not verified already)."
-          )
-        ],
-        method: "POST",
-        path: `${root}/auth-with-otp`,
-        enabled: otpEnabled,
-        sdk: {
-          js: sample(
-            "js",
-            `
-            // authenticate with the requested OTP id and the password from the email
-            const authData = await pb.collection('${name}').authWithOTP(
-              'OTP_ID',
-              'YOUR_OTP',
-            );
-
-            console.log(pb.authStore.isValid);
-            console.log(pb.authStore.token);
-            console.log(pb.authStore.record.id);
-            `
-          ),
-          dart: sample(
-            "dart",
-            `
-            // authenticate with the requested OTP id and the password from the email
-            final authData = await pb.collection('${name}').authWithOTP(
-              'OTP_ID',
-              'YOUR_OTP',
-            );
-
-            print(pb.authStore.isValid);
-            print(pb.authStore.token);
-            print(pb.authStore.record.id);
-            `
-          )
-        },
-        tables: [
-          {
-            heading: bodyParams,
-            rows: [
-              {
-                name: "otpId",
-                type: "String",
-                requirement: "required",
-                description: tr("api_preview.param.otp_id", "The id of the OTP request.")
-              },
-              {
-                name: "password",
-                type: "String",
-                requirement: "required",
-                description: tr(
-                  "api_preview.param.otp_password",
-                  "The one-time/short-lived password from the OTP request."
-                )
-              }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("newEmail")),
+              apiError(401, "The request requires valid record authorization token to be set."),
+              apiError(403, "The authorized record model is not allowed to perform this action.")
             ]
           },
-          expandFieldsTable
-        ],
-        responses: [
-          { status: "200", body: authSample },
-          apiError(400, "Failed to authenticate.", requiredError("otpId"))
+          {
+            id: "confirm-email-change",
+            tab: tr("api_preview.nav.confirm_email_change", "Confirm email change"),
+            description: [
+              tr(
+                "api_preview.confirm_email_change.desc",
+                "Confirms the email change request with the token from the confirmation email."
+              ),
+              tr(
+                "api_preview.confirm_email_change.note",
+                "On successful email change all previously issued tokens for the record are invalidated."
+              )
+            ],
+            method: "POST",
+            path: `${root}/confirm-email-change`,
+            sdk: {
+              js: sample(
+                "js",
+                `
+                await pb.collection('${name}').confirmEmailChange(
+                  'EMAIL_CHANGE_TOKEN',
+                  'YOUR_PASSWORD',
+                );
+                `
+              ),
+              dart: sample(
+                "dart",
+                `
+                await pb.collection('${name}').confirmEmailChange(
+                  'EMAIL_CHANGE_TOKEN',
+                  'YOUR_PASSWORD',
+                );
+                `
+              )
+            },
+            tables: [
+              {
+                heading: bodyParams,
+                rows: [
+                  {
+                    name: "token",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.token_email_change",
+                      "The token from the change email request email."
+                    )
+                  },
+                  {
+                    name: "password",
+                    type: "String",
+                    requirement: "required",
+                    description: tr(
+                      "api_preview.param.password_email_change",
+                      "The account password to confirm the email change."
+                    )
+                  }
+                ]
+              }
+            ],
+            responses: [
+              { status: "204", body: "null" },
+              apiError(400, "An error occurred while validating the submitted data.", requiredError("token"))
+            ]
+          }
         ]
       },
       {
@@ -2116,6 +2248,7 @@ function ResponseSamples({ responses }: { responses: ResponseSample[] }): React.
 export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): React.JSX.Element {
   const { t } = useTranslation();
   const [activeId, setActiveId] = useState("list");
+  const [variantId, setVariantId] = useState<string | null>(null);
   const [sdk, setSdk] = useSdkPreference();
   const bodyRef = useRef<HTMLDivElement>(null);
   const { exiting, requestClose, onPanelAnimationEnd } = useDrawerTransition(onClose);
@@ -2135,15 +2268,42 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
     [endpoints, activeId]
   );
 
+  const activeVariant = useMemo(() => {
+    if (!active?.variants?.length) return null;
+    return active.variants.find((variant) => variant.id === variantId) ?? active.variants[0];
+  }, [active, variantId]);
+
+  /** Resolved content for the current nav item (+ optional request/confirm sub-tab). */
+  const view = useMemo(() => {
+    if (!active) return null;
+    if (!activeVariant) return active;
+    return {
+      ...active,
+      description: activeVariant.description,
+      method: activeVariant.method,
+      path: activeVariant.path,
+      note: activeVariant.note,
+      sdk: activeVariant.sdk,
+      tables: activeVariant.tables,
+      responses: activeVariant.responses
+    };
+  }, [active, activeVariant]);
+
   // reset the selection whenever the previewed collection changes
   useEffect(() => {
     setActiveId("list");
+    setVariantId(null);
   }, [collection.id]);
+
+  // pick the first sub-action when switching grouped auth nav items
+  useEffect(() => {
+    setVariantId(active?.variants?.[0]?.id ?? null);
+  }, [active?.id, active?.variants]);
 
   // always start a newly selected endpoint from the top
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 });
-  }, [active?.id]);
+  }, [active?.id, activeVariant?.id]);
 
   const disabledHint = t("api_preview.not_enabled", "Not enabled for the collection");
 
@@ -2208,9 +2368,9 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
           </header>
 
           <div className="apx-body" ref={bodyRef}>
-            {active && (
+            {view && active && (
               <>
-                {active.description.map((paragraph, index) => (
+                {view.description.map((paragraph, index) => (
                   <p key={index} className="apx-desc">
                     {paragraph}
                   </p>
@@ -2231,24 +2391,49 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
                       </button>
                     ))}
                   </div>
-                  <CodeBlock value={active.sdk[sdk]} />
+                  <CodeBlock value={view.sdk[sdk]} />
                 </div>
+
+                {active.variants && active.variants.length > 1 && (
+                  <div className="apx-action-tabs" role="tablist" aria-label={active.nav}>
+                    {active.variants.map((variant) => (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={variant.id === (activeVariant?.id ?? active.variants![0].id)}
+                        className={`apx-action-tab${
+                          variant.id === (activeVariant?.id ?? active.variants![0].id) ? " is-active" : ""
+                        }`}
+                        onClick={() => setVariantId(variant.id)}
+                      >
+                        {variant.tab}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <h4 className="apx-section">{t("api_preview.api_details", "API details")}</h4>
-                <div className={`apx-endpoint apx-method-${active.method.toLowerCase().replace("/", "-")}`}>
-                  <span className="apx-method">{active.method}</span>
-                  <span className="apx-path">{active.path}</span>
-                  {active.note && <span className="apx-endpoint-note">{active.note}</span>}
+                <div className={`apx-endpoint apx-method-${view.method.toLowerCase().replace("/", "-")}`}>
+                  <span className="apx-method">{view.method}</span>
+                  <span className="apx-path">{view.path}</span>
+                  {view.note && <span className="apx-endpoint-note">{view.note}</span>}
                 </div>
 
-                {active.tables
+                {view.tables
                   .filter((table) => table.rows.length > 0)
                   .map((table) => (
-                    <ParamTableView key={`${active.id}-${table.heading}`} table={table} />
+                    <ParamTableView
+                      key={`${active.id}-${activeVariant?.id ?? "root"}-${table.heading}`}
+                      table={table}
+                    />
                   ))}
 
                 <h4 className="apx-section">{t("api_preview.example_responses", "Example responses")}</h4>
-                <ResponseSamples key={active.id} responses={active.responses} />
+                <ResponseSamples
+                  key={`${active.id}-${activeVariant?.id ?? "root"}`}
+                  responses={view.responses}
+                />
               </>
             )}
           </div>

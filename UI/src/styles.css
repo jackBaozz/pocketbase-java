@@ -3663,7 +3663,8 @@ td.row-actions .icon-button:last-child {
   grid-template-columns: minmax(240px, 1fr) max-content;
   gap: 12px;
   align-items: end;
-  border-bottom: 1px solid var(--surfaceAlt2Color);
+  /* No bottom border — tabs rail continues the same surface without a seam line. */
+  border-bottom: 0;
   background: var(--surfaceAlt1Color);
   padding: 15px;
 }
@@ -3704,34 +3705,80 @@ td.row-actions .icon-button:last-child {
   color: var(--surfaceTxtColor);
 }
 
+/* Folder-style tabs (Directus-like): gray rail, active white pill connecting to content. */
 .collection-modal-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  width: 100%;
+  gap: 0;
+  /* Must stay visible so active tab can cover the bottom rule (overflow:hidden clips it). */
+  overflow: visible;
+  padding: 6px 8px 0;
+  border-top: 0;
   border-bottom: 1px solid var(--surfaceAlt2Color);
-  background: var(--surfaceColor);
+  background: var(--surfaceAlt1Color);
 }
 
 .collection-modal-tabs button {
+  position: relative;
   display: inline-flex;
+  /* One row; each tab shares space so the strip fills full width. */
+  flex: 1 1 0;
   align-items: center;
   justify-content: center;
-  min-height: 42px;
-  border-radius: 0;
-  border-right: 1px solid var(--surfaceAlt2Color);
+  min-width: 0;
+  min-height: 40px;
+  /* Overlap the rail bottom border by 1px. */
+  margin-bottom: -1px;
+  padding: 0 14px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
   color: var(--surfaceTxtHintColor);
   font-size: 13px;
+  font-weight: 700;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.collection-modal-tabs button:hover:not(:disabled):not(.active) {
+  color: var(--surfaceTxtColor);
+  background: color-mix(in srgb, var(--surfaceColor) 55%, transparent);
+}
+
+.collection-modal-tabs button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accentColor) 45%, transparent);
+  outline-offset: -2px;
+}
+
+/* Avoid global `button.active` gray fill — active tab is a white “folder” panel. */
+.collection-modal-tabs button.active,
+.collection-modal-tabs button.active:hover {
+  z-index: 2;
+  border-color: var(--surfaceAlt2Color);
+  /* Same color as content panel — hides the seam under the selected tab. */
+  border-bottom-color: var(--surfaceColor);
+  background: var(--surfaceColor);
+  color: var(--surfaceTxtColor);
   font-weight: 800;
 }
 
-.collection-modal-tabs button:last-child {
-  border-right: 0;
-}
-
-.collection-modal-tabs button:hover:not(:disabled),
-.collection-modal-tabs button:focus-visible,
-.collection-modal-tabs button.active {
-  background: var(--surfaceAlt1Color);
-  color: var(--surfaceTxtColor);
+/* Extra cover strip so the rail rule never peeks through under the active tab. */
+.collection-modal-tabs button.active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  z-index: 3;
+  height: 2px;
+  background: var(--surfaceColor);
+  content: "";
+  pointer-events: none;
 }
 
 .collection-tab-panel {
@@ -4845,7 +4892,6 @@ td.row-actions .icon-button:last-child {
 
   .collection-modal-tabs {
     overflow-x: auto;
-    grid-template-columns: repeat(3, minmax(115px, 1fr));
   }
 
   .field-builder-panel > header,

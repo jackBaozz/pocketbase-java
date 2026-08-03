@@ -464,7 +464,10 @@
       "request_email_change": "メール変更要求",
       "confirm_email_change": "メール変更確認",
       "request_otp": "OTP 要求",
-      "impersonate": "なりすまし"
+      "impersonate": "なりすまし",
+      "verification": "検証",
+      "password_reset": "パスワードリセット",
+      "email_change": "メール変更"
     },
     "list": {
       "desc": "並べ替えとフィルタに対応したページング済みレコード一覧を取得します。"

@@ -464,7 +464,10 @@
       "request_email_change": "Solicitar cambio de correo",
       "confirm_email_change": "Confirmar cambio de correo",
       "request_otp": "Solicitar OTP",
-      "impersonate": "Suplantar"
+      "impersonate": "Suplantar",
+      "verification": "Verificación",
+      "password_reset": "Restablecer contraseña",
+      "email_change": "Cambio de correo"
     },
     "list": {
       "desc": "Obtiene una lista paginada de registros con ordenación y filtrado."

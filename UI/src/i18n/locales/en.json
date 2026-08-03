@@ -464,7 +464,10 @@
       "request_email_change": "Request email change",
       "confirm_email_change": "Confirm email change",
       "request_otp": "Request OTP",
-      "impersonate": "Impersonate"
+      "impersonate": "Impersonate",
+      "verification": "Verification",
+      "password_reset": "Password reset",
+      "email_change": "Email change"
     },
     "list": {
       "desc": "Fetch a paginated records list, supporting sorting and filtering."

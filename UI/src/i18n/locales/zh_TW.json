@@ -464,7 +464,10 @@
       "request_email_change": "請求更換電子郵件",
       "confirm_email_change": "確認更換電子郵件",
       "request_otp": "請求 OTP",
-      "impersonate": "身分模擬"
+      "impersonate": "身分模擬",
+      "verification": "驗證",
+      "password_reset": "密碼重設",
+      "email_change": "電子郵件變更"
     },
     "list": {
       "desc": "取得支援排序與篩選的分頁記錄列表。"

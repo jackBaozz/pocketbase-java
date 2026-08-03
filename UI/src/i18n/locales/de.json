@@ -344,7 +344,10 @@
       "request_email_change": "E-Mail-Änderung anfordern",
       "confirm_email_change": "E-Mail-Änderung bestätigen",
       "request_otp": "OTP anfordern",
-      "impersonate": "Identität übernehmen"
+      "impersonate": "Identität übernehmen",
+      "verification": "Verifizierung",
+      "password_reset": "Passwort-Reset",
+      "email_change": "E-Mail-Änderung"
     },
     "list": {
       "desc": "Ruft eine paginierte Record-Liste mit Sortierung und Filterung ab."
