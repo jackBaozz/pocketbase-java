@@ -1,0 +1,83 @@
+name: Native Release Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ "v*" ]
+
+jobs:
+  native:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            asset_suffix: darwin-arm64
+          - name: linux-amd64
+            os: ubuntu-latest
+            asset_suffix: linux-amd64
+          - name: windows-amd64
+            os: windows-latest
+            asset_suffix: windows-amd64.exe
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Build Admin UI
+        shell: bash
+        run: |
+          cd UI
+          npm ci
+          npm run build
+
+      - name: Build Native Image
+        shell: bash
+        run: mvn -gs settings.xml -s settings.xml -Pnative clean package -DskipTests
+
+      - name: Stage Binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/pocketbase-java.exe dist/pocketbase-java-${{ matrix.asset_suffix }}
+          else
+            cp target/pocketbase-java dist/pocketbase-java-${{ matrix.asset_suffix }}
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketbase-java-${{ matrix.asset_suffix }}
+          path: dist/pocketbase-java-*
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
