@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { ReactNode } from "react";
 import { Check, Copy, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useDrawerTransition } from "./useDrawerTransition";
 import { useModalInteraction } from "./useModalInteraction";
 import "./ApiPreview.css";
 
@@ -2117,7 +2118,10 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
   const [activeId, setActiveId] = useState("list");
   const [sdk, setSdk] = useSdkPreference();
   const bodyRef = useRef<HTMLDivElement>(null);
-  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose);
+  const { exiting, requestClose, onPanelAnimationEnd } = useDrawerTransition(onClose);
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(requestClose, {
+    active: !exiting
+  });
 
   const tr = useCallback<Translate>((key, fallback) => t(key, fallback), [t]);
 
@@ -2145,18 +2149,19 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
 
   return (
     <div
-      className="apx-backdrop"
+      className={`apx-backdrop${exiting ? " is-exiting" : ""}`}
       role="presentation"
-      onMouseDown={onBackdropMouseDown}
-      onMouseUp={onBackdropMouseUp}
+      onMouseDown={exiting ? undefined : onBackdropMouseDown}
+      onMouseUp={exiting ? undefined : onBackdropMouseUp}
     >
       <section
         ref={dialogRef}
-        className="apx-dialog"
+        className={`apx-dialog${exiting ? " is-exiting" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={t("api_preview.title", "API Preview")}
         tabIndex={-1}
+        onAnimationEnd={onPanelAnimationEnd}
       >
         <aside className="apx-sidebar">
           <div className="apx-brand">
@@ -2169,7 +2174,7 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
                 {endpoint.divider && <hr className="apx-nav-divider" />}
                 <button
                   type="button"
-                  className={`apx-nav-item${endpoint.id === active?.id ? " active" : ""}`}
+                  className={`apx-nav-item${endpoint.id === active?.id ? " is-active" : ""}`}
                   aria-disabled={!endpoint.enabled}
                   aria-current={endpoint.id === active?.id}
                   title={endpoint.enabled ? undefined : disabledHint}
@@ -2193,7 +2198,8 @@ export function ApiPreview({ collection, baseUrl, onClose }: ApiPreviewProps): R
             <button
               type="button"
               className="apx-close"
-              onClick={onClose}
+              onClick={requestClose}
+              disabled={exiting}
               title={t("actions.close", "Close")}
               aria-label={t("actions.close", "Close")}
             >

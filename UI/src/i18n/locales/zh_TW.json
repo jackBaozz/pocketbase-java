@@ -311,6 +311,7 @@
     "current_password": "目前密碼",
     "bootstrap": "初始化",
     "superuser": "超級使用者",
+    "superuser_login": "超級使用者登入",
     "create_first_superuser": "建立第一個超級使用者",
     "sign_in_manage": "登入以管理資料",
     "create_and_sign_in": "建立並登入",
@@ -416,13 +417,169 @@
   },
   "api_preview": {
     "title": "API 預覽",
-    "api_details": "API 詳細資料",
+    "api_details": "API 詳情",
     "example_responses": "範例回應",
     "type": "類型",
     "description": "說明",
     "required": "（必填）",
     "optional": "（選填）",
-    "not_enabled": "此集合未啟用該端點"
+    "not_enabled": "此集合未啟用此介面",
+    "body_params": "請求體參數",
+    "query_params": "?查詢參數",
+    "path_params": "路徑參數",
+    "other_fields": "其他欄位",
+    "field_value": "欄位類型的值。",
+    "body_content_types": "請求體參數可使用 application/json 或 multipart/form-data 傳送。",
+    "file_upload": "檔案上傳僅支援 multipart/form-data。",
+    "requires_auth": "需要 Authorization:TOKEN 請求頭",
+    "requires_superuser": "需要超級使用者的 Authorization:TOKEN 請求頭",
+    "expand_intro": "自動展開記錄關聯。例如：",
+    "expand_depth": "支援最多 6 層巢狀關聯展開。展開後的關聯會附加到每筆記錄的 \"expand\" 屬性下。",
+    "expand_rules": "只會展開目前請求使用者有權檢視的關聯。",
+    "fields_intro": "以逗號分隔、指定 JSON 回應中要回傳的欄位（預設回傳全部欄位）。例如：",
+    "fields_wildcard": "使用 \"*\" 可對應指定深度下的全部鍵。",
+    "fields_modifiers": ":excerpt(maxLength, withEllipsis?) 修飾符可回傳字串欄位的簡短純文字摘要。",
+    "auth_email": "認證記錄的電子郵件地址。",
+    "auth_email_visibility": "取得記錄資料時是否顯示/隱藏認證記錄電子郵件。超級使用者與記錄擁有者一律可存取電子郵件地址。",
+    "auth_password": "認證記錄密碼。",
+    "auth_password_confirm": "認證記錄密碼確認。",
+    "auth_verified": "表示認證記錄是否已驗證。此欄位僅可由超級使用者或具備「Manage」權限的認證記錄設定。",
+    "nav": {
+      "list": "列表/搜尋",
+      "view": "檢視",
+      "create": "建立",
+      "update": "更新",
+      "delete": "刪除",
+      "realtime": "即時",
+      "batch": "批次",
+      "auth_methods": "列出認證方式",
+      "auth_password": "密碼認證",
+      "auth_oauth2": "OAuth2 認證",
+      "auth_otp": "OTP 認證",
+      "auth_refresh": "重新整理認證",
+      "request_verification": "請求驗證",
+      "confirm_verification": "確認驗證",
+      "request_password_reset": "請求重設密碼",
+      "confirm_password_reset": "確認重設密碼",
+      "request_email_change": "請求更換電子郵件",
+      "confirm_email_change": "確認更換電子郵件",
+      "request_otp": "請求 OTP",
+      "impersonate": "身分模擬"
+    },
+    "list": {
+      "desc": "取得支援排序與篩選的分頁記錄列表。"
+    },
+    "view": {
+      "desc": "依 ID 取得單筆記錄。"
+    },
+    "create": {
+      "desc": "建立一筆新記錄。"
+    },
+    "update": {
+      "desc": "更新既有記錄。",
+      "password_note": "注意：若變更密碼，該記錄先前簽發的全部權杖將自動失效，更新後需重新認證。"
+    },
+    "delete": {
+      "desc": "刪除單筆記錄。"
+    },
+    "realtime": {
+      "desc": "透過伺服器傳送事件（SSE）訂閱即時變更。",
+      "events": "會針對建立、更新與刪除記錄操作傳送事件。",
+      "single": "訂閱單筆記錄時，使用集合的 View 規則判斷訂閱者是否可接收事件訊息。",
+      "collection": "訂閱整個集合時，改用集合的 List/Search 規則。"
+    },
+    "batch": {
+      "desc": "在單一請求中批次並以交易方式建立/更新/upsert/刪除多筆記錄。",
+      "enable": "批次 Web API 需在應用程式設定中明確啟用並設定。",
+      "perf": "此端點在單一資料庫交易中處理請求，若設定或使用不當，可能降低應用程式效能。"
+    },
+    "auth_methods": {
+      "desc": "回傳此集合所有允許的公開認證方式列表。"
+    },
+    "auth_with_password": {
+      "desc": "使用身分識別（電子郵件/使用者名稱）與密碼進行認證。"
+    },
+    "auth_with_oauth2": {
+      "desc": "透過 OAuth2 提供者認證，並回傳新的認證權杖與記錄資料。"
+    },
+    "auth_with_otp": {
+      "desc": "使用一次性/短時密碼（OTP）進行認證。",
+      "note": "認證成功後，若 OTP 來源為電子郵件且使用者尚未驗證，使用者也會被標記為已驗證。"
+    },
+    "auth_refresh": {
+      "desc": "為已認證記錄回傳新的認證回應（權杖與記錄資料）。",
+      "hint": "通常在頁面/畫面重新載入時呼叫，以確保先前儲存的認證資料仍然有效且為最新。"
+    },
+    "request_verification": {
+      "desc": "向指定認證記錄傳送帳戶驗證電子郵件請求。"
+    },
+    "confirm_verification": {
+      "desc": "使用驗證電子郵件中的權杖確認帳戶驗證請求。"
+    },
+    "request_password_reset": {
+      "desc": "向指定認證記錄傳送密碼重設電子郵件請求。"
+    },
+    "confirm_password_reset": {
+      "desc": "確認密碼重設請求並設定新密碼。",
+      "note": "密碼重設成功後，該記錄先前簽發的全部權杖將失效，且記錄會被標記為已驗證。"
+    },
+    "request_email_change": {
+      "desc": "向目前已認證的認證記錄傳送電子郵件變更請求。"
+    },
+    "confirm_email_change": {
+      "desc": "使用確認電子郵件中的權杖確認電子郵件變更請求。",
+      "note": "電子郵件變更成功後，該記錄先前簽發的全部權杖將失效。"
+    },
+    "request_otp": {
+      "desc": "向指定認證記錄傳送一次性密碼（OTP）電子郵件。",
+      "note": "即使提供的電子郵件不存在使用者，也會回傳 otpId，以提供基本的列舉防護。"
+    },
+    "impersonate": {
+      "desc": "在不知道密碼的情況下，為指定認證記錄回傳新的認證權杖。",
+      "note": "僅超級使用者可執行此操作。產生的權杖為靜態權杖，無法重新整理。"
+    },
+    "param": {
+      "page": "分頁列表的頁碼（即偏移頁，預設為 1）。",
+      "per_page": "指定每頁回傳的最大記錄數（預設為 30）。",
+      "sort": "指定記錄排序欄位。在欄位前加 -/+（預設為 +）分別表示降序/升序。",
+      "sort_special": "除集合中的非隱藏欄位外，也可使用下列特殊排序欄位：",
+      "filter": "篩選回傳的記錄。例如：",
+      "filter_encoding": "所有查詢參數都必須正確進行 URL 編碼（SDK 會自動處理）。",
+      "filter_syntax": "篩選語法遵循「運算元 運算子 運算元」格式。支援的運算子：=、!=、>、>=、<、<=、~（like）、!~（not like），以及其 any/至少一個符合 的 ? 前綴變體。可用括號、&&（AND）與 ||（OR）組合表達式。",
+      "skip_total": "若設為 1/true，將略過總數統計查詢，回應中的 \"totalItems\" 與 \"totalPages\" 欄位值為 -1。",
+      "skip_total_hint": "當不需要總數或使用游標分頁時，可大幅加快搜尋查詢。getFirstListItem() 與 getFullList() SDK 方法預設啟用。",
+      "id_view": "要檢視的記錄 ID。",
+      "id_update": "要更新的記錄 ID。",
+      "id_delete": "要刪除的記錄 ID。",
+      "id_impersonate": "要模擬身分的認證記錄 ID。",
+      "client_id": "在初始 \"PB_CONNECT\" 事件中收到的 SSE 連線 ID。",
+      "subscriptions": "要訂閱的主題列表。提交空列表將移除先前全部訂閱。",
+      "requests": "要處理的批次請求列表。使用官方 SDK 時，批次請求由其服務處理器透明建構。",
+      "requests_actions": "支援的批次操作：",
+      "requests_shape": "每個請求元素可包含 \"url\"（可含查詢參數）、\"method\"、\"headers\" 與 \"body\"。",
+      "requests_multipart": "當批次請求以 multipart/form-data 傳送時，批次操作欄位應以序列化 JSON 放在 \"@jsonPayload\" 欄位中，檔案鍵須遵循 \"requests.N.fileField\" 模式。",
+      "identity": "用於認證的身分識別值（電子郵件/使用者名稱）。",
+      "identity_field": "存在多個身分欄位時，明確指定用於尋找認證記錄的欄位名稱。留空則自動偵測。",
+      "password": "認證記錄密碼。",
+      "provider": "OAuth2 用戶端提供者名稱（例如 \"google\"）。",
+      "code": "初始請求回傳的授權碼。",
+      "code_verifier": "作為 code_challenge 一部分在初始請求中傳送的 code verifier。",
+      "redirect_url": "初始請求中傳送的重新導向 URL。",
+      "create_data": "OAuth2 註冊時用於建立認證記錄的選用資料。建立的記錄須符合與一般 create 相同的要求與驗證，且僅支援 JSON（OAuth2 註冊不支援檔案上傳）。",
+      "email_verification": "接收驗證請求的認證記錄電子郵件地址（若存在）。",
+      "token_verification": "驗證請求電子郵件中的權杖。",
+      "email_password_reset": "接收密碼重設請求的認證記錄電子郵件地址（若存在）。",
+      "token_password_reset": "密碼重設請求電子郵件中的權杖。",
+      "new_password": "要設定的新密碼。",
+      "new_password_confirm": "新密碼確認。",
+      "new_email": "接收電子郵件變更請求的新電子郵件地址。",
+      "token_email_change": "電子郵件變更請求郵件中的權杖。",
+      "password_email_change": "用於確認電子郵件變更的帳戶密碼。",
+      "email_otp": "接收 OTP 請求的認證記錄電子郵件地址（若存在）。",
+      "otp_id": "OTP 請求的 ID。",
+      "otp_password": "OTP 請求中的一次性/短時密碼。",
+      "duration": "選用的自訂權杖有效期（秒）。預設為集合的認證權杖有效期。"
+    }
   },
   "language": {
     "change": "切換語言"

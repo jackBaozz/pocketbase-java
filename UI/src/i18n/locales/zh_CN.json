@@ -311,6 +311,7 @@
     "current_password": "当前密码",
     "bootstrap": "初始化",
     "superuser": "超级用户",
+    "superuser_login": "超级用户登录",
     "create_first_superuser": "创建第一个超级用户",
     "sign_in_manage": "登录以管理数据",
     "create_and_sign_in": "创建并登录",
@@ -422,7 +423,163 @@
     "description": "说明",
     "required": "（必填）",
     "optional": "（可选）",
-    "not_enabled": "该集合未启用此接口"
+    "not_enabled": "该集合未启用此接口",
+    "body_params": "请求体参数",
+    "query_params": "?查询参数",
+    "path_params": "路径参数",
+    "other_fields": "其他字段",
+    "field_value": "字段类型的值。",
+    "body_content_types": "请求体参数可使用 application/json 或 multipart/form-data 发送。",
+    "file_upload": "文件上传仅支持 multipart/form-data。",
+    "requires_auth": "需要 Authorization:TOKEN 请求头",
+    "requires_superuser": "需要超级用户的 Authorization:TOKEN 请求头",
+    "expand_intro": "自动展开记录关联。例如：",
+    "expand_depth": "支持最多 6 层嵌套关联展开。展开后的关联会追加到每条记录的 \"expand\" 属性下。",
+    "expand_rules": "仅会展开当前请求用户有权查看的关联。",
+    "fields_intro": "以逗号分隔、指定 JSON 响应中返回的字段（默认返回全部字段）。例如：",
+    "fields_wildcard": "使用 \"*\" 可匹配指定深度下的全部键。",
+    "fields_modifiers": ":excerpt(maxLength, withEllipsis?) 修饰符可返回字符串字段的简短纯文本摘要。",
+    "auth_email": "认证记录的邮箱地址。",
+    "auth_email_visibility": "获取记录数据时是否显示/隐藏认证记录邮箱。超级用户与记录所有者始终可访问邮箱地址。",
+    "auth_password": "认证记录密码。",
+    "auth_password_confirm": "认证记录密码确认。",
+    "auth_verified": "表示认证记录是否已验证。该字段仅可由超级用户或具备「Manage」权限的认证记录设置。",
+    "nav": {
+      "list": "列表/搜索",
+      "view": "查看",
+      "create": "创建",
+      "update": "更新",
+      "delete": "删除",
+      "realtime": "实时",
+      "batch": "批量",
+      "auth_methods": "列出认证方式",
+      "auth_password": "密码认证",
+      "auth_oauth2": "OAuth2 认证",
+      "auth_otp": "OTP 认证",
+      "auth_refresh": "刷新认证",
+      "request_verification": "请求验证",
+      "confirm_verification": "确认验证",
+      "request_password_reset": "请求重置密码",
+      "confirm_password_reset": "确认重置密码",
+      "request_email_change": "请求更换邮箱",
+      "confirm_email_change": "确认更换邮箱",
+      "request_otp": "请求 OTP",
+      "impersonate": "身份模拟"
+    },
+    "list": {
+      "desc": "获取支持排序与过滤的分页记录列表。"
+    },
+    "view": {
+      "desc": "根据 ID 获取单条记录。"
+    },
+    "create": {
+      "desc": "创建一条新记录。"
+    },
+    "update": {
+      "desc": "更新已有记录。",
+      "password_note": "注意：若修改密码，该记录此前签发的全部令牌将自动失效，更新后需重新认证。"
+    },
+    "delete": {
+      "desc": "删除单条记录。"
+    },
+    "realtime": {
+      "desc": "通过服务器发送事件（SSE）订阅实时变更。",
+      "events": "会为创建、更新与删除记录操作发送事件。",
+      "single": "订阅单条记录时，使用集合的 View 规则判断订阅者是否可接收事件消息。",
+      "collection": "订阅整个集合时，改为使用集合的 List/Search 规则。"
+    },
+    "batch": {
+      "desc": "在一次请求中批量并以事务方式创建/更新/upsert/删除多条记录。",
+      "enable": "批量 Web API 需要在应用设置中显式启用并配置。",
+      "perf": "该接口在单个数据库事务中处理请求，若配置或使用不当，可能降低应用性能。"
+    },
+    "auth_methods": {
+      "desc": "返回该集合所有允许的公开认证方式列表。"
+    },
+    "auth_with_password": {
+      "desc": "使用身份标识（邮箱/用户名）与密码进行认证。"
+    },
+    "auth_with_oauth2": {
+      "desc": "通过 OAuth2 提供方认证，并返回新的认证令牌与记录数据。"
+    },
+    "auth_with_otp": {
+      "desc": "使用一次性/短时密码（OTP）进行认证。",
+      "note": "认证成功后，若 OTP 来源为邮箱且用户尚未验证，用户也会被标记为已验证。"
+    },
+    "auth_refresh": {
+      "desc": "为已认证记录返回新的认证响应（令牌与记录数据）。",
+      "hint": "通常在页面/界面重新加载时调用，以确保本地已保存的认证数据仍然有效且为最新。"
+    },
+    "request_verification": {
+      "desc": "向指定认证记录发送账户验证邮件请求。"
+    },
+    "confirm_verification": {
+      "desc": "使用验证邮件中的令牌确认账户验证请求。"
+    },
+    "request_password_reset": {
+      "desc": "向指定认证记录发送密码重置邮件请求。"
+    },
+    "confirm_password_reset": {
+      "desc": "确认密码重置请求并设置新密码。",
+      "note": "密码重置成功后，该记录此前签发的全部令牌将失效，且记录会被标记为已验证。"
+    },
+    "request_email_change": {
+      "desc": "向当前已认证的认证记录发送邮箱变更请求。"
+    },
+    "confirm_email_change": {
+      "desc": "使用确认邮件中的令牌确认邮箱变更请求。",
+      "note": "邮箱变更成功后，该记录此前签发的全部令牌将失效。"
+    },
+    "request_otp": {
+      "desc": "向指定认证记录发送一次性密码（OTP）邮件。",
+      "note": "即使提供的邮箱不存在用户，也会返回 otpId，以提供基础的枚举防护。"
+    },
+    "impersonate": {
+      "desc": "在不知道密码的情况下，为指定认证记录返回新的认证令牌。",
+      "note": "仅超级用户可执行此操作。生成的令牌为静态令牌，无法刷新。"
+    },
+    "param": {
+      "page": "分页列表的页码（即偏移页，默认为 1）。",
+      "per_page": "指定每页返回的最大记录数（默认为 30）。",
+      "sort": "指定记录排序字段。在字段前加 -/+（默认为 +）分别表示降序/升序。",
+      "sort_special": "除集合中的非隐藏字段外，还可使用以下特殊排序字段：",
+      "filter": "过滤返回的记录。例如：",
+      "filter_encoding": "所有查询参数都必须正确进行 URL 编码（SDK 会自动处理）。",
+      "filter_syntax": "过滤语法遵循「操作数 运算符 操作数」格式。支持的运算符：=、!=、>、>=、<、<=、~（like）、!~（not like），以及其 any/至少一个匹配 的 ? 前缀变体。可用括号、&&（AND）和 ||（OR）组合表达式。",
+      "skip_total": "若设为 1/true，将跳过总数统计查询，响应中的 \"totalItems\" 与 \"totalPages\" 字段值为 -1。",
+      "skip_total_hint": "当不需要总数或使用游标分页时，可显著加快搜索查询。getFirstListItem() 与 getFullList() SDK 方法默认启用。",
+      "id_view": "要查看的记录 ID。",
+      "id_update": "要更新的记录 ID。",
+      "id_delete": "要删除的记录 ID。",
+      "id_impersonate": "要模拟身份的认证记录 ID。",
+      "client_id": "在初始 \"PB_CONNECT\" 事件中收到的 SSE 连接 ID。",
+      "subscriptions": "要订阅的主题列表。提交空列表将移除此前全部订阅。",
+      "requests": "要处理的批量请求列表。使用官方 SDK 时，批量请求由其服务处理器透明构建。",
+      "requests_actions": "支持的批量操作：",
+      "requests_shape": "每个请求元素可包含 \"url\"（可含查询参数）、\"method\"、\"headers\" 与 \"body\"。",
+      "requests_multipart": "当批量请求以 multipart/form-data 发送时，批量操作字段应以序列化 JSON 放在 \"@jsonPayload\" 字段中，文件键须遵循 \"requests.N.fileField\" 模式。",
+      "identity": "用于认证的身份标识值（邮箱/用户名）。",
+      "identity_field": "存在多个身份字段时，显式指定用于查找认证记录的字段名。留空则自动检测。",
+      "password": "认证记录密码。",
+      "provider": "OAuth2 客户端提供方名称（例如 \"google\"）。",
+      "code": "初始请求返回的授权码。",
+      "code_verifier": "作为 code_challenge 一部分在初始请求中发送的 code verifier。",
+      "redirect_url": "初始请求中发送的重定向 URL。",
+      "create_data": "OAuth2 注册时用于创建认证记录的可选数据。创建的记录须满足与常规 create 相同的要求与校验，且仅支持 JSON（OAuth2 注册不支持文件上传）。",
+      "email_verification": "接收验证请求的认证记录邮箱地址（若存在）。",
+      "token_verification": "验证请求邮件中的令牌。",
+      "email_password_reset": "接收密码重置请求的认证记录邮箱地址（若存在）。",
+      "token_password_reset": "密码重置请求邮件中的令牌。",
+      "new_password": "要设置的新密码。",
+      "new_password_confirm": "新密码确认。",
+      "new_email": "接收邮箱变更请求的新邮箱地址。",
+      "token_email_change": "邮箱变更请求邮件中的令牌。",
+      "password_email_change": "用于确认邮箱变更的账户密码。",
+      "email_otp": "接收 OTP 请求的认证记录邮箱地址（若存在）。",
+      "otp_id": "OTP 请求的 ID。",
+      "otp_password": "OTP 请求中的一次性/短时密码。",
+      "duration": "可选的自定义令牌有效期（秒）。默认为集合的认证令牌有效期。"
+    }
   },
   "language": {
     "change": "切换语言"

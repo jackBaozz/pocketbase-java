@@ -311,6 +311,7 @@
     "current_password": "Contraseña actual",
     "bootstrap": "Inicialización",
     "superuser": "Superusuario",
+    "superuser_login": "Inicio de sesión de superusuario",
     "create_first_superuser": "Crear el primer superusuario",
     "sign_in_manage": "Inicia sesión para administrar datos",
     "create_and_sign_in": "Crear e iniciar sesión",
@@ -422,7 +423,163 @@
     "description": "Descripción",
     "required": "(obligatorio)",
     "optional": "(opcional)",
-    "not_enabled": "No habilitado para esta colección"
+    "not_enabled": "No habilitado para la colección",
+    "body_params": "Parámetros del cuerpo",
+    "query_params": "?parámetros de consulta",
+    "path_params": "Parámetros de ruta",
+    "other_fields": "Otros campos",
+    "field_value": "valor del tipo de campo.",
+    "body_content_types": "Los parámetros del cuerpo pueden enviarse como application/json o multipart/form-data.",
+    "file_upload": "La subida de archivos solo se admite mediante multipart/form-data.",
+    "requires_auth": "Requiere el encabezado Authorization:TOKEN",
+    "requires_superuser": "Requiere el encabezado Authorization:TOKEN de superusuario",
+    "expand_intro": "Expande automáticamente las relaciones del registro. Por ejemplo:",
+    "expand_depth": "Admite hasta 6 niveles de expansión anidada de relaciones. Las relaciones expandidas se añaden a cada registro bajo la propiedad \"expand\".",
+    "expand_rules": "Solo se expandirán las relaciones que el usuario de la solicitud pueda ver.",
+    "fields_intro": "Cadena separada por comas de los campos a devolver en la respuesta JSON (por defecto devuelve todos). Por ejemplo:",
+    "fields_wildcard": "Use \"*\" para seleccionar todas las claves de un nivel de profundidad concreto.",
+    "fields_modifiers": "El modificador :excerpt(maxLength, withEllipsis?) devuelve una versión corta en texto plano de un campo de cadena.",
+    "auth_email": "Dirección de correo del registro de autenticación.",
+    "auth_email_visibility": "Si se muestra/oculta el correo del registro de autenticación al obtener los datos. Los superusuarios y el propietario del registro siempre tienen acceso al correo.",
+    "auth_password": "Contraseña del registro de autenticación.",
+    "auth_password_confirm": "Confirmación de la contraseña del registro de autenticación.",
+    "auth_verified": "Indica si el registro de autenticación está verificado. Este campo solo pueden establecerlo superusuarios o registros de autenticación con acceso \"Manage\".",
+    "nav": {
+      "list": "Listar/Buscar",
+      "view": "Ver",
+      "create": "Crear",
+      "update": "Actualizar",
+      "delete": "Eliminar",
+      "realtime": "Tiempo real",
+      "batch": "Lote",
+      "auth_methods": "Listar métodos de auth",
+      "auth_password": "Auth con contraseña",
+      "auth_oauth2": "Auth con OAuth2",
+      "auth_otp": "Auth con OTP",
+      "auth_refresh": "Actualizar auth",
+      "request_verification": "Solicitar verificación",
+      "confirm_verification": "Confirmar verificación",
+      "request_password_reset": "Solicitar restablecimiento",
+      "confirm_password_reset": "Confirmar restablecimiento",
+      "request_email_change": "Solicitar cambio de correo",
+      "confirm_email_change": "Confirmar cambio de correo",
+      "request_otp": "Solicitar OTP",
+      "impersonate": "Suplantar"
+    },
+    "list": {
+      "desc": "Obtiene una lista paginada de registros con ordenación y filtrado."
+    },
+    "view": {
+      "desc": "Obtiene un único registro por su ID."
+    },
+    "create": {
+      "desc": "Crea un nuevo registro."
+    },
+    "update": {
+      "desc": "Actualiza un registro existente.",
+      "password_note": "Si se cambia la contraseña, todos los tokens emitidos para el registro se invalidan automáticamente y debe volver a autenticarse tras la actualización."
+    },
+    "delete": {
+      "desc": "Elimina un único registro."
+    },
+    "realtime": {
+      "desc": "Suscríbase a cambios en tiempo real mediante Server-Sent Events (SSE).",
+      "events": "Se envían eventos para operaciones de creación, actualización y eliminación de registros.",
+      "single": "Al suscribirse a un solo registro, se usa la regla View de la colección para decidir si el suscriptor puede recibir el mensaje.",
+      "collection": "Al suscribirse a toda la colección, se usa en su lugar la regla List/Search."
+    },
+    "batch": {
+      "desc": "Creación/actualización/upsert/eliminación por lotes y transaccional de varios registros en una sola solicitud.",
+      "enable": "La API web de lotes debe habilitarse y configurarse explícitamente en los ajustes de la aplicación.",
+      "perf": "Como este endpoint procesa las solicitudes en una sola transacción de BD, un uso o configuración inadecuados pueden degradar el rendimiento."
+    },
+    "auth_methods": {
+      "desc": "Devuelve una lista pública con todos los métodos de autenticación permitidos para la colección."
+    },
+    "auth_with_password": {
+      "desc": "Autentica con una combinación de identidad (correo/usuario) y contraseña."
+    },
+    "auth_with_oauth2": {
+      "desc": "Autentica con un proveedor OAuth2 y devuelve un nuevo token y datos del registro."
+    },
+    "auth_with_otp": {
+      "desc": "Autentica con una contraseña de un solo uso/corta duración (OTP).",
+      "note": "Tras autenticarse con éxito, el usuario también se marca como verificado (si el origen del OTP es el correo y aún no estaba verificado)."
+    },
+    "auth_refresh": {
+      "desc": "Devuelve una nueva respuesta de autenticación (token y datos del registro) para un registro ya autenticado.",
+      "hint": "Suele llamarse al recargar la página/pantalla para asegurar que los datos de autenticación almacenados siguen siendo válidos y actualizados."
+    },
+    "request_verification": {
+      "desc": "Envía una solicitud de verificación de cuenta por correo al registro de autenticación indicado."
+    },
+    "confirm_verification": {
+      "desc": "Confirma la verificación de la cuenta con el token del correo de verificación."
+    },
+    "request_password_reset": {
+      "desc": "Envía una solicitud de restablecimiento de contraseña por correo al registro de autenticación indicado."
+    },
+    "confirm_password_reset": {
+      "desc": "Confirma la solicitud de restablecimiento y establece una nueva contraseña.",
+      "note": "Tras un restablecimiento correcto, se invalidan todos los tokens previos del registro y se marca como verificado."
+    },
+    "request_email_change": {
+      "desc": "Envía una solicitud de cambio de correo al registro de autenticación actual."
+    },
+    "confirm_email_change": {
+      "desc": "Confirma el cambio de correo con el token del correo de confirmación.",
+      "note": "Tras un cambio de correo correcto, se invalidan todos los tokens previos del registro."
+    },
+    "request_otp": {
+      "desc": "Envía un correo con contraseña de un solo uso (OTP) al registro de autenticación indicado.",
+      "note": "Se devuelve un otpId aunque no exista un usuario con ese correo, como protección básica contra enumeración."
+    },
+    "impersonate": {
+      "desc": "Devuelve un nuevo token de autenticación para el registro indicado sin conocer su contraseña.",
+      "note": "Solo los superusuarios pueden hacerlo. El token generado es estático y no se puede renovar."
+    },
+    "param": {
+      "page": "La página (desplazamiento) de la lista paginada (por defecto 1).",
+      "per_page": "Número máximo de registros por página (por defecto 30).",
+      "sort": "Atributo(s) de ordenación. Añada -/+ (por defecto +) delante para orden DESC / ASC.",
+      "sort_special": "Además de los campos no ocultos de la colección, también pueden usarse estos campos especiales de ordenación:",
+      "filter": "Filtra los registros devueltos. Por ejemplo:",
+      "filter_encoding": "Todos los parámetros de consulta deben codificarse correctamente en URL (los SDK lo hacen automáticamente).",
+      "filter_syntax": "La sintaxis del filtro sigue OPERANDO OPERADOR OPERANDO. Operadores: =, !=, >, >=, <, <=, ~ (like), !~ (not like) y variantes con prefijo ? (any/al menos uno). Agrupe con paréntesis, && (AND) y || (OR).",
+      "skip_total": "Si es 1/true se omite la consulta de totales y \"totalItems\" y \"totalPages\" valdrán -1.",
+      "skip_total_hint": "Puede acelerar mucho las búsquedas cuando no se necesitan contadores totales o se usa paginación por cursor. Activado por defecto en getFirstListItem() y getFullList().",
+      "id_view": "ID del registro a ver.",
+      "id_update": "ID del registro a actualizar.",
+      "id_delete": "ID del registro a eliminar.",
+      "id_impersonate": "ID del registro de autenticación a suplantar.",
+      "client_id": "ID de conexión SSE recibido en el evento inicial \"PB_CONNECT\".",
+      "subscriptions": "Lista de temas a los que suscribirse. Una lista vacía elimina todas las suscripciones anteriores.",
+      "requests": "Lista de solicitudes por lotes a procesar. Con los SDK oficiales se construyen de forma transparente.",
+      "requests_actions": "Acciones por lotes admitidas:",
+      "requests_shape": "Cada elemento acepta \"url\" (puede incluir query), \"method\", \"headers\" y \"body\".",
+      "requests_multipart": "Con multipart/form-data, los campos de acción deben ir como JSON serializado en \"@jsonPayload\" y las claves de archivo deben seguir \"requests.N.fileField\".",
+      "identity": "Valor de identidad (correo/usuario) del registro a autenticar.",
+      "identity_field": "Si hay varios campos de identidad, indique el nombre del campo a usar. Déjelo vacío para detección automática.",
+      "password": "Contraseña del registro de autenticación.",
+      "provider": "Nombre del proveedor OAuth2 (p. ej. \"google\").",
+      "code": "Código de autorización devuelto por la solicitud inicial.",
+      "code_verifier": "Code verifier enviado con la solicitud inicial como parte del code_challenge.",
+      "redirect_url": "URL de redirección enviada con la solicitud inicial.",
+      "create_data": "Datos opcionales para crear el registro de autenticación en el registro OAuth2. Debe cumplir los mismos requisitos que create y solo en JSON (no se admiten subidas de archivos).",
+      "email_verification": "Correo del registro de autenticación al que enviar la verificación (si existe).",
+      "token_verification": "Token del correo de solicitud de verificación.",
+      "email_password_reset": "Correo del registro de autenticación al que enviar el restablecimiento (si existe).",
+      "token_password_reset": "Token del correo de restablecimiento de contraseña.",
+      "new_password": "Nueva contraseña a establecer.",
+      "new_password_confirm": "Confirmación de la nueva contraseña.",
+      "new_email": "Nueva dirección de correo para la solicitud de cambio.",
+      "token_email_change": "Token del correo de cambio de correo.",
+      "password_email_change": "Contraseña de la cuenta para confirmar el cambio de correo.",
+      "email_otp": "Correo del registro de autenticación al que enviar el OTP (si existe).",
+      "otp_id": "ID de la solicitud OTP.",
+      "otp_password": "Contraseña de un solo uso/corta duración de la solicitud OTP.",
+      "duration": "Duración opcional del token en segundos. Por defecto, la duración del token de autenticación de la colección."
+    }
   },
   "language": {
     "change": "Cambiar idioma"

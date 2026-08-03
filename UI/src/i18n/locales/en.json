@@ -311,6 +311,7 @@
     "current_password": "Current password",
     "bootstrap": "Bootstrap",
     "superuser": "Superuser",
+    "superuser_login": "Superuser login",
     "create_first_superuser": "Create the first superuser",
     "sign_in_manage": "Sign in to manage data",
     "create_and_sign_in": "Create and sign in",
@@ -422,7 +423,163 @@
     "description": "Description",
     "required": "(required)",
     "optional": "(optional)",
-    "not_enabled": "Not enabled for the collection"
+    "not_enabled": "Not enabled for the collection",
+    "body_params": "Body params",
+    "query_params": "?query params",
+    "path_params": "Path params",
+    "other_fields": "Other fields",
+    "field_value": "field type value.",
+    "body_content_types": "Body parameters could be sent as application/json or multipart/form-data.",
+    "file_upload": "File upload is supported only via multipart/form-data.",
+    "requires_auth": "Requires Authorization:TOKEN header",
+    "requires_superuser": "Requires superuser Authorization:TOKEN header",
+    "expand_intro": "Auto expand record relations. For example:",
+    "expand_depth": "Supports up to 6-levels depth nested relations expansion. The expanded relations are appended to each record under the \"expand\" property.",
+    "expand_rules": "Only the relations the request user is allowed to view will be expanded.",
+    "fields_intro": "Comma separated string of the fields to return in the JSON response (by default returns all fields). For example:",
+    "fields_wildcard": "Use \"*\" to target all keys from the specific depth level.",
+    "fields_modifiers": "The :excerpt(maxLength, withEllipsis?) modifier returns a short plain text version of a string field value.",
+    "auth_email": "Auth record email address.",
+    "auth_email_visibility": "Whether to show/hide the auth record email when fetching the record data. Superusers and the owner of the record always have access to the email address.",
+    "auth_password": "Auth record password.",
+    "auth_password_confirm": "Auth record password confirmation.",
+    "auth_verified": "Indicates whether the auth record is verified or not. This field can be set only by superusers or auth records with \"Manage\" access.",
+    "nav": {
+      "list": "List/Search",
+      "view": "View",
+      "create": "Create",
+      "update": "Update",
+      "delete": "Delete",
+      "realtime": "Realtime",
+      "batch": "Batch",
+      "auth_methods": "List auth methods",
+      "auth_password": "Auth with password",
+      "auth_oauth2": "Auth with OAuth2",
+      "auth_otp": "Auth with OTP",
+      "auth_refresh": "Auth refresh",
+      "request_verification": "Request verification",
+      "confirm_verification": "Confirm verification",
+      "request_password_reset": "Request password reset",
+      "confirm_password_reset": "Confirm password reset",
+      "request_email_change": "Request email change",
+      "confirm_email_change": "Confirm email change",
+      "request_otp": "Request OTP",
+      "impersonate": "Impersonate"
+    },
+    "list": {
+      "desc": "Fetch a paginated records list, supporting sorting and filtering."
+    },
+    "view": {
+      "desc": "Fetch a single record by its ID."
+    },
+    "create": {
+      "desc": "Creates a new record."
+    },
+    "update": {
+      "desc": "Updates an existing record.",
+      "password_note": "Note that in case of a password change all previously issued tokens for the record are automatically invalidated and you need to reauthenticate manually after the update call."
+    },
+    "delete": {
+      "desc": "Deletes a single record."
+    },
+    "realtime": {
+      "desc": "Subscribe to realtime changes via Server-Sent Events (SSE).",
+      "events": "Events are sent for create, update and delete record operations.",
+      "single": "When you subscribe to a single record, the collection's View rule is used to determine whether the subscriber is allowed to receive the event message.",
+      "collection": "When you subscribe to an entire collection, the collection's List/Search rule is used instead."
+    },
+    "batch": {
+      "desc": "Batch and transactional create/update/upsert/delete of multiple records in a single request.",
+      "enable": "The batch Web API needs to be explicitly enabled and configured from the app settings.",
+      "perf": "Because this endpoint processes the requests in a single DB transaction it could degrade the performance of your application if not used with proper care and configuration."
+    },
+    "auth_methods": {
+      "desc": "Returns a public list with all allowed authentication methods for the collection."
+    },
+    "auth_with_password": {
+      "desc": "Authenticate with a combination of identity (email/username) and password."
+    },
+    "auth_with_oauth2": {
+      "desc": "Authenticate with an OAuth2 provider and returns a new auth token and record data."
+    },
+    "auth_with_otp": {
+      "desc": "Authenticate with a one-time/short-lived password (OTP).",
+      "note": "On successful authentication the user is also marked as verified (if the OTP source is email and the user is not verified already)."
+    },
+    "auth_refresh": {
+      "desc": "Returns a new auth response (token and record data) for an already authenticated record.",
+      "hint": "This method is usually called on page/screen reload to ensure that the previously stored auth data is still valid and up-to-date."
+    },
+    "request_verification": {
+      "desc": "Sends an account verification email request to the specified auth record."
+    },
+    "confirm_verification": {
+      "desc": "Confirms the account verification request with the token from the verification email."
+    },
+    "request_password_reset": {
+      "desc": "Sends a password reset email request to the specified auth record."
+    },
+    "confirm_password_reset": {
+      "desc": "Confirms the password reset request and sets a new password.",
+      "note": "On successful password reset all previously issued tokens for the record are invalidated and the record is marked as verified."
+    },
+    "request_email_change": {
+      "desc": "Sends an email change request to the currently authenticated auth record."
+    },
+    "confirm_email_change": {
+      "desc": "Confirms the email change request with the token from the confirmation email.",
+      "note": "On successful email change all previously issued tokens for the record are invalidated."
+    },
+    "request_otp": {
+      "desc": "Sends a one-time password (OTP) email to the specified auth record.",
+      "note": "An otpId is returned even if a user with the provided email doesn't exist as a very basic enumeration protection."
+    },
+    "impersonate": {
+      "desc": "Returns a new auth token for the specified auth record without knowing its password.",
+      "note": "Only superusers can perform this action. The generated token is a static one that cannot be refreshed."
+    },
+    "param": {
+      "page": "The page (aka. offset) of the paginated list (default to 1).",
+      "per_page": "Specify the max returned records per page (default to 30).",
+      "sort": "Specify the records order attribute(s). Add -/+ (default) in front of the attribute for DESC / ASC order.",
+      "sort_special": "In addition to the collection non-hidden fields, the following special sort fields could be also used:",
+      "filter": "Filter the returned records. For example:",
+      "filter_encoding": "All query params must be properly URL encoded (the SDKs do this automatically).",
+      "filter_syntax": "The filter syntax follows the OPERAND OPERATOR OPERAND format. Supported operators: =, !=, >, >=, <, <=, ~ (like), !~ (not like) and their any/at-least-one-of ?-prefixed variants. Group expressions with brackets, && (AND) and || (OR).",
+      "skip_total": "If set to 1/true the total counts query will be skipped and the response fields \"totalItems\" and \"totalPages\" will have -1 value.",
+      "skip_total_hint": "This could drastically speed up the search queries when the total counters are not needed or cursor based pagination is used. It is set by default in the getFirstListItem() and getFullList() SDK methods.",
+      "id_view": "ID of the record to view.",
+      "id_update": "ID of the record to update.",
+      "id_delete": "ID of the record to delete.",
+      "id_impersonate": "ID of the auth record to impersonate.",
+      "client_id": "The SSE connection id received with the initial \"PB_CONNECT\" event.",
+      "subscriptions": "The list of topics to subscribe to. Submitting an empty list removes all previous subscriptions.",
+      "requests": "The list of the batch requests to process. When using the official SDKs the batch requests are transparently constructed by their service handler.",
+      "requests_actions": "Supported batch actions:",
+      "requests_shape": "Each request element accepts \"url\" (may include query parameters), \"method\", \"headers\" and \"body\".",
+      "requests_multipart": "When the batch request is sent as multipart/form-data, the batch action fields are expected as serialized json under the \"@jsonPayload\" field and file keys must follow the \"requests.N.fileField\" pattern.",
+      "identity": "The identity value (email/username) of the record to authenticate.",
+      "identity_field": "In case of multiple identity fields, explicitly set the field name to use when searching for the auth record. Leave it empty for auto detection.",
+      "password": "The auth record password.",
+      "provider": "The name of the OAuth2 client provider (eg. \"google\").",
+      "code": "The authorization code returned from the initial request.",
+      "code_verifier": "The code verifier sent with the initial request as part of the code_challenge.",
+      "redirect_url": "The redirect url sent with the initial request.",
+      "create_data": "Optional data that will be used when creating the auth record on OAuth2 sign-up. The created record must comply with the same requirements and validations as the regular create action and can only be in JSON (file uploads are not supported during OAuth2 sign-ups).",
+      "email_verification": "The auth record email address to send the verification request (if exists).",
+      "token_verification": "The token from the verification request email.",
+      "email_password_reset": "The auth record email address to send the password reset request (if exists).",
+      "token_password_reset": "The token from the password reset request email.",
+      "new_password": "The new password to set.",
+      "new_password_confirm": "Confirmation of the new password.",
+      "new_email": "The new email address to send the change email request.",
+      "token_email_change": "The token from the change email request email.",
+      "password_email_change": "The account password to confirm the email change.",
+      "email_otp": "The auth record email address to send the OTP request (if exists).",
+      "otp_id": "The id of the OTP request.",
+      "otp_password": "The one-time/short-lived password from the OTP request.",
+      "duration": "Optional custom token duration in seconds. Defaults to the collection auth token duration."
+    }
   },
   "language": {
     "change": "Change language"

@@ -311,6 +311,7 @@
     "current_password": "Mot de passe actuel",
     "bootstrap": "Initialisation",
     "superuser": "Superutilisateur",
+    "superuser_login": "Connexion superutilisateur",
     "create_first_superuser": "Créer le premier superutilisateur",
     "sign_in_manage": "Connectez-vous pour gérer les données",
     "create_and_sign_in": "Créer et se connecter",
@@ -417,12 +418,168 @@
   "api_preview": {
     "title": "Aperçu de l’API",
     "api_details": "Détails de l’API",
-    "example_responses": "Exemples de réponse",
+    "example_responses": "Exemples de réponses",
     "type": "Type",
     "description": "Description",
-    "required": "(requis)",
+    "required": "(obligatoire)",
     "optional": "(facultatif)",
-    "not_enabled": "Non activé pour cette collection"
+    "not_enabled": "Non activé pour la collection",
+    "body_params": "Paramètres du corps",
+    "query_params": "?paramètres de requête",
+    "path_params": "Paramètres de chemin",
+    "other_fields": "Autres champs",
+    "field_value": "valeur du type de champ.",
+    "body_content_types": "Les paramètres du corps peuvent être envoyés en application/json ou multipart/form-data.",
+    "file_upload": "L’envoi de fichiers n’est pris en charge qu’via multipart/form-data.",
+    "requires_auth": "Nécessite l’en-tête Authorization:TOKEN",
+    "requires_superuser": "Nécessite l’en-tête Authorization:TOKEN d’un superutilisateur",
+    "expand_intro": "Développe automatiquement les relations de l’enregistrement. Par exemple :",
+    "expand_depth": "Prend en charge jusqu’à 6 niveaux d’expansion imbriquée. Les relations développées sont ajoutées sous la propriété \"expand\".",
+    "expand_rules": "Seules les relations que l’utilisateur de la requête peut voir seront développées.",
+    "fields_intro": "Chaîne séparée par des virgules des champs à renvoyer dans la réponse JSON (tous par défaut). Par exemple :",
+    "fields_wildcard": "Utilisez \"*\" pour cibler toutes les clés d’un niveau de profondeur donné.",
+    "fields_modifiers": "Le modificateur :excerpt(maxLength, withEllipsis?) renvoie une version texte court d’un champ chaîne.",
+    "auth_email": "Adresse e-mail de l’enregistrement d’authentification.",
+    "auth_email_visibility": "Afficher/masquer l’e-mail de l’enregistrement d’authentification lors de la récupération. Les superutilisateurs et le propriétaire y ont toujours accès.",
+    "auth_password": "Mot de passe de l’enregistrement d’authentification.",
+    "auth_password_confirm": "Confirmation du mot de passe de l’enregistrement d’authentification.",
+    "auth_verified": "Indique si l’enregistrement d’authentification est vérifié. Ce champ ne peut être défini que par des superutilisateurs ou des enregistrements avec l’accès \"Manage\".",
+    "nav": {
+      "list": "Lister/Rechercher",
+      "view": "Voir",
+      "create": "Créer",
+      "update": "Mettre à jour",
+      "delete": "Supprimer",
+      "realtime": "Temps réel",
+      "batch": "Lot",
+      "auth_methods": "Lister les méthodes d’auth",
+      "auth_password": "Auth par mot de passe",
+      "auth_oauth2": "Auth OAuth2",
+      "auth_otp": "Auth OTP",
+      "auth_refresh": "Rafraîchir l’auth",
+      "request_verification": "Demander la vérification",
+      "confirm_verification": "Confirmer la vérification",
+      "request_password_reset": "Demander la réinitialisation",
+      "confirm_password_reset": "Confirmer la réinitialisation",
+      "request_email_change": "Demander le changement d’e-mail",
+      "confirm_email_change": "Confirmer le changement d’e-mail",
+      "request_otp": "Demander un OTP",
+      "impersonate": "Usurper"
+    },
+    "list": {
+      "desc": "Récupère une liste paginée d’enregistrements avec tri et filtrage."
+    },
+    "view": {
+      "desc": "Récupère un enregistrement unique par son ID."
+    },
+    "create": {
+      "desc": "Crée un nouvel enregistrement."
+    },
+    "update": {
+      "desc": "Met à jour un enregistrement existant.",
+      "password_note": "En cas de changement de mot de passe, tous les jetons précédemment émis sont invalidés et une nouvelle authentification est requise après la mise à jour."
+    },
+    "delete": {
+      "desc": "Supprime un enregistrement unique."
+    },
+    "realtime": {
+      "desc": "Abonnez-vous aux changements en temps réel via Server-Sent Events (SSE).",
+      "events": "Des événements sont envoyés pour les opérations de création, mise à jour et suppression.",
+      "single": "Lors d’un abonnement à un enregistrement unique, la règle View de la collection détermine si l’abonné peut recevoir le message.",
+      "collection": "Lors d’un abonnement à toute la collection, la règle List/Search est utilisée à la place."
+    },
+    "batch": {
+      "desc": "Création/mise à jour/upsert/suppression par lot et transactionnelle de plusieurs enregistrements en une seule requête.",
+      "enable": "L’API Web de lot doit être explicitement activée et configurée dans les paramètres de l’application.",
+      "perf": "Comme ce point de terminaison traite les requêtes dans une seule transaction DB, une mauvaise configuration peut dégrader les performances."
+    },
+    "auth_methods": {
+      "desc": "Renvoie une liste publique de toutes les méthodes d’authentification autorisées pour la collection."
+    },
+    "auth_with_password": {
+      "desc": "Authentifie avec une combinaison d’identité (e-mail/nom d’utilisateur) et de mot de passe."
+    },
+    "auth_with_oauth2": {
+      "desc": "Authentifie avec un fournisseur OAuth2 et renvoie un nouveau jeton et les données de l’enregistrement."
+    },
+    "auth_with_otp": {
+      "desc": "Authentifie avec un mot de passe à usage unique / de courte durée (OTP).",
+      "note": "Après une authentification réussie, l’utilisateur est aussi marqué comme vérifié (si la source OTP est l’e-mail et qu’il n’est pas déjà vérifié)."
+    },
+    "auth_refresh": {
+      "desc": "Renvoie une nouvelle réponse d’authentification (jeton et données) pour un enregistrement déjà authentifié.",
+      "hint": "Appelé généralement au rechargement de la page pour vérifier que les données d’authentification stockées restent valides et à jour."
+    },
+    "request_verification": {
+      "desc": "Envoie une demande de vérification de compte par e-mail à l’enregistrement d’authentification indiqué."
+    },
+    "confirm_verification": {
+      "desc": "Confirme la vérification du compte avec le jeton de l’e-mail de vérification."
+    },
+    "request_password_reset": {
+      "desc": "Envoie une demande de réinitialisation de mot de passe par e-mail à l’enregistrement d’authentification indiqué."
+    },
+    "confirm_password_reset": {
+      "desc": "Confirme la demande de réinitialisation et définit un nouveau mot de passe.",
+      "note": "Après une réinitialisation réussie, tous les jetons précédents sont invalidés et l’enregistrement est marqué comme vérifié."
+    },
+    "request_email_change": {
+      "desc": "Envoie une demande de changement d’e-mail à l’enregistrement d’authentification actuellement authentifié."
+    },
+    "confirm_email_change": {
+      "desc": "Confirme le changement d’e-mail avec le jeton de l’e-mail de confirmation.",
+      "note": "Après un changement d’e-mail réussi, tous les jetons précédents de l’enregistrement sont invalidés."
+    },
+    "request_otp": {
+      "desc": "Envoie un e-mail de mot de passe à usage unique (OTP) à l’enregistrement d’authentification indiqué.",
+      "note": "Un otpId est renvoyé même si aucun utilisateur n’existe pour l’e-mail fourni, comme protection basique contre l’énumération."
+    },
+    "impersonate": {
+      "desc": "Renvoie un nouveau jeton d’authentification pour l’enregistrement indiqué sans connaître son mot de passe.",
+      "note": "Seuls les superutilisateurs peuvent effectuer cette action. Le jeton généré est statique et ne peut pas être rafraîchi."
+    },
+    "param": {
+      "page": "La page (décalage) de la liste paginée (1 par défaut).",
+      "per_page": "Nombre maximal d’enregistrements par page (30 par défaut).",
+      "sort": "Attribut(s) de tri. Ajoutez -/+ (défaut +) devant pour un ordre DESC / ASC.",
+      "sort_special": "Outre les champs non masqués de la collection, ces champs de tri spéciaux peuvent aussi être utilisés :",
+      "filter": "Filtre les enregistrements renvoyés. Par exemple :",
+      "filter_encoding": "Tous les paramètres de requête doivent être correctement encodés en URL (les SDK le font automatiquement).",
+      "filter_syntax": "La syntaxe de filtre suit OPÉRANDE OPÉRATEUR OPÉRANDE. Opérateurs : =, !=, >, >=, <, <=, ~ (like), !~ (not like) et variantes préfixées par ? (any/au moins un). Groupe avec des parenthèses, && (AND) et || (OR).",
+      "skip_total": "Si défini à 1/true, la requête de totaux est ignorée et \"totalItems\" et \"totalPages\" valent -1.",
+      "skip_total_hint": "Peut grandement accélérer les recherches lorsque les compteurs totaux ne sont pas nécessaires ou avec une pagination par curseur. Activé par défaut dans getFirstListItem() et getFullList().",
+      "id_view": "ID de l’enregistrement à afficher.",
+      "id_update": "ID de l’enregistrement à mettre à jour.",
+      "id_delete": "ID de l’enregistrement à supprimer.",
+      "id_impersonate": "ID de l’enregistrement d’authentification à usurper.",
+      "client_id": "ID de connexion SSE reçu avec l’événement initial \"PB_CONNECT\".",
+      "subscriptions": "Liste des sujets auxquels s’abonner. Une liste vide supprime tous les abonnements précédents.",
+      "requests": "Liste des requêtes par lot à traiter. Avec les SDK officiels, elles sont construites de façon transparente.",
+      "requests_actions": "Actions par lot prises en charge :",
+      "requests_shape": "Chaque élément accepte \"url\" (peut inclure des paramètres de requête), \"method\", \"headers\" et \"body\".",
+      "requests_multipart": "Avec multipart/form-data, les champs d’action doivent être un JSON sérialisé sous \"@jsonPayload\" et les clés de fichier suivre \"requests.N.fileField\".",
+      "identity": "Valeur d’identité (e-mail/nom d’utilisateur) de l’enregistrement à authentifier.",
+      "identity_field": "En cas de plusieurs champs d’identité, indiquez explicitement le nom du champ. Laissez vide pour la détection automatique.",
+      "password": "Mot de passe de l’enregistrement d’authentification.",
+      "provider": "Nom du fournisseur OAuth2 (ex. \"google\").",
+      "code": "Code d’autorisation renvoyé par la requête initiale.",
+      "code_verifier": "Code verifier envoyé avec la requête initiale dans le cadre du code_challenge.",
+      "redirect_url": "URL de redirection envoyée avec la requête initiale.",
+      "create_data": "Données facultatives utilisées pour créer l’enregistrement d’authentification lors de l’inscription OAuth2. Doit respecter les mêmes exigences que create et uniquement en JSON (pas d’envoi de fichiers).",
+      "email_verification": "E-mail de l’enregistrement d’authentification pour envoyer la vérification (s’il existe).",
+      "token_verification": "Jeton de l’e-mail de demande de vérification.",
+      "email_password_reset": "E-mail de l’enregistrement d’authentification pour envoyer la réinitialisation (s’il existe).",
+      "token_password_reset": "Jeton de l’e-mail de réinitialisation de mot de passe.",
+      "new_password": "Nouveau mot de passe à définir.",
+      "new_password_confirm": "Confirmation du nouveau mot de passe.",
+      "new_email": "Nouvelle adresse e-mail pour la demande de changement.",
+      "token_email_change": "Jeton de l’e-mail de changement d’e-mail.",
+      "password_email_change": "Mot de passe du compte pour confirmer le changement d’e-mail.",
+      "email_otp": "E-mail de l’enregistrement d’authentification pour envoyer l’OTP (s’il existe).",
+      "otp_id": "ID de la demande OTP.",
+      "otp_password": "Mot de passe à usage unique / de courte durée de la demande OTP.",
+      "duration": "Durée facultative du jeton en secondes. Par défaut, la durée du jeton d’authentification de la collection."
+    }
   },
   "language": {
     "change": "Changer de langue"

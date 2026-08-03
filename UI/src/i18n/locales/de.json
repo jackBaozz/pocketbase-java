@@ -147,6 +147,7 @@
     "sign_in": "Anmelden",
     "bootstrap": "Einrichtung",
     "superuser": "Superuser",
+    "superuser_login": "Superuser-Anmeldung",
     "create_first_superuser": "Ersten Superuser erstellen",
     "sign_in_manage": "Anmelden, um Daten zu verwalten",
     "create_and_sign_in": "Erstellen und anmelden",
@@ -302,7 +303,163 @@
     "description": "Beschreibung",
     "required": "(erforderlich)",
     "optional": "(optional)",
-    "not_enabled": "Für diese Sammlung nicht aktiviert"
+    "not_enabled": "Für die Collection nicht aktiviert",
+    "body_params": "Body-Parameter",
+    "query_params": "?Query-Parameter",
+    "path_params": "Pfadparameter",
+    "other_fields": "Weitere Felder",
+    "field_value": "Wert des Feldtyps.",
+    "body_content_types": "Body-Parameter können als application/json oder multipart/form-data gesendet werden.",
+    "file_upload": "Datei-Uploads werden nur über multipart/form-data unterstützt.",
+    "requires_auth": "Erfordert Authorization:TOKEN-Header",
+    "requires_superuser": "Erfordert Superuser-Authorization:TOKEN-Header",
+    "expand_intro": "Erweitert Record-Relationen automatisch. Zum Beispiel:",
+    "expand_depth": "Unterstützt bis zu 6 Ebenen verschachtelter Relationserweiterung. Erweiterte Relationen werden unter der Eigenschaft \"expand\" angehängt.",
+    "expand_rules": "Nur Relationen, die der anfragende Benutzer ansehen darf, werden erweitert.",
+    "fields_intro": "Kommagetrennte Liste der Felder in der JSON-Antwort (standardmäßig alle). Zum Beispiel:",
+    "fields_wildcard": "Verwenden Sie \"*\", um alle Schlüssel einer bestimmten Tiefe anzusprechen.",
+    "fields_modifiers": "Der Modifikator :excerpt(maxLength, withEllipsis?) liefert eine kurze Klartextversion eines String-Felds.",
+    "auth_email": "E-Mail-Adresse des Auth-Records.",
+    "auth_email_visibility": "Ob die Auth-Record-E-Mail beim Abrufen angezeigt/verborgen wird. Superuser und der Eigentümer haben immer Zugriff auf die E-Mail.",
+    "auth_password": "Passwort des Auth-Records.",
+    "auth_password_confirm": "Passwortbestätigung des Auth-Records.",
+    "auth_verified": "Gibt an, ob der Auth-Record verifiziert ist. Dieses Feld kann nur von Superusern oder Auth-Records mit \"Manage\"-Zugriff gesetzt werden.",
+    "nav": {
+      "list": "Liste/Suche",
+      "view": "Anzeigen",
+      "create": "Erstellen",
+      "update": "Aktualisieren",
+      "delete": "Löschen",
+      "realtime": "Echtzeit",
+      "batch": "Batch",
+      "auth_methods": "Auth-Methoden auflisten",
+      "auth_password": "Auth mit Passwort",
+      "auth_oauth2": "Auth mit OAuth2",
+      "auth_otp": "Auth mit OTP",
+      "auth_refresh": "Auth aktualisieren",
+      "request_verification": "Verifizierung anfordern",
+      "confirm_verification": "Verifizierung bestätigen",
+      "request_password_reset": "Passwort-Reset anfordern",
+      "confirm_password_reset": "Passwort-Reset bestätigen",
+      "request_email_change": "E-Mail-Änderung anfordern",
+      "confirm_email_change": "E-Mail-Änderung bestätigen",
+      "request_otp": "OTP anfordern",
+      "impersonate": "Identität übernehmen"
+    },
+    "list": {
+      "desc": "Ruft eine paginierte Record-Liste mit Sortierung und Filterung ab."
+    },
+    "view": {
+      "desc": "Ruft einen einzelnen Record anhand seiner ID ab."
+    },
+    "create": {
+      "desc": "Erstellt einen neuen Record."
+    },
+    "update": {
+      "desc": "Aktualisiert einen vorhandenen Record.",
+      "password_note": "Bei einer Passwortänderung werden alle zuvor ausgestellten Tokens des Records automatisch ungültig und Sie müssen sich nach dem Update neu authentifizieren."
+    },
+    "delete": {
+      "desc": "Löscht einen einzelnen Record."
+    },
+    "realtime": {
+      "desc": "Abonnieren Sie Echtzeitänderungen über Server-Sent Events (SSE).",
+      "events": "Ereignisse werden für Erstellen-, Aktualisieren- und Löschen-Operationen gesendet.",
+      "single": "Beim Abonnieren eines einzelnen Records bestimmt die View-Regel der Collection, ob der Abonnent die Nachricht empfangen darf.",
+      "collection": "Beim Abonnieren der gesamten Collection wird stattdessen die List/Search-Regel verwendet."
+    },
+    "batch": {
+      "desc": "Batch- und transaktionales Erstellen/Aktualisieren/Upsert/Löschen mehrerer Records in einer Anfrage.",
+      "enable": "Die Batch-Web-API muss in den App-Einstellungen explizit aktiviert und konfiguriert werden.",
+      "perf": "Da dieser Endpunkt Anfragen in einer einzelnen DB-Transaktion verarbeitet, kann unsachgemäße Nutzung die Leistung beeinträchtigen."
+    },
+    "auth_methods": {
+      "desc": "Gibt eine öffentliche Liste aller erlaubten Authentifizierungsmethoden der Collection zurück."
+    },
+    "auth_with_password": {
+      "desc": "Authentifiziert mit einer Kombination aus Identität (E-Mail/Benutzername) und Passwort."
+    },
+    "auth_with_oauth2": {
+      "desc": "Authentifiziert mit einem OAuth2-Anbieter und gibt ein neues Auth-Token sowie Record-Daten zurück."
+    },
+    "auth_with_otp": {
+      "desc": "Authentifiziert mit einem einmaligen/kurzlebigen Passwort (OTP).",
+      "note": "Nach erfolgreicher Authentifizierung wird der Benutzer auch als verifiziert markiert (wenn die OTP-Quelle E-Mail ist und der Benutzer noch nicht verifiziert war)."
+    },
+    "auth_refresh": {
+      "desc": "Gibt eine neue Auth-Antwort (Token und Record-Daten) für einen bereits authentifizierten Record zurück.",
+      "hint": "Wird üblicherweise beim Neuladen der Seite/Ansicht aufgerufen, um sicherzustellen, dass gespeicherte Auth-Daten noch gültig und aktuell sind."
+    },
+    "request_verification": {
+      "desc": "Sendet eine Kontoverifizierungs-E-Mail an den angegebenen Auth-Record."
+    },
+    "confirm_verification": {
+      "desc": "Bestätigt die Kontoverifizierung mit dem Token aus der Verifizierungs-E-Mail."
+    },
+    "request_password_reset": {
+      "desc": "Sendet eine Passwort-Reset-E-Mail an den angegebenen Auth-Record."
+    },
+    "confirm_password_reset": {
+      "desc": "Bestätigt die Passwort-Reset-Anfrage und setzt ein neues Passwort.",
+      "note": "Nach erfolgreichem Reset werden alle zuvor ausgestellten Tokens ungültig und der Record wird als verifiziert markiert."
+    },
+    "request_email_change": {
+      "desc": "Sendet eine E-Mail-Änderungsanfrage an den aktuell authentifizierten Auth-Record."
+    },
+    "confirm_email_change": {
+      "desc": "Bestätigt die E-Mail-Änderung mit dem Token aus der Bestätigungs-E-Mail.",
+      "note": "Nach erfolgreicher E-Mail-Änderung werden alle zuvor ausgestellten Tokens des Records ungültig."
+    },
+    "request_otp": {
+      "desc": "Sendet eine Einmalpasswort-(OTP)-E-Mail an den angegebenen Auth-Record.",
+      "note": "Eine otpId wird auch zurückgegeben, wenn kein Benutzer mit der angegebenen E-Mail existiert – als grundlegender Enumerationsschutz."
+    },
+    "impersonate": {
+      "desc": "Gibt ein neues Auth-Token für den angegebenen Auth-Record zurück, ohne dessen Passwort zu kennen.",
+      "note": "Nur Superuser können diese Aktion ausführen. Das generierte Token ist statisch und kann nicht aktualisiert werden."
+    },
+    "param": {
+      "page": "Die Seite (Offset) der paginierten Liste (Standard 1).",
+      "per_page": "Maximale Anzahl zurückgegebener Records pro Seite (Standard 30).",
+      "sort": "Sortierattribut(e). Setzen Sie -/+ (Standard +) vor das Attribut für DESC / ASC.",
+      "sort_special": "Zusätzlich zu den nicht versteckten Collection-Feldern können folgende spezielle Sortierfelder verwendet werden:",
+      "filter": "Filtert die zurückgegebenen Records. Zum Beispiel:",
+      "filter_encoding": "Alle Query-Parameter müssen korrekt URL-kodiert sein (SDKs erledigen das automatisch).",
+      "filter_syntax": "Die Filtersyntax folgt OPERAND OPERATOR OPERAND. Operatoren: =, !=, >, >=, <, <=, ~ (like), !~ (not like) sowie ?-Präfix-Varianten (any/mindestens eines). Gruppieren mit Klammern, && (AND) und || (OR).",
+      "skip_total": "Bei 1/true wird die Total-Zählung übersprungen und \"totalItems\" sowie \"totalPages\" sind -1.",
+      "skip_total_hint": "Kann Suchanfragen stark beschleunigen, wenn Totals nicht benötigt werden oder cursorbasierte Paginierung genutzt wird. Standard in getFirstListItem() und getFullList().",
+      "id_view": "ID des anzuzeigenden Records.",
+      "id_update": "ID des zu aktualisierenden Records.",
+      "id_delete": "ID des zu löschenden Records.",
+      "id_impersonate": "ID des Auth-Records, dessen Identität übernommen wird.",
+      "client_id": "SSE-Verbindungs-ID aus dem initialen \"PB_CONNECT\"-Ereignis.",
+      "subscriptions": "Liste der zu abonnierenden Themen. Eine leere Liste entfernt alle vorherigen Abonnements.",
+      "requests": "Liste der zu verarbeitenden Batch-Anfragen. Mit den offiziellen SDKs werden sie transparent aufgebaut.",
+      "requests_actions": "Unterstützte Batch-Aktionen:",
+      "requests_shape": "Jedes Element akzeptiert \"url\" (kann Query-Parameter enthalten), \"method\", \"headers\" und \"body\".",
+      "requests_multipart": "Bei multipart/form-data werden Batch-Aktionsfelder als serialisiertes JSON unter \"@jsonPayload\" erwartet; Dateischlüssel müssen dem Muster \"requests.N.fileField\" folgen.",
+      "identity": "Identitätswert (E-Mail/Benutzername) des zu authentifizierenden Records.",
+      "identity_field": "Bei mehreren Identitätsfeldern den Feldnamen explizit setzen. Leer lassen für automatische Erkennung.",
+      "password": "Passwort des Auth-Records.",
+      "provider": "Name des OAuth2-Client-Anbieters (z. B. \"google\").",
+      "code": "Autorisierungscode aus der initialen Anfrage.",
+      "code_verifier": "Code-Verifier, der mit der initialen Anfrage als Teil des code_challenge gesendet wurde.",
+      "redirect_url": "Redirect-URL aus der initialen Anfrage.",
+      "create_data": "Optionale Daten zum Erstellen des Auth-Records bei OAuth2-Registrierung. Muss dieselben Anforderungen wie create erfüllen und nur JSON (keine Datei-Uploads).",
+      "email_verification": "E-Mail des Auth-Records für die Verifizierungsanfrage (falls vorhanden).",
+      "token_verification": "Token aus der Verifizierungs-E-Mail.",
+      "email_password_reset": "E-Mail des Auth-Records für die Passwort-Reset-Anfrage (falls vorhanden).",
+      "token_password_reset": "Token aus der Passwort-Reset-E-Mail.",
+      "new_password": "Neues zu setzendes Passwort.",
+      "new_password_confirm": "Bestätigung des neuen Passworts.",
+      "new_email": "Neue E-Mail-Adresse für die Änderungsanfrage.",
+      "token_email_change": "Token aus der E-Mail-Änderungs-Mail.",
+      "password_email_change": "Kontopasswort zur Bestätigung der E-Mail-Änderung.",
+      "email_otp": "E-Mail des Auth-Records für die OTP-Anfrage (falls vorhanden).",
+      "otp_id": "ID der OTP-Anfrage.",
+      "otp_password": "Einmaliges/kurzlebiges Passwort aus der OTP-Anfrage.",
+      "duration": "Optionale Token-Dauer in Sekunden. Standard ist die Auth-Token-Dauer der Collection."
+    }
   },
   "fields": {
     "presentable": "Anzeigbar",

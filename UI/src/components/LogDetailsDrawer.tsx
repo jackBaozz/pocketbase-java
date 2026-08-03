@@ -2,6 +2,7 @@ import { Copy, Download, MoreHorizontal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useDrawerTransition } from "./useDrawerTransition";
 import { useModalInteraction } from "./useModalInteraction";
 import "./LogDetailsDrawer.css";
 
@@ -74,7 +75,10 @@ type Row = { key: string; value: ReactNode; copyText?: string };
 
 export function LogDetailsDrawer({ log, onClose, onNotify }: LogDetailsDrawerProps) {
   const { t } = useTranslation();
-  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose);
+  const { exiting, requestClose, onPanelAnimationEnd } = useDrawerTransition(onClose);
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(requestClose, {
+    active: !exiting
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -169,18 +173,19 @@ export function LogDetailsDrawer({ log, onClose, onNotify }: LogDetailsDrawerPro
 
   return (
     <div
-      className="logd-backdrop"
+      className={`logd-backdrop${exiting ? " is-exiting" : ""}`}
       role="presentation"
-      onMouseDown={onBackdropMouseDown}
-      onMouseUp={onBackdropMouseUp}
+      onMouseDown={exiting ? undefined : onBackdropMouseDown}
+      onMouseUp={exiting ? undefined : onBackdropMouseUp}
     >
       <section
         ref={dialogRef}
-        className="logd-drawer"
+        className={`logd-drawer${exiting ? " is-exiting" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={t("logs.details_title", "Log details")}
         tabIndex={-1}
+        onAnimationEnd={onPanelAnimationEnd}
       >
         <header className="logd-head">
           <h2 className="logd-title">{t("logs.details_title", "Log details")}</h2>
@@ -189,6 +194,7 @@ export function LogDetailsDrawer({ log, onClose, onNotify }: LogDetailsDrawerPro
               type="button"
               className="logd-icon-btn"
               onClick={() => setMenuOpen((open) => !open)}
+              disabled={exiting}
               title={t("common.options", "Options")}
               aria-label={t("common.options", "Options")}
               aria-expanded={menuOpen}
@@ -206,7 +212,8 @@ export function LogDetailsDrawer({ log, onClose, onNotify }: LogDetailsDrawerPro
             <button
               type="button"
               className="logd-icon-btn"
-              onClick={onClose}
+              onClick={requestClose}
+              disabled={exiting}
               title={t("actions.close", "Close")}
               aria-label={t("actions.close", "Close")}
             >
@@ -247,13 +254,14 @@ export function LogDetailsDrawer({ log, onClose, onNotify }: LogDetailsDrawerPro
         </div>
 
         <footer className="logd-foot">
-          <button type="button" className="logd-btn-close" onClick={onClose}>
+          <button type="button" className="logd-btn-close" onClick={requestClose} disabled={exiting}>
             {t("actions.close", "Close")}
           </button>
           <button
             type="button"
             className="logd-btn-download"
             onClick={() => downloadJson(log)}
+            disabled={exiting}
           >
             <Download size={16} />
             {t("logs.download_json", "Download JSON")}

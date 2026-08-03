@@ -12,7 +12,13 @@
   justify-content: flex-end;
   background: var(--modalOverlayColor);
   backdrop-filter: blur(2px);
-  animation: logd-fade 0.15s ease-out;
+  /* Shared keyframes from styles.css — every drawer must animate enter + exit. */
+  animation: drawer-fade-in 0.18s ease-out;
+}
+
+.logd-backdrop.is-exiting {
+  animation: drawer-fade-out 0.22s ease-in forwards;
+  pointer-events: none;
 }
 
 .logd-drawer {
@@ -28,24 +34,13 @@
   background: var(--surfaceColor);
   border-left: 1px solid var(--surfaceAlt2Color);
   box-shadow: -12px 0 40px -16px rgba(0, 0, 0, 0.4);
-  animation: logd-slide-in 0.22s ease-out;
+  animation: drawer-slide-in 0.24s ease-out;
   /* Shared horizontal inset for header / content card / footer (equal L/R). */
   --logd-inline: 20px;
 }
 
-@keyframes logd-fade {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes logd-slide-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
+.logd-drawer.is-exiting {
+  animation: drawer-slide-out 0.22s ease-in forwards;
 }
 
 /* ------------------------------------------------------------------ header */

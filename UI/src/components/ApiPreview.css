@@ -13,13 +13,20 @@
   padding: 0;
   background: var(--modalOverlayColor);
   backdrop-filter: blur(2px);
-  animation: apx-fade 0.15s ease-out;
+  /* Shared keyframes from styles.css — every drawer must animate enter + exit. */
+  animation: drawer-fade-in 0.18s ease-out;
+}
+
+.apx-backdrop.is-exiting {
+  animation: drawer-fade-out 0.22s ease-in forwards;
+  pointer-events: none;
 }
 
 /* Full-height panel sliding in from the right (not a centered modal). */
 .apx-dialog {
   display: flex;
-  width: min(1100px, 100%);
+  /* Official docs drawer is tighter than 1100px; keep content readable without dominating the viewport. */
+  width: min(900px, 100%);
   height: 100%;
   max-height: 100%;
   overflow: hidden;
@@ -29,29 +36,19 @@
   border-left: 1px solid var(--surfaceAlt2Color);
   border-radius: 0;
   box-shadow: -12px 0 40px -16px rgba(0, 0, 0, 0.4);
-  animation: apx-slide-in 0.22s ease-out;
+  animation: drawer-slide-in 0.24s ease-out;
 }
 
-@keyframes apx-fade {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes apx-slide-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
+.apx-dialog.is-exiting {
+  animation: drawer-slide-out 0.22s ease-in forwards;
 }
 
 /* ------------------------------------------------------------------ sidebar */
 
 .apx-sidebar {
   display: flex;
-  flex: 0 0 232px;
+  /* Official PB API docs sidebar is ~170–180px; keep a little headroom for CJK labels. */
+  flex: 0 0 176px;
   flex-direction: column;
   min-width: 0;
   /* required so `max-height` can win over the automatic flex min size */
@@ -68,7 +65,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 16px 18px 12px;
+  padding: 14px 12px 10px;
   background: var(--surfaceAlt1Color);
   border-bottom: 1px solid var(--surfaceAlt2Color);
 }
@@ -93,38 +90,41 @@
 .apx-nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 10px;
+  gap: 2px;
+  padding: 8px;
 }
 
 .apx-nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
   width: 100%;
-  padding: 7px 10px;
+  /* Official PB docs nav: soft gray pill, not a blue primary button. */
+  min-height: 36px;
+  padding: 8px 12px;
   font-family: inherit;
   font-size: 13px;
-  line-height: 1.4;
+  font-weight: 500;
+  line-height: 1.35;
   color: var(--surfaceTxtColor);
   text-align: left;
   cursor: pointer;
-  background: none;
+  background: transparent;
   border: 0;
-  border-radius: var(--borderRadius);
+  border-radius: 8px;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
 .apx-nav-item:hover {
   background: var(--surfaceAlt2Color);
+  color: var(--surfaceTxtColor);
 }
 
-.apx-nav-item.active {
-  font-weight: 600;
-  color: #fff;
-  background: var(--accentColor);
-}
-
-.apx-nav-item.active:hover {
-  background: var(--accentColor);
+/* Avoid global `button.active` (filled chip). Use soft gray like official. */
+.apx-nav-item.is-active,
+.apx-nav-item.is-active:hover {
+  font-weight: 500;
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt2Color);
 }
 
 .apx-nav-item[aria-disabled="true"] {
@@ -134,7 +134,7 @@
 }
 
 .apx-nav-item[aria-disabled="true"]:hover {
-  background: none;
+  background: transparent;
 }
 
 .apx-nav-divider {

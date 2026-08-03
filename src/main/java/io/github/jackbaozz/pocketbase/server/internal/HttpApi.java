@@ -183,13 +183,19 @@ public final class HttpApi implements HttpHandler {
       sendJson(
           exchange, 500, errorBody(500, "Internal server error.", Map.of("error", e.getMessage())));
     } finally {
+      long elapsedMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
+      int logStatus = status == 0 ? 200 : status;
+      String streamSuffix = status == 0 ? ", stream" : "";
+      System.out.printf(
+          "%s %s %d (%dms)%s%n",
+          method, path, logStatus, elapsedMs, streamSuffix);
       if (shouldLogActivity(path, method, status)) {
         try {
           store.recordActivityLog(
               method,
               activityUrl(exchange),
               status,
-              Math.max(0L, (System.nanoTime() - started) / 1_000_000L),
+              elapsedMs,
               principal(exchange).orElse(null),
               requestHeaders(exchange),
               remoteAddress(exchange));

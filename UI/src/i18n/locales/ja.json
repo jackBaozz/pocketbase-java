@@ -311,6 +311,7 @@
     "current_password": "現在のパスワード",
     "bootstrap": "初期設定",
     "superuser": "スーパーユーザー",
+    "superuser_login": "スーパーユーザーログイン",
     "create_first_superuser": "最初のスーパーユーザーを作成",
     "sign_in_manage": "サインインしてデータを管理",
     "create_and_sign_in": "作成してサインイン",
@@ -416,13 +417,169 @@
   },
   "api_preview": {
     "title": "API プレビュー",
-    "api_details": "API の詳細",
+    "api_details": "API 詳細",
     "example_responses": "レスポンス例",
-    "type": "タイプ",
+    "type": "型",
     "description": "説明",
     "required": "（必須）",
     "optional": "（任意）",
-    "not_enabled": "このコレクションでは有効になっていません"
+    "not_enabled": "このコレクションでは有効になっていません",
+    "body_params": "ボディパラメータ",
+    "query_params": "?クエリパラメータ",
+    "path_params": "パスパラメータ",
+    "other_fields": "その他のフィールド",
+    "field_value": "フィールド型の値。",
+    "body_content_types": "ボディパラメータは application/json または multipart/form-data で送信できます。",
+    "file_upload": "ファイルアップロードは multipart/form-data のみ対応しています。",
+    "requires_auth": "Authorization:TOKEN ヘッダーが必要です",
+    "requires_superuser": "スーパーユーザーの Authorization:TOKEN ヘッダーが必要です",
+    "expand_intro": "レコードのリレーションを自動展開します。例：",
+    "expand_depth": "最大 6 階層までのネストしたリレーション展開に対応します。展開結果は各レコードの \"expand\" プロパティに追加されます。",
+    "expand_rules": "リクエストユーザーが閲覧可能なリレーションのみ展開されます。",
+    "fields_intro": "JSON レスポンスに含めるフィールドをカンマ区切りで指定します（既定は全フィールド）。例：",
+    "fields_wildcard": "特定の深さのすべてのキーを対象にするには \"*\" を使います。",
+    "fields_modifiers": ":excerpt(maxLength, withEllipsis?) 修飾子は文字列フィールドの短いプレーンテキスト版を返します。",
+    "auth_email": "認証レコードのメールアドレス。",
+    "auth_email_visibility": "レコード取得時に認証レコードのメールを表示/非表示にするか。スーパーユーザーとレコード所有者は常にメールにアクセスできます。",
+    "auth_password": "認証レコードのパスワード。",
+    "auth_password_confirm": "認証レコードのパスワード確認。",
+    "auth_verified": "認証レコードが検証済みかどうかを示します。このフィールドはスーパーユーザー、または \"Manage\" 権限を持つ認証レコードのみ設定できます。",
+    "nav": {
+      "list": "一覧/検索",
+      "view": "取得",
+      "create": "作成",
+      "update": "更新",
+      "delete": "削除",
+      "realtime": "リアルタイム",
+      "batch": "バッチ",
+      "auth_methods": "認証方式一覧",
+      "auth_password": "パスワード認証",
+      "auth_oauth2": "OAuth2 認証",
+      "auth_otp": "OTP 認証",
+      "auth_refresh": "認証更新",
+      "request_verification": "検証リクエスト",
+      "confirm_verification": "検証確認",
+      "request_password_reset": "パスワードリセット要求",
+      "confirm_password_reset": "パスワードリセット確認",
+      "request_email_change": "メール変更要求",
+      "confirm_email_change": "メール変更確認",
+      "request_otp": "OTP 要求",
+      "impersonate": "なりすまし"
+    },
+    "list": {
+      "desc": "並べ替えとフィルタに対応したページング済みレコード一覧を取得します。"
+    },
+    "view": {
+      "desc": "ID で単一レコードを取得します。"
+    },
+    "create": {
+      "desc": "新しいレコードを作成します。"
+    },
+    "update": {
+      "desc": "既存レコードを更新します。",
+      "password_note": "パスワード変更時、そのレコードに対して以前発行されたトークンはすべて自動的に無効になり、更新後に再認証が必要です。"
+    },
+    "delete": {
+      "desc": "単一レコードを削除します。"
+    },
+    "realtime": {
+      "desc": "Server-Sent Events (SSE) でリアルタイム変更を購読します。",
+      "events": "作成・更新・削除のレコード操作に対してイベントが送信されます。",
+      "single": "単一レコードを購読する場合、コレクションの View ルールで購読者がイベントを受け取れるかが決まります。",
+      "collection": "コレクション全体を購読する場合は、コレクションの List/Search ルールが使われます。"
+    },
+    "batch": {
+      "desc": "1 回のリクエストで複数レコードをバッチかつトランザクションで作成/更新/upsert/削除します。",
+      "enable": "バッチ Web API はアプリ設定で明示的に有効化し設定する必要があります。",
+      "perf": "このエンドポイントは単一 DB トランザクションで処理するため、設定や使い方を誤るとアプリ性能が低下する可能性があります。"
+    },
+    "auth_methods": {
+      "desc": "コレクションで許可されたすべての公開認証方式の一覧を返します。"
+    },
+    "auth_with_password": {
+      "desc": "識別子（メール/ユーザー名）とパスワードの組み合わせで認証します。"
+    },
+    "auth_with_oauth2": {
+      "desc": "OAuth2 プロバイダーで認証し、新しい認証トークンとレコードデータを返します。"
+    },
+    "auth_with_otp": {
+      "desc": "ワンタイム/短寿命パスワード（OTP）で認証します。",
+      "note": "認証成功時、OTP の送信元がメールでユーザーが未検証の場合、ユーザーも検証済みとしてマークされます。"
+    },
+    "auth_refresh": {
+      "desc": "既に認証済みのレコードに対する新しい認証レスポンス（トークンとレコードデータ）を返します。",
+      "hint": "通常はページ/画面の再読み込み時に呼び出し、保存済みの認証データが有効で最新であることを確認します。"
+    },
+    "request_verification": {
+      "desc": "指定した認証レコードへアカウント検証メール要求を送信します。"
+    },
+    "confirm_verification": {
+      "desc": "検証メールのトークンでアカウント検証要求を確認します。"
+    },
+    "request_password_reset": {
+      "desc": "指定した認証レコードへパスワードリセットメール要求を送信します。"
+    },
+    "confirm_password_reset": {
+      "desc": "パスワードリセット要求を確認し、新しいパスワードを設定します。",
+      "note": "パスワードリセット成功後、そのレコードに発行済みのトークンはすべて無効になり、レコードは検証済みになります。"
+    },
+    "request_email_change": {
+      "desc": "現在認証済みの認証レコードへメール変更要求を送信します。"
+    },
+    "confirm_email_change": {
+      "desc": "確認メールのトークンでメール変更要求を確認します。",
+      "note": "メール変更成功後、そのレコードに発行済みのトークンはすべて無効になります。"
+    },
+    "request_otp": {
+      "desc": "指定した認証レコードへワンタイムパスワード（OTP）メールを送信します。",
+      "note": "指定メールのユーザーが存在しなくても otpId は返され、基本的な列挙対策になります。"
+    },
+    "impersonate": {
+      "desc": "パスワードを知らなくても、指定した認証レコードの新しい認証トークンを返します。",
+      "note": "スーパーユーザーのみ実行できます。生成されるトークンは静的で更新できません。"
+    },
+    "param": {
+      "page": "ページング一覧のページ番号（オフセット相当、既定 1）。",
+      "per_page": "1 ページあたりの最大返却件数（既定 30）。",
+      "sort": "レコードの並び順フィールドを指定。先頭に -/+（既定は +）を付けて DESC / ASC を指定します。",
+      "sort_special": "コレクションの非隠しフィールドに加え、次の特別なソートフィールドも使えます：",
+      "filter": "返却レコードをフィルタします。例：",
+      "filter_encoding": "すべてのクエリパラメータは正しく URL エンコードする必要があります（SDK が自動処理します）。",
+      "filter_syntax": "フィルタ構文は OPERAND OPERATOR OPERAND 形式です。対応演算子: =, !=, >, >=, <, <=, ~ (like), !~ (not like) および any/少なくとも1件一致の ? 接頭辞バリアント。括弧、&& (AND)、|| (OR) でグループ化できます。",
+      "skip_total": "1/true にすると総数クエリをスキップし、レスポンスの \"totalItems\" と \"totalPages\" は -1 になります。",
+      "skip_total_hint": "総数が不要な場合やカーソルページング時に検索を大幅に高速化できます。getFirstListItem() と getFullList() SDK メソッドでは既定で有効です。",
+      "id_view": "取得するレコードの ID。",
+      "id_update": "更新するレコードの ID。",
+      "id_delete": "削除するレコードの ID。",
+      "id_impersonate": "なりすまし対象の認証レコード ID。",
+      "client_id": "初期 \"PB_CONNECT\" イベントで受け取った SSE 接続 ID。",
+      "subscriptions": "購読するトピック一覧。空リストを送ると以前の購読をすべて解除します。",
+      "requests": "処理するバッチリクエストの一覧。公式 SDK ではサービスハンドラが透過的に構築します。",
+      "requests_actions": "対応するバッチ操作：",
+      "requests_shape": "各リクエスト要素は \"url\"（クエリ可）、\"method\"、\"headers\"、\"body\" を受け付けます。",
+      "requests_multipart": "multipart/form-data で送る場合、バッチ操作フィールドは \"@jsonPayload\" に JSON シリアライズし、ファイルキーは \"requests.N.fileField\" 形式に従う必要があります。",
+      "identity": "認証するレコードの識別子（メール/ユーザー名）。",
+      "identity_field": "識別フィールドが複数ある場合、検索に使うフィールド名を明示。空なら自動検出。",
+      "password": "認証レコードのパスワード。",
+      "provider": "OAuth2 クライアントプロバイダー名（例: \"google\"）。",
+      "code": "初期リクエストで返された認可コード。",
+      "code_verifier": "初期リクエストで code_challenge の一部として送った code verifier。",
+      "redirect_url": "初期リクエストで送ったリダイレクト URL。",
+      "create_data": "OAuth2 サインアップ時に認証レコード作成に使う任意データ。通常の create と同じ要件と検証に従い、JSON のみ（OAuth2 サインアップではファイルアップロード非対応）。",
+      "email_verification": "検証要求を送る認証レコードのメールアドレス（存在する場合）。",
+      "token_verification": "検証要求メール内のトークン。",
+      "email_password_reset": "パスワードリセット要求を送る認証レコードのメールアドレス（存在する場合）。",
+      "token_password_reset": "パスワードリセット要求メール内のトークン。",
+      "new_password": "設定する新しいパスワード。",
+      "new_password_confirm": "新しいパスワードの確認。",
+      "new_email": "メール変更要求を送る新しいメールアドレス。",
+      "token_email_change": "メール変更要求メール内のトークン。",
+      "password_email_change": "メール変更を確認するためのアカウントパスワード。",
+      "email_otp": "OTP 要求を送る認証レコードのメールアドレス（存在する場合）。",
+      "otp_id": "OTP 要求の ID。",
+      "otp_password": "OTP 要求のワンタイム/短寿命パスワード。",
+      "duration": "任意のカスタムトークン有効秒数。既定はコレクションの認証トークン有効期間。"
+    }
   },
   "language": {
     "change": "言語を変更"

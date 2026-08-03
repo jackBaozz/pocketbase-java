@@ -1,5 +1,6 @@
 import {
   Activity,
+  ArrowRight,
   Archive,
   CheckSquare2,
   ChevronDown,
@@ -46,7 +47,13 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from "react";
+import type {
+  AnimationEvent as ReactAnimationEvent,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactNode,
+  RefObject
+} from "react";
 import type { TFunction } from "i18next";
 import { AuthActionPages } from "./AuthActionPages";
 import { DropdownSelect } from "./components/DropdownSelect";
@@ -1805,7 +1812,7 @@ function App() {
     }
   }
 
-  async function saveCollection(payload: CollectionPayload) {
+  async function saveCollection(payload: CollectionPayload): Promise<boolean> {
     try {
       if (collectionEditor?.mode === "edit" && collectionEditor.collection) {
         await api(`/api/collections/${encodeURIComponent(collectionEditor.collection.name)}`, {
@@ -1817,11 +1824,13 @@ function App() {
         await api("/api/collections", { method: "POST", body: payload });
         notify(t("notifications.collection_created", "Collection created"));
       }
-      setCollectionEditor(null);
+      // Leave the editor open so CollectionModal can play the drawer exit animation.
       await refreshCollections();
       broadcastSync("collections");
+      return true;
     } catch (error) {
       notify(errorMessage(error), "error");
+      return false;
     }
   }
 
@@ -2620,7 +2629,7 @@ function App() {
   const pageMeta = viewMeta(view, selected, t);
   const applicationName = settingsApplicationName(settings) || "pocketbase-java";
   const documentTitle = authenticated && pageMeta.title !== applicationName ? `${pageMeta.title} · ${applicationName}` : applicationName;
-  const showWorkspaceTopbar = !authenticated || (!collectionView && !settingsView && view !== "logs");
+  const showWorkspaceTopbar = authenticated && (!collectionView && !settingsView && view !== "logs");
 
   useEffect(() => {
     document.title = documentTitle;
@@ -2635,8 +2644,16 @@ function App() {
     return <AuthActionPages />;
   }
 
+  const shellClassName = [
+    "app-shell",
+    hideControls ? "hide-controls" : "",
+    !authenticated ? "auth-shell" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={hideControls ? "app-shell hide-controls" : "app-shell"}>
+    <div className={shellClassName}>
       <header className="app-header">
         <button
           className="logo"
@@ -3136,8 +3153,17 @@ function AuthPanel(props: AuthPanelProps) {
 
   if (props.mfaChallenge) {
     return (
-      <section className="auth-layout">
-        <div className="auth-copy">
+      <section className="auth-layout auth-login-panel">
+        <div className="auth-copy auth-login-copy">
+          <img
+            className="auth-brand-mark"
+            src={`${import.meta.env.BASE_URL}favicon.svg`}
+            alt=""
+            aria-hidden="true"
+            width={46}
+            height={46}
+            draggable={false}
+          />
           <p className="eyebrow">{t("auth.mfa_step", "Step 2 of 2")}</p>
           <h2>{t("auth.enter_otp", "Enter the one-time code")}</h2>
           <p className="auth-hint">
@@ -3149,7 +3175,7 @@ function AuthPanel(props: AuthPanelProps) {
         </div>
         <form className="auth-form" onSubmit={props.onOtpSubmit}>
           <label>
-            {t("auth.otp_code", "One-time code")}
+            <span className="auth-field-label">{t("auth.otp_code", "One-time code")}</span>
             <input
               id="superuser-otp"
               name="otp"
@@ -3180,14 +3206,30 @@ function AuthPanel(props: AuthPanelProps) {
   }
 
   return (
-    <section className="auth-layout">
-      <div className="auth-copy">
-        <p className="eyebrow">{props.setupRequired ? t("auth.bootstrap", "Bootstrap") : t("auth.superuser", "Superuser")}</p>
-        <h2>{props.setupRequired ? t("auth.create_first_superuser", "Create the first superuser") : t("auth.sign_in_manage", "Sign in to manage data")}</h2>
+    <section className="auth-layout auth-login-panel">
+      <div className="auth-copy auth-login-copy">
+        <img
+          className="auth-brand-mark"
+          src={`${import.meta.env.BASE_URL}favicon.svg`}
+          alt=""
+          aria-hidden="true"
+          width={46}
+          height={46}
+          draggable={false}
+        />
+        {props.setupRequired && <p className="eyebrow">{t("auth.bootstrap", "Bootstrap")}</p>}
+        <h2>
+          {props.setupRequired
+            ? t("auth.create_first_superuser", "Create the first superuser")
+            : t("auth.superuser_login", "Superuser login")}
+        </h2>
       </div>
       <form className="auth-form" onSubmit={props.onSubmit}>
         <label>
-          {t("auth.email", "Email")}
+          <span className="auth-field-label">
+            {t("auth.email", "Email")}
+            <span className="auth-required" aria-hidden="true">*</span>
+          </span>
           <input
             id="superuser-email"
             name="email"
@@ -3199,7 +3241,10 @@ function AuthPanel(props: AuthPanelProps) {
           />
         </label>
         <label>
-          {t("auth.password", "Password")}
+          <span className="auth-field-label">
+            {t("auth.password", "Password")}
+            <span className="auth-required" aria-hidden="true">*</span>
+          </span>
           <PasswordInput
             id="superuser-password"
             name="password"
@@ -3222,8 +3267,17 @@ function AuthPanel(props: AuthPanelProps) {
           </button>
         )}
         <button className="primary submit" type="submit" disabled={props.loading}>
-          <KeyRound size={16} />
-          {props.setupRequired ? t("auth.create_and_sign_in", "Create and sign in") : t("auth.sign_in", "Sign in")}
+          {props.setupRequired ? (
+            <>
+              {t("auth.create_and_sign_in", "Create and sign in")}
+              <KeyRound size={16} />
+            </>
+          ) : (
+            <>
+              {t("auth.sign_in", "Sign in")}
+              <ArrowRight size={18} />
+            </>
+          )}
         </button>
       </form>
     </section>
@@ -3874,7 +3928,7 @@ function RecordsView(props: RecordsViewProps) {
                   <th key={column} aria-sort={sorted ? (sortState.direction === "asc" ? "ascending" : "descending") : "none"}>
                     <button
                       type="button"
-                      className={sorted ? "records-sort-button active" : "records-sort-button"}
+                      className={sorted ? "records-sort-button is-sorted" : "records-sort-button"}
                       onClick={() => toggleColumnSort(column)}
                       title={`${t("collections.sort", "Sort")}: ${column}`}
                       aria-label={`${t("collections.sort", "Sort")}: ${column}`}
@@ -6889,7 +6943,7 @@ type CollectionModalProps = {
   onConfirm: (request: ConfirmRequest) => Promise<boolean>;
   onDryRunView: (query: string) => Promise<ViewQueryPreview>;
   onGenerateAppleClientSecret: (input: AppleClientSecretInput) => Promise<{ secret: string }>;
-  onSubmit: (payload: CollectionPayload) => void;
+  onSubmit: (payload: CollectionPayload) => Promise<boolean>;
 };
 
 function CollectionModal({
@@ -6978,6 +7032,7 @@ function CollectionModal({
   const [ruleMemory, setRuleMemory] = useState<Partial<Record<RuleKey, string>>>({});
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("fields");
+  const [exiting, setExiting] = useState(false);
   const tabs = useMemo(() => collectionModalTabs(type, t), [type, t]);
 
   const snapshot = JSON.stringify({
@@ -7007,6 +7062,7 @@ function CollectionModal({
   const hasChanges = snapshot !== initialSnapshot.current;
 
   async function requestClose() {
+    if (exiting) return;
     if (hasChanges) {
       const discard = await onConfirm({
         title: t("confirm.discard_changes_title", "Discard changes"),
@@ -7019,7 +7075,7 @@ function CollectionModal({
       });
       if (!discard) return;
     }
-    onClose();
+    setExiting(true);
   }
 
   useEffect(() => {
@@ -7079,7 +7135,7 @@ function CollectionModal({
         }
       }
 
-      onSubmit({
+      const saved = await onSubmit({
         name: name.trim(),
         type,
         fields: type === "view" ? (collection?.fields ?? []) : parsedFields,
@@ -7140,6 +7196,7 @@ function CollectionModal({
             }
           : {})
       });
+      if (saved) setExiting(true);
     } catch (err) {
       setError(errorMessage(err));
     }
@@ -7310,8 +7367,11 @@ function CollectionModal({
           ? t("collections.edit_collection_title", { name: collection?.name, defaultValue: "Edit {{name}}" })
           : t("actions.new_collection", "New collection")
       }
-      onClose={requestClose}
+      variant="drawer"
       wide
+      exiting={exiting}
+      onClose={requestClose}
+      onExitComplete={onClose}
     >
       <form className="modal-grid collection-upsert-form" onSubmit={submit}>
         <section className="collection-modal-head">
@@ -7944,11 +8004,11 @@ function CollectionModal({
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
-          <button type="button" className="subtle" onClick={requestClose}>
+          <button type="button" className="subtle" onClick={requestClose} disabled={exiting}>
             <X size={16} />
             {t("actions.cancel", "Cancel")}
           </button>
-          <button className="primary" type="submit">
+          <button className="primary" type="submit" disabled={exiting}>
             <Save size={16} />
             {t("actions.save", "Save")}
           </button>
@@ -8633,30 +8693,70 @@ type ModalProps = {
   title: string;
   onClose: () => void;
   wide?: boolean;
+  /** Right-edge drawer with slide in/out animations (collection editor). */
+  variant?: "dialog" | "drawer";
+  /** When true, plays the exit animation then calls onExitComplete. */
+  exiting?: boolean;
+  onExitComplete?: () => void;
   children: ReactNode;
 };
 
-function Modal({ title, onClose, wide, children }: ModalProps) {
+function Modal({ title, onClose, wide, variant = "dialog", exiting = false, onExitComplete, children }: ModalProps) {
   const { t } = useTranslation();
-  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose);
+  const isDrawer = variant === "drawer";
+  const { dialogRef, onBackdropMouseDown, onBackdropMouseUp } = useModalInteraction(onClose, {
+    active: !exiting
+  });
+
+  function handlePanelAnimationEnd(event: ReactAnimationEvent<HTMLElement>) {
+    if (!isDrawer || !exiting) return;
+    if (event.target !== event.currentTarget) return;
+    // Only finish after the panel finishes sliding out (not the enter animation).
+    // Must match `DRAWER_SLIDE_OUT` / styles.css `drawer-slide-out`.
+    if (event.animationName !== "drawer-slide-out") return;
+    onExitComplete?.();
+  }
+
+  const backdropClass = [
+    isDrawer ? "drawer-backdrop" : "modal-backdrop",
+    isDrawer && exiting ? "is-exiting" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const panelClass = [
+    isDrawer ? "drawer-panel" : "modal",
+    wide ? "wide" : "",
+    isDrawer && exiting ? "is-exiting" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div
-      className="modal-backdrop"
+      className={backdropClass}
       role="presentation"
-      onMouseDown={onBackdropMouseDown}
-      onMouseUp={onBackdropMouseUp}
+      onMouseDown={exiting ? undefined : onBackdropMouseDown}
+      onMouseUp={exiting ? undefined : onBackdropMouseUp}
     >
       <section
         ref={dialogRef}
-        className={wide ? "modal wide" : "modal"}
+        className={panelClass}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
+        onAnimationEnd={handlePanelAnimationEnd}
       >
         <header>
           <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} title={t("actions.close", "Close")} aria-label={t("actions.close", "Close")}>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            disabled={exiting}
+            title={t("actions.close", "Close")}
+            aria-label={t("actions.close", "Close")}
+          >
             <X size={18} />
           </button>
         </header>
