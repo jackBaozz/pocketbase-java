@@ -103,7 +103,8 @@
     "refresh_records": "Refresh records",
     "test": "Test",
     "done": "Done",
-    "remove": "Remove"
+    "remove": "Remove",
+    "reset": "Reset"
   },
   "common": {
     "loading": "Loading...",
@@ -188,13 +189,15 @@
       "application": "Application",
       "general": "General",
       "mail": "Mail settings",
-      "storage": "File storage",
+      "storage": "Files storage",
       "system": "System",
       "backups": "Backups",
       "crons": "Crons",
       "export": "Export collections",
       "import": "Import collections",
-      "sql": "SQL console"
+      "sql": "SQL console",
+      "sync": "Sync",
+      "debug": "Debug"
     },
     "maintenance": "Maintenance",
     "scheduler": "Scheduler",
@@ -298,7 +301,10 @@
     "min_log_level_help": "Logs with level below the minimum will be ignored.",
     "default_log_levels": "Default log levels:",
     "enable_ip_logging": "Enable IP logging",
-    "enable_auth_id_logging": "Enable Auth Id logging"
+    "enable_auth_id_logging": "Enable Auth Id logging",
+    "accent_custom": "Custom color",
+    "accent_eyedropper": "Pick color from screen",
+    "accent_presets": "Presets"
   },
   "auth": {
     "login": "Login",
@@ -863,7 +869,8 @@
     "search_placeholder": "Search term or filter...",
     "load_more": "Load more ({{count}} remaining)",
     "load_more_short": "Load more",
-    "record_json": "Record JSON"
+    "record_json": "Record JSON",
+    "selected_count": "Selected {{count}} record"
   },
   "parity": {
     "collection": {

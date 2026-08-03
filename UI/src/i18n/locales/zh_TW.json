@@ -103,7 +103,8 @@
     "refresh_records": "重新整理紀錄",
     "test": "測試",
     "done": "完成",
-    "remove": "移除"
+    "remove": "移除",
+    "reset": "重設"
   },
   "common": {
     "loading": "載入中...",
@@ -185,16 +186,18 @@
     "test_email": "測試郵件",
     "test_email_desc": "使用目前郵件配置傳送一封認證測試郵件。",
     "nav": {
-      "application": "應用配置",
+      "application": "應用",
       "general": "一般設定",
       "mail": "郵件設定",
       "storage": "檔案儲存",
-      "system": "系統功能",
+      "system": "系統",
       "backups": "資料備份",
       "crons": "定時任務",
       "export": "匯出集合",
       "import": "匯入集合",
-      "sql": "SQL 控制台"
+      "sql": "SQL 控制台",
+      "sync": "同步",
+      "debug": "偵錯"
     },
     "maintenance": "維護",
     "scheduler": "排程器",
@@ -298,7 +301,10 @@
     "min_log_level_help": "低於最低等級的日誌將被忽略。",
     "default_log_levels": "預設日誌等級：",
     "enable_ip_logging": "啟用 IP 記錄",
-    "enable_auth_id_logging": "啟用 Auth Id 記錄"
+    "enable_auth_id_logging": "啟用 Auth Id 記錄",
+    "accent_custom": "自訂顏色",
+    "accent_eyedropper": "從螢幕取色",
+    "accent_presets": "預設顏色"
   },
   "auth": {
     "login": "登入",
@@ -863,7 +869,8 @@
     "load_more": "載入更多（剩餘 {{count}} 筆）",
     "load_more_short": "載入更多",
     "view_record_title": "檢視 {{id}}",
-    "record_json": "紀錄 JSON"
+    "record_json": "紀錄 JSON",
+    "selected_count": "已選擇 {{count}} 筆"
   },
   "parity": {
     "collection": {

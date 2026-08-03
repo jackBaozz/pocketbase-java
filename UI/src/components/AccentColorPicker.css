@@ -1,0 +1,248 @@
+/* Official-style accent color control for Application settings. */
+
+.accent-picker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 132px;
+}
+
+.accent-picker-label {
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.accent-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px 0 12px;
+  border: 1px solid color-mix(in srgb, #000 8%, transparent);
+  border-radius: var(--borderRadius);
+  color: #fff;
+  font-family: var(--monospaceFontFamily, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 12%, transparent);
+}
+
+.accent-picker-trigger:hover,
+.accent-picker-trigger:focus-visible {
+  filter: brightness(1.05);
+  outline: none;
+}
+
+.accent-picker-hex {
+  text-transform: lowercase;
+}
+
+.accent-picker-chevron {
+  flex: 0 0 auto;
+  opacity: 0.92;
+  transition: transform 0.15s ease;
+}
+
+.accent-picker-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.accent-picker-error {
+  display: block;
+}
+
+.accent-picker-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 220px;
+  padding: 10px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: 12px;
+  background: var(--surfaceColor);
+  box-shadow: var(--shadow), 0 12px 28px -16px rgba(0, 0, 0, 0.35);
+}
+
+.accent-picker-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accent-picker-swatch {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
+}
+
+.accent-picker-swatch.is-selected {
+  outline: 2px solid var(--surfaceTxtColor);
+  outline-offset: 2px;
+}
+
+.accent-picker-more {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px dashed var(--surfaceAlt3Color);
+  border-radius: 999px;
+  color: var(--surfaceTxtHintColor);
+  background: var(--surfaceAlt1Color);
+  cursor: pointer;
+}
+
+.accent-picker-more:hover {
+  color: var(--surfaceTxtColor);
+  border-color: var(--surfaceTxtHintColor);
+}
+
+.accent-picker-advanced {
+  display: grid;
+  gap: 10px;
+  width: 240px;
+}
+
+.accent-picker-sv {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  overflow: hidden;
+  border-radius: 8px;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.accent-picker-sv-white,
+.accent-picker-sv-black {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.accent-picker-sv-white {
+  background: linear-gradient(to right, #fff, transparent);
+}
+
+.accent-picker-sv-black {
+  background: linear-gradient(to top, #000, transparent);
+}
+
+.accent-picker-sv-thumb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 35%, transparent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.accent-picker-tools {
+  display: grid;
+  grid-template-columns: 28px 28px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.accent-picker-eye {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt1Color);
+  cursor: pointer;
+}
+
+.accent-picker-solid {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 15%, transparent);
+}
+
+.accent-picker-hue {
+  position: relative;
+  height: 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    #ff0000 0%,
+    #ffff00 17%,
+    #00ff00 33%,
+    #00ffff 50%,
+    #0000ff 67%,
+    #ff00ff 83%,
+    #ff0000 100%
+  );
+}
+
+.accent-picker-hue-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #000 30%, transparent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.accent-picker-rgb {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.accent-picker-rgb-field {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  color: var(--surfaceTxtHintColor);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.accent-picker-rgb-field input {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 6px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.accent-picker-back {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  color: var(--surfaceTxtHintColor);
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--surfaceAlt1Color);
+  cursor: pointer;
+}
+
+.accent-picker-back:hover {
+  color: var(--surfaceTxtColor);
+}

@@ -103,7 +103,8 @@
     "refresh_records": "Actualiser les enregistrements",
     "test": "Tester",
     "done": "Terminer",
-    "remove": "Retirer"
+    "remove": "Retirer",
+    "reset": "Réinitialiser"
   },
   "common": {
     "loading": "Chargement...",
@@ -194,7 +195,9 @@
       "crons": "Tâches Cron",
       "export": "Exporter des collections",
       "import": "Importer des collections",
-      "sql": "Console SQL"
+      "sql": "Console SQL",
+      "sync": "Synchronisation",
+      "debug": "Débogage"
     },
     "maintenance": "Maintenance",
     "scheduler": "Planificateur",
@@ -298,7 +301,10 @@
     "min_log_level_help": "Les journaux sous le niveau minimum seront ignorés.",
     "default_log_levels": "Niveaux de journal par défaut :",
     "enable_ip_logging": "Activer la journalisation IP",
-    "enable_auth_id_logging": "Activer la journalisation Auth Id"
+    "enable_auth_id_logging": "Activer la journalisation Auth Id",
+    "accent_custom": "Couleur personnalisée",
+    "accent_eyedropper": "Prélever une couleur à l'écran",
+    "accent_presets": "Préréglages"
   },
   "auth": {
     "login": "Connexion",
@@ -863,7 +869,8 @@
     "load_more": "Charger plus ({{count}} restants)",
     "load_more_short": "Charger plus",
     "view_record_title": "Afficher {{id}}",
-    "record_json": "JSON de l’enregistrement"
+    "record_json": "JSON de l’enregistrement",
+    "selected_count": "{{count}} sélectionné(s)"
   },
   "parity": {
     "collection": {

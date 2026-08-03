@@ -103,7 +103,8 @@
     "refresh_records": "Обновить записи",
     "test": "Проверить",
     "done": "Готово",
-    "remove": "Убрать"
+    "remove": "Убрать",
+    "reset": "Сбросить"
   },
   "common": {
     "loading": "Загрузка...",
@@ -188,13 +189,15 @@
       "application": "Приложение",
       "general": "Общие",
       "mail": "Настройки почты",
-      "storage": "Хранилище файлов",
+      "storage": "Файловое хранилище",
       "system": "Система",
       "backups": "Резервные копии",
       "crons": "Задачи Cron",
       "export": "Экспорт коллекций",
       "import": "Импорт коллекций",
-      "sql": "SQL Консоль"
+      "sql": "SQL Консоль",
+      "sync": "Синхронизация",
+      "debug": "Отладка"
     },
     "maintenance": "Обслуживание",
     "scheduler": "Планировщик",
@@ -298,7 +301,10 @@
     "min_log_level_help": "Записи ниже минимального уровня будут игнорироваться.",
     "default_log_levels": "Уровни журнала по умолчанию:",
     "enable_ip_logging": "Включить запись IP",
-    "enable_auth_id_logging": "Включить запись Auth Id"
+    "enable_auth_id_logging": "Включить запись Auth Id",
+    "accent_custom": "Свой цвет",
+    "accent_eyedropper": "Взять цвет с экрана",
+    "accent_presets": "Пресеты"
   },
   "auth": {
     "login": "Войти",
@@ -863,7 +869,8 @@
     "load_more": "Загрузить ещё (осталось {{count}})",
     "load_more_short": "Загрузить ещё",
     "view_record_title": "Просмотреть {{id}}",
-    "record_json": "JSON записи"
+    "record_json": "JSON записи",
+    "selected_count": "Выбрано: {{count}}"
   },
   "parity": {
     "collection": {

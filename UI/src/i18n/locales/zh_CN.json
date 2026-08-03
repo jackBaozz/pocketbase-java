@@ -103,7 +103,8 @@
     "refresh_records": "刷新记录",
     "test": "测试",
     "done": "完成",
-    "remove": "移除"
+    "remove": "移除",
+    "reset": "重置"
   },
   "common": {
     "loading": "加载中...",
@@ -185,16 +186,18 @@
     "test_email": "测试邮件",
     "test_email_desc": "使用当前邮件配置发送一封认证测试邮件。",
     "nav": {
-      "application": "应用配置",
+      "application": "应用",
       "general": "常规设置",
       "mail": "邮件设置",
       "storage": "文件存储",
-      "system": "系统功能",
+      "system": "系统",
       "backups": "备份",
       "crons": "定时任务",
       "export": "导出集合",
       "import": "导入集合",
-      "sql": "SQL 控制台"
+      "sql": "SQL 控制台",
+      "sync": "同步",
+      "debug": "调试"
     },
     "maintenance": "维护",
     "scheduler": "调度器",
@@ -298,7 +301,10 @@
     "min_log_level_help": "低于最低级别的日志将被忽略。",
     "default_log_levels": "默认日志级别：",
     "enable_ip_logging": "启用 IP 记录",
-    "enable_auth_id_logging": "启用 Auth Id 记录"
+    "enable_auth_id_logging": "启用 Auth Id 记录",
+    "accent_custom": "自定义颜色",
+    "accent_eyedropper": "从屏幕取色",
+    "accent_presets": "预设颜色"
   },
   "auth": {
     "login": "登录",
@@ -863,7 +869,8 @@
     "load_more": "加载更多（剩余 {{count}} 条）",
     "load_more_short": "加载更多",
     "view_record_title": "查看 {{id}}",
-    "record_json": "记录 JSON"
+    "record_json": "记录 JSON",
+    "selected_count": "已选择 {{count}} 条"
   },
   "parity": {
     "collection": {

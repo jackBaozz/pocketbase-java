@@ -61,6 +61,7 @@ import { FieldEditor } from "./components/FieldEditor";
 
 import { useTranslation } from "react-i18next";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { AccentColorPicker } from "./components/AccentColorPicker";
 import { ApiPreview } from "./components/ApiPreview";
 import { CodeEditor, buildRuleCompletions } from "./components/CodeEditor";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -3475,27 +3476,31 @@ function CollectionGroup(props: CollectionGroupProps) {
   );
 }
 
+/** Official PocketBase settings sidebar: System → Sync → Debug (always expanded). */
 const getSettingsNavGroups = (t: any): Array<{
   title: string;
   items: Array<{ view: ViewName; label: string; icon: LucideIcon }>;
 }> => [
   {
-    title: t("settings.nav.application", "Application").toUpperCase(),
+    title: t("settings.nav.system", "System"),
     items: [
-      { view: "settings", label: t("settings.nav.general", "General"), icon: Settings },
+      { view: "settings", label: t("settings.nav.application", "Application"), icon: Settings },
       { view: "mail", label: t("settings.nav.mail", "Mail settings"), icon: Mail },
-      { view: "storage", label: t("settings.nav.storage", "File storage"), icon: HardDrive }
+      { view: "storage", label: t("settings.nav.storage", "Files storage"), icon: HardDrive },
+      { view: "backups", label: t("settings.nav.backups", "Backups"), icon: FileArchive },
+      { view: "crons", label: t("settings.nav.crons", "Crons"), icon: Clock3 }
     ]
   },
   {
-    title: t("settings.nav.system", "System").toUpperCase(),
+    title: t("settings.nav.sync", "Sync"),
     items: [
-      { view: "backups", label: t("settings.nav.backups", "Backups"), icon: FileArchive },
-      { view: "crons", label: t("settings.nav.crons", "Crons"), icon: Clock3 },
       { view: "export", label: t("settings.nav.export", "Export collections"), icon: Download },
-      { view: "import", label: t("settings.nav.import", "Import collections"), icon: Upload },
-      { view: "sql", label: t("settings.nav.sql", "SQL console"), icon: Code2 }
+      { view: "import", label: t("settings.nav.import", "Import collections"), icon: Upload }
     ]
+  },
+  {
+    title: t("settings.nav.debug", "Debug"),
+    items: [{ view: "sql", label: t("settings.nav.sql", "SQL console"), icon: Code2 }]
   }
 ];
 
@@ -3509,11 +3514,12 @@ function SettingsSidebar({
   hideControls: boolean;
 }) {
   const { t } = useTranslation();
+  const groups = useMemo(() => getSettingsNavGroups(t), [t]);
+
   return (
     <aside className="sidebar settings-sidebar">
-      {getSettingsNavGroups(t).map((group) => {
-        // The upstream "Sync" group contains collection import/export. This
-        // Java UI keeps those routes in System, so hide the same two controls.
+      {groups.map((group) => {
+        // Official "Sync" group is hidden when collection/record controls are locked.
         const items = hideControls
           ? group.items.filter((item) => item.view !== "export" && item.view !== "import")
           : group.items;
@@ -3527,6 +3533,7 @@ function SettingsSidebar({
                 return (
                   <button
                     key={item.view}
+                    type="button"
                     className={current === item.view ? "active" : ""}
                     onClick={() => onSelect(item.view)}
                   >
@@ -3536,7 +3543,6 @@ function SettingsSidebar({
                     <span className="nav-text">
                       <strong>{item.label}</strong>
                     </span>
-                    <ChevronRight size={15} />
                   </button>
                 );
               })}
@@ -3892,29 +3898,13 @@ function RecordsView(props: RecordsViewProps) {
         </div>
       </div>
 
-      {props.selectedIds.length > 0 && (
-        <div className="bulkbar">
-          <span>{t("transfer.selected_count", { count: props.selectedIds.length, defaultValue: "{{count}} selected" })}</span>
-          <button className="subtle" onClick={props.onClearSelection}>
-            <X size={16} />
-            {t("actions.clear", "Clear")}
-          </button>
-          {canDeleteRecords && (
-            <button className="danger subtle" onClick={props.onDeleteSelected}>
-              <Trash2 size={16} />
-              {t("actions.delete_selected", "Delete selected")}
-            </button>
-          )}
-        </div>
-      )}
-
       <div className="page-table-wrapper">
         <table className="records-table responsive-table">
           <thead>
             <tr>
               <th className="select-col">
                 <button
-                  className="checkbox-button"
+                  className={`checkbox-button${allVisibleSelected ? " is-checked" : ""}`}
                   onClick={() => props.onToggleAll(!allVisibleSelected)}
                   title={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
                   aria-label={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
@@ -3985,7 +3975,7 @@ function RecordsView(props: RecordsViewProps) {
                   >
                     <td className="select-col">
                       <button
-                        className="checkbox-button"
+                        className={`checkbox-button${selected ? " is-checked" : ""}`}
                         onClick={(event) => props.onToggleSelected(record.id, event.shiftKey)}
                         title={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                         aria-label={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
@@ -4041,6 +4031,49 @@ function RecordsView(props: RecordsViewProps) {
                   defaultValue: "Load more ({{count}} remaining)"
                 })}
           </button>
+        </div>
+      )}
+      {props.selectedIds.length > 0 && (
+        <div className="selection-tray" role="status" aria-live="polite">
+          <div className="selection-tray-panel">
+            <div className="selection-tray-group">
+              <span className="selection-tray-count">
+                {t("records.selected_count", {
+                  count: props.selectedIds.length,
+                  defaultValue: "Selected {{count}} record"
+                })}
+              </span>
+              <button type="button" className="selection-tray-btn" onClick={props.onClearSelection}>
+                {t("actions.reset", "Reset")}
+              </button>
+            </div>
+            <div className="selection-tray-group selection-tray-actions">
+              {canDeleteRecords && (
+                <button
+                  type="button"
+                  className="selection-tray-btn selection-tray-delete"
+                  onClick={props.onDeleteSelected}
+                >
+                  <Trash2 size={14} />
+                  {t("actions.delete", "Delete")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="selection-tray-btn selection-tray-json"
+                onClick={() => {
+                  const selectedRecords = props.records.filter((record) => selectedSet.has(record.id));
+                  downloadJsonFile(
+                    selectedRecords,
+                    `pocketbase-${props.collection.name}-selected.json`
+                  );
+                }}
+              >
+                <Download size={14} />
+                JSON
+              </button>
+            </div>
+          </div>
         </div>
       )}
       <footer className="page-footer">
@@ -4958,17 +4991,11 @@ function SettingsView(props: SettingsViewProps) {
               onChange={(event) => updateSetting(["meta", "appURL"], event.target.value)}
             />
           </label>
-          <label>
-            {t("settings.accent_color", "Accent color")}
-            <input
-              id="meta-accent-color"
-              name="meta.accentColor"
-              type="color"
-              value={draftAccentColor}
-              onChange={(event) => updateAccentColor(event.target.value)}
-            />
-            {accentColorError && <span className="form-error">{accentColorError}</span>}
-          </label>
+          <AccentColorPicker
+            value={draftAccentColor}
+            onChange={updateAccentColor}
+            error={accentColorError}
+          />
         </div>
 
         <div className="settings-switch-row">
@@ -6800,7 +6827,7 @@ function LogsView(props: LogsViewProps) {
               <th className="select-col">
                 <button
                   type="button"
-                  className="checkbox-button"
+                  className={`checkbox-button${allVisibleSelected ? " is-checked" : ""}`}
                   onClick={() => setSelectedIds(allVisibleSelected ? [] : props.logs.map((log) => log.id))}
                   title={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
                   aria-label={allVisibleSelected ? t("actions.clear_selection", "Clear selection") : t("actions.select_page", "Select page")}
@@ -6830,7 +6857,7 @@ function LogsView(props: LogsViewProps) {
                     <td className="select-col">
                       <button
                         type="button"
-                        className="checkbox-button"
+                        className={`checkbox-button${selected ? " is-checked" : ""}`}
                         onClick={(event) => {
                           event.stopPropagation();
                           toggleSelected(log.id, event.shiftKey);
@@ -9547,14 +9574,14 @@ function viewMeta(view: ViewName, collection: CollectionSchema | null, t: TFunct
   const titles: Record<ViewName, { title: string; eyebrow: string }> = {
     records: { title: collection?.name ?? t("nav.collections", "Collections"), eyebrow: collection?.type ?? t("common.admin_console", "Admin console") },
     schema: { title: collection?.name ?? t("nav.collections", "Collections"), eyebrow: t("collections.schema", "Schema") },
-    settings: { title: t("nav.settings", "Settings"), eyebrow: t("settings.nav.application", "Application") },
-    mail: { title: t("settings.nav.mail", "Mail settings"), eyebrow: t("settings.nav.application", "Application") },
-    storage: { title: t("settings.nav.storage", "File storage"), eyebrow: t("settings.nav.application", "Application") },
-    backups: { title: t("settings.nav.backups", "Backups"), eyebrow: t("settings.maintenance", "Maintenance") },
-    crons: { title: t("settings.nav.crons", "Crons"), eyebrow: t("settings.scheduler", "Scheduler") },
-    export: { title: t("settings.nav.export", "Export collections"), eyebrow: t("settings.nav.system", "System") },
-    import: { title: t("settings.nav.import", "Import collections"), eyebrow: t("settings.nav.system", "System") },
-    sql: { title: t("settings.nav.sql", "SQL console"), eyebrow: t("settings.nav.system", "System") },
+    settings: { title: t("settings.nav.application", "Application"), eyebrow: t("settings.nav.system", "System") },
+    mail: { title: t("settings.nav.mail", "Mail settings"), eyebrow: t("settings.nav.system", "System") },
+    storage: { title: t("settings.nav.storage", "Files storage"), eyebrow: t("settings.nav.system", "System") },
+    backups: { title: t("settings.nav.backups", "Backups"), eyebrow: t("settings.nav.system", "System") },
+    crons: { title: t("settings.nav.crons", "Crons"), eyebrow: t("settings.nav.system", "System") },
+    export: { title: t("settings.nav.export", "Export collections"), eyebrow: t("settings.nav.sync", "Sync") },
+    import: { title: t("settings.nav.import", "Import collections"), eyebrow: t("settings.nav.sync", "Sync") },
+    sql: { title: t("settings.nav.sql", "SQL console"), eyebrow: t("settings.nav.debug", "Debug") },
     logs: { title: t("nav.logs", "Logs"), eyebrow: t("logs.observability", "Observability") }
   };
   return titles[view];

@@ -103,7 +103,8 @@
     "refresh_records": "Actualizar registros",
     "test": "Probar",
     "done": "Listo",
-    "remove": "Quitar"
+    "remove": "Quitar",
+    "reset": "Restablecer"
   },
   "common": {
     "loading": "Cargando...",
@@ -194,7 +195,9 @@
       "crons": "Tareas (Crons)",
       "export": "Exportar colecciones",
       "import": "Importar colecciones",
-      "sql": "Consola SQL"
+      "sql": "Consola SQL",
+      "sync": "Sincronización",
+      "debug": "Depuración"
     },
     "maintenance": "Mantenimiento",
     "scheduler": "Programador",
@@ -298,7 +301,10 @@
     "min_log_level_help": "Los logs por debajo del mínimo se ignorarán.",
     "default_log_levels": "Niveles de log por defecto:",
     "enable_ip_logging": "Activar registro de IP",
-    "enable_auth_id_logging": "Activar registro de Auth Id"
+    "enable_auth_id_logging": "Activar registro de Auth Id",
+    "accent_custom": "Color personalizado",
+    "accent_eyedropper": "Elegir color de la pantalla",
+    "accent_presets": "Preajustes"
   },
   "auth": {
     "login": "Iniciar sesión",
@@ -863,7 +869,8 @@
     "load_more": "Cargar más ({{count}} restantes)",
     "load_more_short": "Cargar más",
     "view_record_title": "Ver {{id}}",
-    "record_json": "JSON del registro"
+    "record_json": "JSON del registro",
+    "selected_count": "{{count}} seleccionado(s)"
   },
   "parity": {
     "collection": {

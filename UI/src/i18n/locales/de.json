@@ -134,7 +134,8 @@
     "refresh_records": "Datensätze aktualisieren",
     "test": "Testen",
     "done": "Fertig",
-    "remove": "Entfernen"
+    "remove": "Entfernen",
+    "reset": "Zurücksetzen"
   },
   "auth": {
     "login": "Anmelden",
@@ -681,7 +682,9 @@
       "crons": "Cronjobs",
       "export": "Sammlungen exportieren",
       "import": "Sammlungen importieren",
-      "sql": "SQL-Konsole"
+      "sql": "SQL-Konsole",
+      "sync": "Sync",
+      "debug": "Debug"
     },
     "client_id": "Client-ID",
     "client_secret": "Client-Secret",
@@ -697,7 +700,10 @@
     "min_log_level_help": "Logs unter dem Mindestlevel werden ignoriert.",
     "default_log_levels": "Standard-Log-Level:",
     "enable_ip_logging": "IP-Protokollierung aktivieren",
-    "enable_auth_id_logging": "Auth-Id-Protokollierung aktivieren"
+    "enable_auth_id_logging": "Auth-Id-Protokollierung aktivieren",
+    "accent_custom": "Benutzerdefinierte Farbe",
+    "accent_eyedropper": "Farbe vom Bildschirm wählen",
+    "accent_presets": "Vorlagen"
   },
   "transfer": {
     "export_intro": "Unten findest du die aktuelle Sammlungskonfiguration, die du in eine andere PocketBase-Umgebung importieren kannst.",
@@ -863,7 +869,8 @@
     "load_more": "Mehr laden ({{count}} verbleibend)",
     "load_more_short": "Mehr laden",
     "view_record_title": "Datensatz {{id}} ansehen",
-    "record_json": "Datensatz-JSON"
+    "record_json": "Datensatz-JSON",
+    "selected_count": "{{count}} ausgewählt"
   },
   "parity": {
     "collection": {

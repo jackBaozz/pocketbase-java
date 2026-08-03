@@ -512,13 +512,16 @@ h2 {
 .sidebar-group-toggle {
   display: inline-flex;
   align-items: center;
+  justify-content: space-between;
   gap: 7px;
   width: 100%;
   margin: 0;
+  padding: 0;
   border: 0;
   background: transparent;
   cursor: pointer;
   color: var(--surfaceTxtHintColor);
+  text-align: left;
 }
 
 .sidebar-group-toggle:hover,
@@ -527,6 +530,7 @@ h2 {
 }
 
 .sidebar-group-chevron {
+  flex: 0 0 auto;
   transition: transform 0.2s ease;
 }
 
@@ -1611,6 +1615,7 @@ button.subtle.outline-button:focus-visible,
 
 .records-page,
 .logs-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 100%;
@@ -1977,6 +1982,102 @@ button.subtle.outline-button:focus-visible,
   font-weight: 800;
 }
 
+/* Official-style floating selection tray (bottom center over the table). */
+.selection-tray {
+  position: absolute;
+  left: 50%;
+  bottom: 58px;
+  z-index: 25;
+  display: flex;
+  justify-content: center;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.selection-tray-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* Extra space between [count+reset] and [delete+json]. */
+  gap: 14px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: 999px;
+  background: var(--surfaceColor);
+  box-shadow:
+    0 10px 30px -12px rgba(0, 0, 0, 0.28),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  pointer-events: auto;
+}
+
+.selection-tray-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.selection-tray-actions {
+  gap: 8px;
+}
+
+.selection-tray-count {
+  padding: 0 10px 0 8px;
+  color: var(--surfaceTxtColor);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.selection-tray-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: 999px;
+  background: var(--surfaceAlt1Color);
+  color: var(--surfaceTxtColor);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selection-tray-btn:hover,
+.selection-tray-btn:focus-visible {
+  background: var(--surfaceAlt2Color);
+}
+
+.selection-tray-delete {
+  border-color: color-mix(in srgb, var(--dangerColor) 45%, var(--surfaceAlt2Color));
+  background: transparent;
+  color: var(--dangerColor);
+}
+
+.selection-tray-delete:hover,
+.selection-tray-delete:focus-visible {
+  background: color-mix(in srgb, var(--dangerColor) 10%, var(--surfaceColor));
+}
+
+.selection-tray-json {
+  border-color: transparent;
+  background: var(--primaryColor);
+  color: #fff;
+}
+
+.selection-tray-json:hover,
+.selection-tray-json:focus-visible {
+  filter: brightness(1.06);
+  background: var(--primaryColor);
+  color: #fff;
+}
+
+/* Legacy top bulk bar (logs still uses it until migrated). */
 .bulkbar {
   display: flex;
   align-items: center;
@@ -2099,8 +2200,13 @@ tbody tr:hover td {
   background: var(--surfaceAlt1Color);
 }
 
-tbody tr.selected td {
-  background: var(--surfaceAccentColor);
+/* Selection is shown only by the green check — no full-row accent wash. */
+.records-table tbody tr.selected td {
+  background: transparent;
+}
+
+.records-table tbody tr.selected:hover td {
+  background: var(--surfaceAlt1Color);
 }
 
 /* The record list uses a roving tab stop. Keep the focus ring distinct from
@@ -2141,12 +2247,28 @@ td code {
   min-height: 28px;
   border-radius: var(--borderRadius);
   color: var(--surfaceTxtHintColor);
+  background: transparent;
 }
 
 .checkbox-button:hover,
 .checkbox-button:focus-visible {
-  color: var(--accentColor);
-  background: var(--surfaceAccentColor);
+  color: var(--surfaceTxtColor);
+  background: var(--surfaceAlt1Color);
+}
+
+/* Selected mark: green outlined square + green check (official PB style). */
+.checkbox-button.is-checked,
+.checkbox-button.is-checked:hover,
+.checkbox-button.is-checked:focus-visible {
+  color: var(--successColor);
+  background: transparent;
+}
+
+.checkbox-button.is-checked svg {
+  color: var(--successColor);
+  fill: none;
+  stroke: var(--successColor);
+  stroke-width: 2.25;
 }
 
 .row-actions {
@@ -2295,7 +2417,7 @@ td.row-actions .icon-button:last-child {
 }
 
 .settings-form-row.primary-fields {
-  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) 120px;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) minmax(140px, 160px);
 }
 
 .settings-form-row.two {
@@ -2306,9 +2428,8 @@ td.row-actions .icon-button:last-child {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.settings-form-row input[type="color"] {
-  min-height: var(--btnHeight);
-  padding: 5px;
+.settings-form-row .accent-picker {
+  min-width: 0;
 }
 
 .settings-switch-row {
@@ -3017,14 +3138,17 @@ td.row-actions .icon-button:last-child {
 
 .sql-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.8fr) minmax(360px, 1.2fr);
+  /* Stack query editor above results; each row fills the page width. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--smSpacing);
-  align-items: start;
+  align-items: stretch;
+  width: 100%;
 }
 
 .sql-editor,
 .sql-result {
   min-width: 0;
+  width: 100%;
 }
 
 .sql-textarea {
@@ -3032,7 +3156,7 @@ td.row-actions .icon-button:last-child {
 }
 
 .sql-textarea textarea {
-  min-height: 520px;
+  min-height: 220px;
 }
 
 .sql-table {
@@ -3607,6 +3731,23 @@ td.row-actions .icon-button:last-child {
   border-bottom: 1px solid var(--surfaceAlt2Color);
   background: var(--surfaceColor);
   padding: 15px;
+}
+
+/* Collection editor form fills the drawer body under the sticky header. */
+.drawer-panel > form.collection-upsert-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+
+.drawer-panel > form.collection-upsert-form > .modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: auto;
+  background: var(--surfaceColor);
 }
 
 @keyframes drawer-fade-in {

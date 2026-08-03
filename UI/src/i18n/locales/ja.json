@@ -103,7 +103,8 @@
     "refresh_records": "レコードを更新",
     "test": "テスト",
     "done": "完了",
-    "remove": "削除"
+    "remove": "削除",
+    "reset": "リセット"
   },
   "common": {
     "loading": "読み込み中...",
@@ -194,7 +195,9 @@
       "crons": "クーロン(定期タスク)",
       "export": "コレクションのエクスポート",
       "import": "コレクションのインポート",
-      "sql": "SQL コンソール"
+      "sql": "SQL コンソール",
+      "sync": "同期",
+      "debug": "デバッグ"
     },
     "maintenance": "メンテナンス",
     "scheduler": "スケジューラー",
@@ -298,7 +301,10 @@
     "min_log_level_help": "最小レベル未満のログは無視されます。",
     "default_log_levels": "デフォルトのログレベル:",
     "enable_ip_logging": "IP ログを有効化",
-    "enable_auth_id_logging": "Auth Id ログを有効化"
+    "enable_auth_id_logging": "Auth Id ログを有効化",
+    "accent_custom": "カスタムカラー",
+    "accent_eyedropper": "画面から色を取得",
+    "accent_presets": "プリセット"
   },
   "auth": {
     "login": "ログイン",
@@ -863,7 +869,8 @@
     "load_more": "さらに読み込む（残り {{count}} 件）",
     "load_more_short": "さらに読み込む",
     "view_record_title": "{{id}} を表示",
-    "record_json": "レコード JSON"
+    "record_json": "レコード JSON",
+    "selected_count": "{{count}} 件選択中"
   },
   "parity": {
     "collection": {
