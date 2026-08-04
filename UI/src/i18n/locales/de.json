@@ -610,6 +610,7 @@
     "accent_color": "Akzentfarbe",
     "accent_color_too_light": "Wähle eine dunklere Akzentfarbe, damit weißer Text lesbar bleibt.",
     "hide_controls": "Sammlungs- und Datensatz-Steuerung ausblenden/sperren",
+    "hide_controls_help": "Um versehentliche Änderungen in der Produktionsumgebung zu verhindern, werden die Schaltflächen zum Erstellen und Aktualisieren von Sammlungen ausgeblendet.\nAktualisierungen von Datensätzen erfordern vor dem Speichern einen zusätzlichen Entsperrschritt.",
     "max_days": "Max. Tage",
     "min_level": "Mindestlevel",
     "log_request_ip": "Anfrage-IP protokollieren",

@@ -229,6 +229,7 @@
     "accent_color": "Accent color",
     "accent_color_too_light": "Choose a darker accent color so white text remains readable.",
     "hide_controls": "Hide/Lock collection and record controls",
+    "hide_controls_help": "To prevent accidental changes when in production environment, collections create and update buttons will be hidden.\nRecords update will also require an extra unlock step before save.",
     "max_days": "Max days",
     "min_level": "Min level",
     "log_request_ip": "Log request IP",

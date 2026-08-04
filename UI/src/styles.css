@@ -753,7 +753,7 @@ h2 {
 
 .sidebar-actions .primary,
 .sidebar-actions .subtle {
-  justify-content: flex-start;
+  justify-content: center;
   width: 100%;
   /* Match records header action buttons (API preview / New record). */
   height: var(--btnHeight);
@@ -812,7 +812,9 @@ button.subtle.outline-button:focus-visible,
 .workspace-flush {
   display: flex;
   flex-direction: column;
-  padding-top: 20px;
+  flex: 1;
+  min-height: 0;
+  padding: 20px var(--spacing) 6px;
 }
 
 .app-body-wide .workspace {
@@ -1203,14 +1205,40 @@ button.subtle.outline-button:focus-visible,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--smSpacing);
-  min-height: 45px;
-  margin: auto calc(-1 * var(--spacing)) calc(-1 * var(--spacing));
-  padding: 10px var(--spacing);
-  border-top: 1px solid var(--surfaceAlt2Color);
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 16px;
+  padding: 0;
+  margin-top: 4px;
   color: var(--surfaceTxtHintColor);
-  font-size: var(--smFontSize);
-  line-height: var(--smLineHeight);
+  font-size: 12px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.page-footer-left,
+.page-footer-right {
+  display: flex;
+  align-items: center;
+  gap: var(--smSpacing);
+}
+
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--surfaceTxtHintColor);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.footer-link:hover {
+  color: var(--surfaceTxtColor);
+}
+
+.footer-link-separator {
+  color: var(--surfaceAlt2Color);
+  user-select: none;
 }
 
 .icon-button {
@@ -1618,7 +1646,8 @@ button.subtle.outline-button:focus-visible,
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  flex: 1;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -2110,6 +2139,7 @@ button.subtle.outline-button:focus-visible,
   border: 1px solid var(--surfaceAlt2Color);
   border-radius: var(--borderRadius);
   background: var(--surfaceColor);
+  margin-top: 10px;
 }
 
 /* Table itself stays square; the panel radii live on .logs-content. */
@@ -2404,6 +2434,16 @@ td.row-actions .icon-button:last-child {
   padding: 15px;
 }
 
+.application-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
 .settings-config-form {
   display: grid;
   gap: 15px;
@@ -2443,10 +2483,79 @@ td.row-actions .icon-button:last-child {
   min-width: 0;
 }
 
-.settings-switch-row {
-  border-top: 1px solid var(--surfaceAlt2Color);
-  margin-top: 15px;
+.settings-hide-controls-row {
+  margin-top: 20px;
   padding-top: 15px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.hide-controls-label-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--surfaceTxtColor);
+  font-weight: 500;
+}
+
+.hide-controls-info-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: var(--surfaceTxtHintColor);
+  cursor: help;
+  transition: color 0.15s ease;
+}
+
+.hide-controls-info-icon:hover {
+  color: var(--surfaceTxtColor);
+}
+
+/* Custom Tooltip matching official PocketBase dark popover */
+.hide-controls-info-icon::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 320px;
+  padding: 10px 14px;
+  background-color: #2e3440;
+  color: #eceff4;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: center;
+  white-space: pre-line;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 999;
+}
+
+.hide-controls-info-icon::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px 6px 0 6px;
+  border-style: solid;
+  border-color: #2e3440 transparent transparent transparent;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease;
+  z-index: 999;
+}
+
+.hide-controls-info-icon:hover::after,
+.hide-controls-info-icon:hover::before {
+  opacity: 1;
+  visibility: visible;
 }
 
 .settings-accordion-grid {
@@ -2459,44 +2568,72 @@ td.row-actions .icon-button:last-child {
 
 .settings-accordion-card {
   display: grid;
-  gap: 12px;
+  gap: 0;
   border: 1px solid var(--surfaceAlt2Color);
   border-radius: var(--borderRadius);
   background: var(--surfaceAlt1Color);
-  padding: 14px;
+  overflow: hidden;
 }
 
 .settings-form-block {
   margin-top: 0;
 }
 
-.settings-accordion-card > header {
+.settings-accordion-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 0 12px;
-  border-bottom: 1px solid var(--surfaceAlt2Color);
+  padding: 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease;
 }
 
-.settings-accordion-card > header div {
-  display: grid;
-  gap: 2px;
+.settings-accordion-header:hover {
+  background: var(--surfaceAlt2Color);
+}
+
+.accordion-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
-.settings-accordion-card > header strong,
-.settings-accordion-card > header span {
+.accordion-header-left svg {
+  color: var(--surfaceTxtColor);
+  flex-shrink: 0;
+}
+
+.accordion-header-left strong {
+  font-size: var(--fontSize);
+  font-weight: 600;
+  color: var(--surfaceTxtColor);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settings-accordion-card > header span,
-.settings-inline-metrics {
+.accordion-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.accordion-header-right svg {
   color: var(--surfaceTxtHintColor);
-  font-size: var(--smFontSize);
-  line-height: var(--smLineHeight);
+}
+
+.settings-accordion-card.is-open .settings-accordion-header {
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.settings-accordion-content {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
 }
 
 .switch-row {

@@ -61,7 +61,7 @@ mvn -gs settings.xml -s settings.xml test
 Compile the project and start the server:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.3.1-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.3.2-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
 Once started, open:

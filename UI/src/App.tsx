@@ -2,6 +2,7 @@ import {
   Activity,
   ArrowRight,
   Archive,
+  BookOpen,
   CheckSquare2,
   ChevronDown,
   ChevronRight,
@@ -43,6 +44,7 @@ import {
   Unlock,
   Upload,
   Users,
+  Info,
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -71,6 +73,7 @@ import { RecordFieldControl } from "./components/RecordFieldControl";
 import { RefreshButton } from "./components/RefreshButton";
 import { FileFieldControl } from "./components/FileFieldControl";
 import { PasswordInput } from "./components/PasswordInput";
+import { Switch } from "./components/Switch";
 import { AuthRecordActions } from "./components/AuthRecordActions";
 import type { AuthRecordLink, ImpersonationResult } from "./components/AuthRecordActions";
 import { CollectionsOverview } from "./components/CollectionsOverview";
@@ -3681,7 +3684,7 @@ function RecordsView(props: RecordsViewProps) {
 
   function visibleRowStep(recordId: string) {
     const row = rowRefs.current.get(recordId);
-    const viewport = row?.closest<HTMLElement>(".page-table-wrapper");
+    const viewport = row?.closest<HTMLElement>(".page-table-scroll, .page-table-wrapper");
     const rowHeight = Math.max(1, row?.getBoundingClientRect().height || 44);
     return Math.max(1, Math.floor((viewport?.clientHeight || window.innerHeight) / rowHeight) - 1);
   }
@@ -4078,16 +4081,41 @@ function RecordsView(props: RecordsViewProps) {
           </div>
         </div>
       )}
+
       <footer className="page-footer">
-        <span>
-          {t("common.loaded_of_total", {
-            loaded: props.records.length,
-            count: props.recordPage?.totalItems ?? props.records.length,
-            defaultValue: "Showing {{loaded}} of {{count}}"
-          })}
-        </span>
-        <span>{t("collections.fields_count", { count: props.collection.fields?.length ?? 0, defaultValue: "{{count}} fields" })}</span>
-        <span>{t("collections.columns_count", { shown: props.columns.length, total: props.allColumns.length, defaultValue: "{{shown}}/{{total}} columns" })}</span>
+        <div className="page-footer-left">
+          <span>
+            {t("common.loaded_of_total", {
+              loaded: props.records.length,
+              count: props.recordPage?.totalItems ?? props.records.length,
+              defaultValue: "Showing {{loaded}} of {{count}}"
+            })}
+          </span>
+          <span>{t("collections.fields_count", { count: props.collection.fields?.length ?? 0, defaultValue: "{{count}} fields" })}</span>
+          <span>{t("collections.columns_count", { shown: props.columns.length, total: props.allColumns.length, defaultValue: "{{shown}}/{{total}} columns" })}</span>
+        </div>
+        <div className="page-footer-right">
+          <a
+            href="javascript:void(0)"
+            className="footer-link"
+            onClick={(e) => e.preventDefault()}
+            title={t("footer.docs", "Docs")}
+          >
+            <BookOpen size={14} />
+            <span>Docs</span>
+          </a>
+          <span className="footer-link-separator">|</span>
+          <a
+            href="https://github.com/jackBaozz/pocketbase-java"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-link"
+            title="PocketBase Java GitHub"
+          >
+            <GitBranch size={14} />
+            <span>PocketBase v0.3.2</span>
+          </a>
+        </div>
       </footer>
     </section>
   );
@@ -4492,16 +4520,13 @@ function BackupView(props: BackupViewProps) {
         </button>
         {optionsOpen && (
           <div className="settings-config-form backup-options-form">
-            <label className="check-row switch-row">
-              <input
-                id="enable-auto-backups"
-                name="enableAutoBackups"
-                type="checkbox"
-                checked={autoBackupsEnabled}
-                onChange={(event) => toggleAutoBackups(event.target.checked)}
-              />
-              {t("settings.enable_auto_backups", "Enable auto backups")}
-            </label>
+            <Switch
+              id="enable-auto-backups"
+              name="enableAutoBackups"
+              checked={autoBackupsEnabled}
+              onChange={(checked) => toggleAutoBackups(checked)}
+              label={t("settings.enable_auto_backups", "Enable auto backups")}
+            />
             {autoBackupsEnabled && (
               <div className="settings-accordion-card settings-form-block">
                 <header>
@@ -4562,16 +4587,13 @@ function BackupView(props: BackupViewProps) {
                 </div>
                 <HardDrive size={18} />
               </header>
-              <label className="check-row switch-row">
-                <input
-                  id="backups-s3-enabled"
-                  name="backups.s3.enabled"
-                  type="checkbox"
-                  checked={backupS3Enabled}
-                  onChange={(event) => updateSetting(["backups", "s3", "enabled"], event.target.checked)}
-                />
-                {t("settings.store_backups_s3", "Store backups in S3 storage")}
-              </label>
+              <Switch
+                id="backups-s3-enabled"
+                name="backups.s3.enabled"
+                checked={backupS3Enabled}
+                onChange={(checked) => updateSetting(["backups", "s3", "enabled"], checked)}
+                label={t("settings.store_backups_s3", "Store backups in S3 storage")}
+              />
               {backupS3Enabled && (
                 <>
                   <div className="settings-form-row three">
@@ -4637,16 +4659,13 @@ function BackupView(props: BackupViewProps) {
                       />
                     </label>
                   </div>
-                  <label className="check-row switch-row">
-                    <input
-                      id="backups-s3-force-path-style"
-                      name="backups.s3.forcePathStyle"
-                      type="checkbox"
-                      checked={Boolean(backupS3.forcePathStyle)}
-                      onChange={(event) => updateSetting(["backups", "s3", "forcePathStyle"], event.target.checked)}
-                    />
-                    {t("settings.force_path_style", "Force path-style addressing")}
-                  </label>
+                  <Switch
+                    id="backups-s3-force-path-style"
+                    name="backups.s3.forcePathStyle"
+                    checked={Boolean(backupS3.forcePathStyle)}
+                    onChange={(checked) => updateSetting(["backups", "s3", "forcePathStyle"], checked)}
+                    label={t("settings.force_path_style", "Force path-style addressing")}
+                  />
                 </>
               )}
             </section>
@@ -4899,6 +4918,10 @@ function SettingsView(props: SettingsViewProps) {
   const detectedProxyHeader = props.health?.possibleProxyHeader?.trim() ?? "";
   const draftAccentColor = normalizeAccentColor(meta.accentColor) || "#1055c9";
   const [accentColorError, setAccentColorError] = useState("");
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [trustedProxyOpen, setTrustedProxyOpen] = useState(false);
+  const [rateLimitsOpen, setRateLimitsOpen] = useState(false);
+  const [superusersOpen, setSuperusersOpen] = useState(false);
 
   useEffect(() => {
     props.onAccentPreview(draftAccentColor);
@@ -4960,15 +4983,6 @@ function SettingsView(props: SettingsViewProps) {
     <section className="settings-page">
       <SettingsPageHeader
         section={t("settings.nav.application", "Application")}
-        actions={
-          <>
-          <RefreshButton className="icon-button" onClick={props.onRefresh} title={t("actions.refresh_settings", "Refresh settings")} />
-          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
-            <Save size={16} />
-            {t("actions.save_settings", "Save settings")}
-          </button>
-          </>
-        }
       />
 
       <section className="surface application-settings-form">
@@ -5000,274 +5014,336 @@ function SettingsView(props: SettingsViewProps) {
           />
         </div>
 
-        <div className="settings-switch-row">
-          <label className="check-row switch-row">
-            <input
-              id="meta-hide-controls"
-              name="meta.hideControls"
-              type="checkbox"
-              checked={Boolean(meta.hideControls)}
-              onChange={(event) => updateSetting(["meta", "hideControls"], event.target.checked)}
-            />
-            {t("settings.hide_controls", "Hide/Lock collection and record controls")}
-          </label>
-        </div>
-
         <section className="settings-accordion-grid">
-          <article className="settings-accordion-card">
-            <header>
-              <div>
+          {/* 1. 批量 Web API */}
+          <article className={`settings-accordion-card ${batchOpen ? "is-open" : "is-collapsed"}`}>
+            <header
+              className="settings-accordion-header"
+              onClick={() => setBatchOpen((prev) => !prev)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={batchOpen}
+            >
+              <div className="accordion-header-left">
+                <Archive size={18} />
                 <strong>{t("settings.batch_requests", "Batch requests")}</strong>
-                <span>{t("settings.batch_desc", "Server-side batch request limits")}</span>
               </div>
-              <Archive size={18} />
+              <div className="accordion-header-right">
+                <span className={`bool ${batch.enabled ? "yes" : "no"}`}>
+                  {batch.enabled ? t("common.enabled_status", "Enabled") : t("common.disabled_status", "Disabled")}
+                </span>
+                {batchOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
             </header>
-            <label className="check-row switch-row">
-              <input
-                id="batch-enabled"
-                name="batch.enabled"
-                type="checkbox"
-                checked={Boolean(batch.enabled)}
-                onChange={(event) => updateSetting(["batch", "enabled"], event.target.checked)}
-              />
-              {t("settings.enable_batch_api", "Enable batch API")}
-            </label>
-            <div className="settings-form-row three">
-              <label>
-                {t("settings.max_requests", "Max requests")}
-                <input
-                  id="batch-max-requests"
-                  name="batch.maxRequests"
-                  type="number"
-                  value={String(batch.maxRequests ?? 50)}
-                  onChange={(event) => updateNumber(["batch", "maxRequests"], event.target.value)}
+            {batchOpen && (
+              <div className="settings-accordion-content">
+                <Switch
+                  id="batch-enabled"
+                  name="batch.enabled"
+                  checked={Boolean(batch.enabled)}
+                  onChange={(checked) => updateSetting(["batch", "enabled"], checked)}
+                  label={t("settings.enable_batch_api", "Enable batch API")}
                 />
-              </label>
-              <label>
-                {t("settings.timeout", "Timeout")}
-                <input
-                  id="batch-timeout"
-                  name="batch.timeout"
-                  type="number"
-                  value={String(batch.timeout ?? 3)}
-                  onChange={(event) => updateNumber(["batch", "timeout"], event.target.value)}
-                />
-              </label>
-              <label>
-                {t("settings.max_body_size", "Max body size")}
-                <input
-                  id="batch-max-body-size"
-                  name="batch.maxBodySize"
-                  type="number"
-                  value={String(batch.maxBodySize ?? 33554432)}
-                  onChange={(event) => updateNumber(["batch", "maxBodySize"], event.target.value)}
-                />
-              </label>
-            </div>
+                <div className="settings-form-row three">
+                  <label>
+                    {t("settings.max_requests", "Max requests")}
+                    <input
+                      id="batch-max-requests"
+                      name="batch.maxRequests"
+                      type="number"
+                      value={String(batch.maxRequests ?? 50)}
+                      onChange={(event) => updateNumber(["batch", "maxRequests"], event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    {t("settings.timeout", "Timeout")}
+                    <input
+                      id="batch-timeout"
+                      name="batch.timeout"
+                      type="number"
+                      value={String(batch.timeout ?? 3)}
+                      onChange={(event) => updateNumber(["batch", "timeout"], event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    {t("settings.max_body_size", "Max body size")}
+                    <input
+                      id="batch-max-body-size"
+                      name="batch.maxBodySize"
+                      type="number"
+                      value={String(batch.maxBodySize ?? 33554432)}
+                      onChange={(event) => updateNumber(["batch", "maxBodySize"], event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
           </article>
 
-          <article className="settings-accordion-card">
-            <header>
-              <div>
+          {/* 2. IP 代理头信息 */}
+          <article className={`settings-accordion-card ${trustedProxyOpen ? "is-open" : "is-collapsed"}`}>
+            <header
+              className="settings-accordion-header"
+              onClick={() => setTrustedProxyOpen((prev) => !prev)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={trustedProxyOpen}
+            >
+              <div className="accordion-header-left">
+                <Server size={18} />
                 <strong>{t("settings.trusted_proxy", "Trusted proxy")}</strong>
-                <span>{t("settings.trusted_proxy_desc", "Forwarded IP header handling")}</span>
               </div>
-              <Server size={18} />
+              <div className="accordion-header-right">
+                <span className={`bool ${splitCsv(trustedHeaders).length > 0 ? "yes" : "no"}`}>
+                  {splitCsv(trustedHeaders).length > 0 ? t("common.enabled_status", "Enabled") : t("common.disabled_status", "Disabled")}
+                </span>
+                {trustedProxyOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
             </header>
-            <label>
-              {t("settings.trusted_headers", "Trusted headers")}
-              <input
-                id="trusted-proxy-headers"
-                name="trustedProxy.headers"
-                autoComplete="off"
-                placeholder="X-Forwarded-For, X-Real-IP"
-                value={trustedHeaders}
-                onChange={(event) => updateSetting(["trustedProxy", "headers"], splitCsv(event.target.value))}
-              />
-            </label>
-            <label className="check-row switch-row">
-              <input
-                id="trusted-proxy-leftmost"
-                name="trustedProxy.useLeftmostIP"
-                type="checkbox"
-                checked={Boolean(trustedProxy.useLeftmostIP)}
-                onChange={(event) => updateSetting(["trustedProxy", "useLeftmostIP"], event.target.checked)}
-              />
-              {t("settings.use_leftmost_ip", "Use leftmost IP")}
-            </label>
-            <div className="settings-diagnostic">
-              <span>{t("settings.resolved_ip", "Resolved client IP")}</span>
-              <code>{currentIp || t("settings.unavailable", "Unavailable")}</code>
-              {detectedProxyHeader ? (
-                <>
-                  <span>{t("settings.detected_proxy_header", "Detected proxy header")}</span>
-                  <code>{detectedProxyHeader}</code>
-                  {!splitCsv(trustedHeaders).some((header) => header.toLowerCase() === detectedProxyHeader.toLowerCase()) && (
+            {trustedProxyOpen && (
+              <div className="settings-accordion-content">
+                <label>
+                  {t("settings.trusted_headers", "Trusted headers")}
+                  <input
+                    id="trusted-proxy-headers"
+                    name="trustedProxy.headers"
+                    autoComplete="off"
+                    placeholder="X-Forwarded-For, X-Real-IP"
+                    value={trustedHeaders}
+                    onChange={(event) => updateSetting(["trustedProxy", "headers"], splitCsv(event.target.value))}
+                  />
+                </label>
+                <Switch
+                  id="trusted-proxy-leftmost"
+                  name="trustedProxy.useLeftmostIP"
+                  checked={Boolean(trustedProxy.useLeftmostIP)}
+                  onChange={(checked) => updateSetting(["trustedProxy", "useLeftmostIP"], checked)}
+                  label={t("settings.use_leftmost_ip", "Use leftmost IP")}
+                />
+                <div className="settings-diagnostic">
+                  <span>{t("settings.resolved_ip", "Resolved client IP")}</span>
+                  <code>{currentIp || t("settings.unavailable", "Unavailable")}</code>
+                  {detectedProxyHeader ? (
+                    <>
+                      <span>{t("settings.detected_proxy_header", "Detected proxy header")}</span>
+                      <code>{detectedProxyHeader}</code>
+                      {!splitCsv(trustedHeaders).some((header) => header.toLowerCase() === detectedProxyHeader.toLowerCase()) && (
+                        <button
+                          type="button"
+                          className="subtle compact"
+                          onClick={() => updateSetting(["trustedProxy", "headers"], [...splitCsv(trustedHeaders), detectedProxyHeader])}
+                        >
+                          {t("settings.use_detected_header", "Use detected header")}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <em>{t("settings.trusted_proxy_no_header", "No forwarded IP header detected for this request.")}</em>
+                  )}
+                </div>
+              </div>
+            )}
+          </article>
+
+          {/* 3. 速率限制 */}
+          <article className={`settings-accordion-card rate-limit-card ${rateLimitsOpen ? "is-open" : "is-collapsed"}`}>
+            <header
+              className="settings-accordion-header"
+              onClick={() => setRateLimitsOpen((prev) => !prev)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={rateLimitsOpen}
+            >
+              <div className="accordion-header-left">
+                <Activity size={18} />
+                <strong>{t("settings.rate_limiting", "Rate limiting")}</strong>
+              </div>
+              <div className="accordion-header-right">
+                <span className={`bool ${rateLimits.enabled ? "yes" : "no"}`}>
+                  {rateLimits.enabled ? t("common.enabled_status", "Enabled") : t("common.disabled_status", "Disabled")}
+                </span>
+                {rateLimitsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </header>
+            {rateLimitsOpen && (
+              <div className="settings-accordion-content">
+                <Switch
+                  id="rate-limits-enabled"
+                  name="rateLimits.enabled"
+                  checked={Boolean(rateLimits.enabled)}
+                  onChange={(checked) => updateSetting(["rateLimits", "enabled"], checked)}
+                  label={t("settings.enable_rate_limiting", "Enable rate limiting")}
+                />
+
+                <datalist id="rate-limit-tags">
+                  {rateLimitTagOptions.map((tag) => (
+                    <option key={tag} value={tag} />
+                  ))}
+                </datalist>
+
+                {rateLimitRules.length === 0 ? (
+                  <p className="rate-limit-empty">{t("settings.no_rate_limit_rules", "No rules defined yet.")}</p>
+                ) : (
+                  <div className="rate-limit-table">
+                    <div className="rate-limit-head">
+                      <span>{t("settings.rule_label", "Label")}</span>
+                      <span>{t("settings.max_requests", "Max requests")}</span>
+                      <span>{t("settings.interval_seconds", "Interval (s)")}</span>
+                      <span>{t("settings.audience", "Audience")}</span>
+                      <span />
+                    </div>
+                    {rateLimitRules.map((rule, index) => (
+                      <div className="rate-limit-row" key={index}>
+                        <input
+                          type="text"
+                          list="rate-limit-tags"
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="*:list or /api/path"
+                          value={rule.label}
+                          onChange={(event) => updateRateLimitRule(index, { label: event.target.value })}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={String(rule.maxRequests ?? 0)}
+                          onChange={(event) => updateRateLimitRule(index, { maxRequests: Number(event.target.value || 0) })}
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={String(rule.duration ?? 0)}
+                          onChange={(event) => updateRateLimitRule(index, { duration: Number(event.target.value || 0) })}
+                        />
+                        <select
+                          value={rule.audience ?? ""}
+                          onChange={(event) => updateRateLimitRule(index, { audience: event.target.value })}
+                        >
+                          <option value="">{t("settings.audience_all", "All")}</option>
+                          <option value="@guest">{t("settings.audience_guest", "Guest only")}</option>
+                          <option value="@auth">{t("settings.audience_auth", "Auth only")}</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="icon-button danger"
+                          onClick={() => removeRateLimitRule(index)}
+                          title={t("settings.remove_rule", "Remove rule")}
+                          aria-label={t("settings.remove_rule", "Remove rule")}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <button type="button" className="subtle rate-limit-add" onClick={addRateLimitRule}>
+                  <Plus size={14} />
+                  {t("settings.add_rule", "Add rule")}
+                </button>
+
+                <label>
+                  {t("settings.excluded_ips_label", "Excluded IPs")}
+                  <input
+                    id="rate-limit-excluded-ips"
+                    name="rateLimits.excludedIPs"
+                    autoComplete="off"
+                    placeholder="127.0.0.1, 10.0.0.0/8"
+                    value={excludedIPs}
+                    onChange={(event) => updateSetting(["rateLimits", "excludedIPs"], splitCsv(event.target.value))}
+                  />
+                </label>
+              </div>
+            )}
+          </article>
+
+          {/* 4. 超级用户 IP 地址 */}
+          <article className={`settings-accordion-card ${superusersOpen ? "is-open" : "is-collapsed"}`}>
+            <header
+              className="settings-accordion-header"
+              onClick={() => setSuperusersOpen((prev) => !prev)}
+              role="button"
+              tabIndex={0}
+              aria-expanded={superusersOpen}
+            >
+              <div className="accordion-header-left">
+                <Shield size={18} />
+                <strong>{t("settings.superusers", "Superusers")}</strong>
+              </div>
+              <div className="accordion-header-right">
+                <span className={`bool ${splitCsv(superuserIPs).length > 0 ? "yes" : "no"}`}>
+                  {splitCsv(superuserIPs).length > 0 ? t("common.enabled_status", "Enabled") : t("common.disabled_status", "Disabled")}
+                </span>
+                {superusersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </header>
+            {superusersOpen && (
+              <div className="settings-accordion-content">
+                <label>
+                  {t("settings.allowed_ips", "Allowed IPs")}
+                  <input
+                    id="superuser-ips"
+                    name="superuserIPs"
+                    autoComplete="off"
+                    placeholder="127.0.0.1, 10.0.0.0/8"
+                    value={superuserIPs}
+                    onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
+                  />
+                </label>
+                {currentIp && (
+                  <div className="settings-current-ip">
+                    <span>{t("settings.current_ip", { ip: currentIp, defaultValue: "Your current IP: {{ip}}" })}</span>
                     <button
                       type="button"
                       className="subtle compact"
-                      onClick={() => updateSetting(["trustedProxy", "headers"], [...splitCsv(trustedHeaders), detectedProxyHeader])}
+                      onClick={() => {
+                        const next = splitCsv(superuserIPs);
+                        if (!next.some((value) => value === currentIp)) next.push(currentIp);
+                        updateSetting(["superuserIPs"], next);
+                      }}
                     >
-                      {t("settings.use_detected_header", "Use detected header")}
-                    </button>
-                  )}
-                </>
-              ) : (
-                <em>{t("settings.trusted_proxy_no_header", "No forwarded IP header detected for this request.")}</em>
-              )}
-            </div>
-          </article>
-
-          <article className="settings-accordion-card">
-            <header>
-              <div>
-                <strong>{t("settings.superusers", "Superusers")}</strong>
-                <span>{t("settings.superusers_desc", "Restrict dashboard access by IP")}</span>
-              </div>
-              <Shield size={18} />
-            </header>
-            <label>
-              {t("settings.allowed_ips", "Allowed IPs")}
-              <input
-                id="superuser-ips"
-                name="superuserIPs"
-                autoComplete="off"
-                placeholder="127.0.0.1, 10.0.0.0/8"
-                value={superuserIPs}
-                onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
-              />
-            </label>
-            {currentIp && (
-              <div className="settings-current-ip">
-                <span>{t("settings.current_ip", { ip: currentIp, defaultValue: "Your current IP: {{ip}}" })}</span>
-                <button
-                  type="button"
-                  className="subtle compact"
-                  onClick={() => {
-                    const next = splitCsv(superuserIPs);
-                    if (!next.some((value) => value === currentIp)) next.push(currentIp);
-                    updateSetting(["superuserIPs"], next);
-                  }}
-                >
-                  {t("settings.add_current_ip", "Add current IP")}
-                </button>
-              </div>
-            )}
-          </article>
-
-          <article className="settings-accordion-card rate-limit-card">
-            <header>
-              <div>
-                <strong>{t("settings.rate_limiting", "Rate limiting")}</strong>
-                <span>{t("settings.rate_limiting_desc", "Throttle requests per rule")}</span>
-              </div>
-              <Activity size={18} />
-            </header>
-
-            <label className="check-row switch-row">
-              <input
-                id="rate-limits-enabled"
-                name="rateLimits.enabled"
-                type="checkbox"
-                checked={Boolean(rateLimits.enabled)}
-                onChange={(event) => updateSetting(["rateLimits", "enabled"], event.target.checked)}
-              />
-              {t("settings.enable_rate_limiting", "Enable rate limiting")}
-            </label>
-
-            <datalist id="rate-limit-tags">
-              {rateLimitTagOptions.map((tag) => (
-                <option key={tag} value={tag} />
-              ))}
-            </datalist>
-
-            {rateLimitRules.length === 0 ? (
-              <p className="rate-limit-empty">{t("settings.no_rate_limit_rules", "No rules defined yet.")}</p>
-            ) : (
-              <div className="rate-limit-table">
-                <div className="rate-limit-head">
-                  <span>{t("settings.rule_label", "Label")}</span>
-                  <span>{t("settings.max_requests", "Max requests")}</span>
-                  <span>{t("settings.interval_seconds", "Interval (s)")}</span>
-                  <span>{t("settings.audience", "Audience")}</span>
-                  <span />
-                </div>
-                {rateLimitRules.map((rule, index) => (
-                  <div className="rate-limit-row" key={index}>
-                    <input
-                      type="text"
-                      list="rate-limit-tags"
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="*:list or /api/path"
-                      value={rule.label}
-                      onChange={(event) => updateRateLimitRule(index, { label: event.target.value })}
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      value={String(rule.maxRequests ?? 0)}
-                      onChange={(event) => updateRateLimitRule(index, { maxRequests: Number(event.target.value || 0) })}
-                    />
-                    <input
-                      type="number"
-                      min="0"
-                      value={String(rule.duration ?? 0)}
-                      onChange={(event) => updateRateLimitRule(index, { duration: Number(event.target.value || 0) })}
-                    />
-                    <select
-                      value={rule.audience ?? ""}
-                      onChange={(event) => updateRateLimitRule(index, { audience: event.target.value })}
-                    >
-                      <option value="">{t("settings.audience_all", "All")}</option>
-                      <option value="@guest">{t("settings.audience_guest", "Guest only")}</option>
-                      <option value="@auth">{t("settings.audience_auth", "Auth only")}</option>
-                    </select>
-                    <button
-                      type="button"
-                      className="icon-button danger"
-                      onClick={() => removeRateLimitRule(index)}
-                      title={t("settings.remove_rule", "Remove rule")}
-                      aria-label={t("settings.remove_rule", "Remove rule")}
-                    >
-                      <Trash2 size={15} />
+                      {t("settings.add_current_ip", "Add current IP")}
                     </button>
                   </div>
-                ))}
+                )}
               </div>
             )}
-
-            <button type="button" className="subtle rate-limit-add" onClick={addRateLimitRule}>
-              <Plus size={14} />
-              {t("settings.add_rule", "Add rule")}
-            </button>
-
-            <label>
-              {t("settings.excluded_ips_label", "Excluded IPs")}
-              <input
-                id="rate-limit-excluded-ips"
-                name="rateLimits.excludedIPs"
-                autoComplete="off"
-                placeholder="127.0.0.1, 10.0.0.0/8"
-                value={excludedIPs}
-                onChange={(event) => updateSetting(["rateLimits", "excludedIPs"], splitCsv(event.target.value))}
-              />
-            </label>
           </article>
         </section>
-      </section>
 
-      <section className="surface settings-editor advanced-settings-editor">
-        <label>
-          {t("settings.advanced_json", "Advanced JSON")}
-          <textarea
-            id="settings-json"
-            name="settingsJson"
-            value={props.draft}
-            onChange={(event) => props.onDraft(event.target.value)}
-            spellCheck={false}
+        <div className="settings-switch-row settings-hide-controls-row">
+          <Switch
+            id="meta-hide-controls"
+            name="meta.hideControls"
+            checked={Boolean(meta.hideControls)}
+            onChange={(checked) => updateSetting(["meta", "hideControls"], checked)}
+            label={
+              <span className="hide-controls-label-wrap">
+                {t("settings.hide_controls", "Hide/Lock collection and record controls")}
+                <span
+                  className="hide-controls-info-icon"
+                  data-tooltip={t(
+                    "settings.hide_controls_help",
+                    "To prevent accidental changes when in production environment, collections create and update buttons will be hidden.\nRecords update will also require an extra unlock step before save."
+                  )}
+                  aria-label={t(
+                    "settings.hide_controls_help",
+                    "To prevent accidental changes when in production environment, collections create and update buttons will be hidden.\nRecords update will also require an extra unlock step before save."
+                  )}
+                >
+                  <Info size={15} />
+                </span>
+              </span>
+            }
           />
-        </label>
+        </div>
+
+        <footer className="application-settings-footer">
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
+            <Save size={16} />
+            {t("actions.save_settings", "Save settings")}
+          </button>
+        </footer>
       </section>
     </section>
   );
@@ -5544,16 +5620,13 @@ function MailSettingsView(props: MailSettingsViewProps) {
         </div>
 
         <div className="settings-switch-row">
-          <label className="check-row switch-row">
-            <input
-              id="smtp-enabled"
-              name="smtp.enabled"
-              type="checkbox"
-              checked={Boolean(smtp.enabled)}
-              onChange={(event) => updateSetting(["smtp", "enabled"], event.target.checked)}
-            />
-            {t("settings.use_smtp", "Use SMTP mail server")}
-          </label>
+          <Switch
+            id="smtp-enabled"
+            name="smtp.enabled"
+            checked={Boolean(smtp.enabled)}
+            onChange={(checked) => updateSetting(["smtp", "enabled"], checked)}
+            label={t("settings.use_smtp", "Use SMTP mail server")}
+          />
           <p className="settings-help-text">
             {t("settings.smtp_help", "By default PocketBase uses the server sendmail command. SMTP is recommended for better deliverability.")}
           </p>
@@ -5794,16 +5867,13 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
           <p>{t("settings.storage_intro_local", "By default PocketBase uses and recommends the local file system to store uploaded files.")}</p>
           <p>{t("settings.storage_intro_s3", "Alternatively, you can use an S3 compatible external storage when disk space is limited.")}</p>
         </div>
-        <label className="check-row switch-row">
-          <input
-            id="s3-enabled"
-            name="s3.enabled"
-            type="checkbox"
-            checked={storageEnabled}
-            onChange={(event) => updateSetting(["s3", "enabled"], event.target.checked)}
-          />
-          {t("settings.use_s3_storage", "Use S3 storage")}
-        </label>
+        <Switch
+          id="s3-enabled"
+          name="s3.enabled"
+          checked={storageEnabled}
+          onChange={(checked) => updateSetting(["s3", "enabled"], checked)}
+          label={t("settings.use_s3_storage", "Use S3 storage")}
+        />
         {changedStorageMode && (
           <div className="settings-alert">
             {t("settings.storage_migration_warning", "Existing uploaded files need to be migrated manually between the local file system and S3 storage.")}
@@ -5881,16 +5951,13 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
                 />
               </label>
             </div>
-            <label className="check-row switch-row">
-              <input
-                id="s3-force-path-style"
-                name="s3.forcePathStyle"
-                type="checkbox"
-                checked={Boolean(storage.forcePathStyle)}
-                onChange={(event) => updateSetting(["s3", "forcePathStyle"], event.target.checked)}
-              />
-              {t("settings.force_path_style", "Force path-style addressing")}
-            </label>
+            <Switch
+              id="s3-force-path-style"
+              name="s3.forcePathStyle"
+              checked={Boolean(storage.forcePathStyle)}
+              onChange={(checked) => updateSetting(["s3", "forcePathStyle"], checked)}
+              label={t("settings.force_path_style", "Force path-style addressing")}
+            />
           </section>
         )}
       </section>
@@ -6908,21 +6975,45 @@ function LogsView(props: LogsViewProps) {
             )}
           </tbody>
         </table>
+        {hasMoreLogs && (
+          <div className="load-more-row">
+            <button className="subtle" onClick={() => props.onLoadMore()} disabled={props.loading}>
+              {props.loading
+                ? t("common.loading", "Loading...")
+                : t("logs.load_older", { count: total - props.logs.length, defaultValue: "Load older ({{count}} remaining)" })}
+            </button>
+          </div>
+        )}
       </div>
 
-      {hasMoreLogs && (
-        <div className="load-more-row">
-          <button className="subtle" onClick={() => props.onLoadMore()} disabled={props.loading}>
-            {props.loading
-              ? t("common.loading", "Loading...")
-              : t("logs.load_older", { count: total - props.logs.length, defaultValue: "Load older ({{count}} remaining)" })}
-          </button>
-        </div>
-      )}
       <footer className="page-footer">
-        <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
-        <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
-      </footer>
+        <div className="page-footer-left">
+          <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
+          <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
+        </div>
+        <div className="page-footer-right">
+          <a
+            href="javascript:void(0)"
+            className="footer-link"
+            onClick={(e) => e.preventDefault()}
+            title={t("footer.docs", "Docs")}
+          >
+            <BookOpen size={14} />
+            <span>Docs</span>
+          </a>
+          <span className="footer-link-separator">|</span>
+          <a
+            href="https://github.com/jackBaozz/pocketbase-java"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="footer-link"
+              title="PocketBase Java GitHub"
+            >
+              <GitBranch size={14} />
+              <span>PocketBase v0.3.1</span>
+            </a>
+          </div>
+        </footer>
       </div>
     </section>
   );
@@ -7621,10 +7712,11 @@ function CollectionModal({
               <header>
                 <strong>{t("collections.password_auth", "Password auth")}</strong>
               </header>
-              <label className="check-row">
-                <input type="checkbox" checked={passwordEnabled} onChange={(event) => setPasswordEnabled(event.target.checked)} />
-                {t("common.enabled", "Enabled")}
-              </label>
+              <Switch
+                checked={passwordEnabled}
+                onChange={(checked) => setPasswordEnabled(checked)}
+                label={t("common.enabled", "Enabled")}
+              />
               <div className="stacked-checks">
                 <label className="check-row">
                   <input
@@ -7649,10 +7741,11 @@ function CollectionModal({
               <header>
                 <strong>{t("auth.otp")}</strong>
               </header>
-              <label className="check-row">
-                <input type="checkbox" checked={otpEnabled} onChange={(event) => setOtpEnabled(event.target.checked)} />
-                {t("common.enabled", "Enabled")}
-              </label>
+              <Switch
+                checked={otpEnabled}
+                onChange={(checked) => setOtpEnabled(checked)}
+                label={t("common.enabled", "Enabled")}
+              />
               <div className="two-col compact">
                 <label>
                   {t("collections.duration_seconds", "Duration (s)")}
@@ -7680,10 +7773,11 @@ function CollectionModal({
               <header>
                 <strong>{t("auth.mfa")}</strong>
               </header>
-              <label className="check-row">
-                <input type="checkbox" checked={mfaEnabled} onChange={(event) => setMfaEnabled(event.target.checked)} />
-                {t("common.enabled", "Enabled")}
-              </label>
+              <Switch
+                checked={mfaEnabled}
+                onChange={(checked) => setMfaEnabled(checked)}
+                label={t("common.enabled", "Enabled")}
+              />
               <label>
                 {t("collections.duration_seconds", "Duration (s)")}
                 <input
@@ -7712,10 +7806,11 @@ function CollectionModal({
               <header>
                 <strong>{t("parity.collection.auth_alert", "Login alert")}</strong>
               </header>
-              <label className="check-row">
-                <input type="checkbox" checked={authAlertEnabled} onChange={(event) => setAuthAlertEnabled(event.target.checked)} />
-                {t("parity.collection.auth_alert_enabled", "Send an email when a new login origin is detected")}
-              </label>
+              <Switch
+                checked={authAlertEnabled}
+                onChange={(checked) => setAuthAlertEnabled(checked)}
+                label={t("parity.collection.auth_alert_enabled", "Send an email when a new login origin is detected")}
+              />
               <p className="field-option-help">{t("parity.collection.auth_alert_help", "Edit the login alert email in the Templates tab.")}</p>
             </article>
 
@@ -7723,10 +7818,11 @@ function CollectionModal({
               <header>
                 <strong>{t("settings.oauth2")}</strong>
               </header>
-              <label className="check-row">
-                <input type="checkbox" checked={oauthEnabled} onChange={(event) => setOauthEnabled(event.target.checked)} />
-                {t("common.enabled", "Enabled")}
-              </label>
+              <Switch
+                checked={oauthEnabled}
+                onChange={(checked) => setOauthEnabled(checked)}
+                label={t("common.enabled", "Enabled")}
+              />
               <div className="two-col oauth-provider-fields">
                 {([
                   ["id", t("collections.oauth_provider_id_field", "Provider ID field")],

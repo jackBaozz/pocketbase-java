@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Edit3, GripVertical, Plus, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Switch } from "./Switch";
 import "./IndexManager.css";
 
 export type ParsedIndex = {
@@ -314,14 +315,11 @@ function IndexEditor({ sql, collectionName, fieldNames, onCancel, onSave }: Inde
                 />
               </label>
 
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={parts.unique}
-                  onChange={(event) => setParts({ ...parts, unique: event.target.checked })}
-                />
-                {t("collections.index_unique", "Unique index")}
-              </label>
+              <Switch
+                checked={parts.unique}
+                onChange={(checked) => setParts({ ...parts, unique: checked })}
+                label={t("collections.index_unique", "Unique index")}
+              />
 
               <div className="index-columns-picker">
                 <span className="index-picker-label">{t("collections.index_columns", "Columns")}</span>

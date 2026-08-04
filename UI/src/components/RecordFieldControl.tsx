@@ -7,6 +7,7 @@ import type { EditorFileReference } from "./RichTextEditor";
 import { RelationPicker } from "./RelationPicker";
 import type { RelationCollection, RelationFetcher, RelationRecord } from "./RelationPicker";
 import { GeoPointControl } from "./GeoPointControl";
+import { Switch } from "./Switch";
 import "./RecordFieldControl.css";
 // Types derived from App.tsx
 type FieldSchema = {
@@ -197,13 +198,13 @@ export function RecordFieldControl({
 
   if (field.type === "bool") {
     return (
-      <label className="record-field-card checkbox-field">
+      <div className="record-field-card checkbox-field">
         <span>
           <strong>{field.name}</strong>
           {commonMeta}
         </span>
-        <input name={field.name} type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-      </label>
+        <Switch name={field.name} checked={Boolean(value)} onChange={(checked) => onChange(checked)} />
+      </div>
     );
   }
 

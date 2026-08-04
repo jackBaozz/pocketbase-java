@@ -350,7 +350,7 @@ public class AdminUiPlaywrightTest {
     assertHashRoute(
         "#/collections/ui_hash_posts/schema", ".schema-layout .summary-row:has-text('Type')");
     assertHashRoute("#/collections/ui_hash_posts/records", ".records-page");
-    assertHashRoute("#/settings", "#settings-json");
+    assertHashRoute("#/settings", ".application-settings-footer");
     assertHashRoute("#/settings/mail", "#test-email-recipient");
     assertHashRoute("#/settings/storage", "#s3-enabled");
     assertHashRoute("#/settings/backups", ".backups-surface");

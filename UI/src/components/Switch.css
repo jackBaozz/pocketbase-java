@@ -1,0 +1,67 @@
+.switch-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--fontSize, 13px);
+  font-weight: 600;
+  color: var(--surfaceTxtColor);
+  min-height: 24px;
+}
+
+.switch-control.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.switch-native-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.switch-track {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  background-color: var(--surfaceAlt2Color, #d1d5db);
+  border-radius: 12px;
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.switch-control.is-checked .switch-track {
+  background-color: var(--successColor, #1fb978);
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background-color: #ffffff;
+  border-radius: 50%;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.switch-control.is-checked .switch-thumb {
+  transform: translateX(16px);
+}
+
+.switch-control:focus-within .switch-track {
+  outline: none;
+}
+
+.switch-label-text {
+  line-height: 1.3;
+}

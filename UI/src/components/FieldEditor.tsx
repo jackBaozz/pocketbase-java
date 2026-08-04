@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Edit3, Check, X, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Switch } from "./Switch";
 
 // Types derived from App.tsx
 type FieldSchema = {
@@ -401,14 +402,11 @@ export function FieldEditor({ field, index, onUpdate, onRemove, collections }: F
                 onChange={(e) => patch({ max: toNumberOrUndefined(e.target.value) })}
               />
             </label>
-            <label className="check-row span-2">
-              <input
-                type="checkbox"
-                checked={editState.onlyInt ?? false}
-                onChange={(e) => patch({ onlyInt: e.target.checked })}
-              />
-              {t("fields.only_int", "No decimals")}
-            </label>
+            <Switch
+              checked={editState.onlyInt ?? false}
+              onChange={(checked) => patch({ onlyInt: checked })}
+              label={t("fields.only_int", "No decimals")}
+            />
           </div>
         );
 
@@ -814,38 +812,28 @@ export function FieldEditor({ field, index, onUpdate, onRemove, collections }: F
           </div>
 
           <div className="field-edit-options check-row-group">
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={editState.required ?? false}
-                onChange={(e) => setEditState({ ...editState, required: e.target.checked })}
-              />
-              {t("collections.required", "Required")}
-            </label>
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={editState.hidden ?? false}
-                onChange={(e) =>
-                  setEditState({
-                    ...editState,
-                    hidden: e.target.checked,
-                    // a hidden field can never be presentable (official fieldSettings behavior)
-                    presentable: e.target.checked ? false : editState.presentable,
-                  })
-                }
-              />
-              {t("collections.hidden", "Hidden")}
-            </label>
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={editState.presentable ?? false}
-                disabled={editState.hidden ?? false}
-                onChange={(e) => setEditState({ ...editState, presentable: e.target.checked })}
-              />
-              {t("fields.presentable", "Presentable")}
-            </label>
+            <Switch
+              checked={editState.required ?? false}
+              onChange={(checked) => setEditState({ ...editState, required: checked })}
+              label={t("collections.required", "Required")}
+            />
+            <Switch
+              checked={editState.hidden ?? false}
+              onChange={(checked) =>
+                setEditState({
+                  ...editState,
+                  hidden: checked,
+                  presentable: checked ? false : editState.presentable,
+                })
+              }
+              label={t("collections.hidden", "Hidden")}
+            />
+            <Switch
+              checked={editState.presentable ?? false}
+              disabled={editState.hidden ?? false}
+              onChange={(checked) => setEditState({ ...editState, presentable: checked })}
+              label={t("fields.presentable", "Presentable")}
+            />
           </div>
 
           {typeOptionsBlock && (

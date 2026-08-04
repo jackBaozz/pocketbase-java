@@ -229,6 +229,7 @@
     "accent_color": "主题色",
     "accent_color_too_light": "请选择更深的主题色，确保白色文字清晰可读。",
     "hide_controls": "隐藏/锁定集合和记录控件",
+    "hide_controls_help": "为了防止在生产环境中误操作，集合的创建和更新按钮将被隐藏。\n记录更新在保存前也需要额外的解锁步骤。",
     "max_days": "最多保留天数",
     "min_level": "最低级别",
     "log_request_ip": "记录请求 IP",

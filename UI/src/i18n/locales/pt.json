@@ -229,6 +229,7 @@
     "accent_color": "Cor de destaque",
     "accent_color_too_light": "Escolha uma cor de destaque mais escura para que o texto branco permaneça legível.",
     "hide_controls": "Ocultar/bloquear controles de coleções e registros",
+    "hide_controls_help": "Para evitar alterações acidentais em ambiente de produção, os botões de criação e atualização de coleções serão ocultados.\nA atualização de registros também exigirá uma etapa adicional de desbloqueio antes de salvar.",
     "max_days": "Máx. de dias",
     "min_level": "Nível mínimo",
     "log_request_ip": "Registrar IP da requisição",
