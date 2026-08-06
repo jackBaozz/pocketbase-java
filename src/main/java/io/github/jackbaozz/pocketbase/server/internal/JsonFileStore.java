@@ -3118,6 +3118,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     String identity = requiredText(body, "identity", "Failed to authenticate.");
     String identityField = bodyText(body, "identityField", "");
     String password = requiredText(body, "password", "Failed to authenticate.");
+    String remoteIp = origin != null ? origin.ip() : null;
+    AuthFailedAttemptTracker.checkLock(identity, remoteIp);
+
     String passwordField = passwordField(collection);
     Map<String, Object> record =
         records(collection).stream()
@@ -3126,15 +3129,17 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             .orElse(null);
     if (!PasswordHasher.verifyOrDummy(
         password, record == null ? null : String.valueOf(record.get(passwordField)))) {
-      throw invalidAuthCredentials();
+      AuthFailedAttemptTracker.recordFailureAndThrow(identity, remoteIp);
     }
     if (record == null) {
-      throw invalidAuthCredentials();
+      AuthFailedAttemptTracker.recordFailureAndThrow(identity, remoteIp);
     }
 
     String mfaId = bodyOrQueryText(body, query, "mfaId", null);
-    return handleAuthWithMfa(
+    Map<String, Object> res = handleAuthWithMfa(
         collection, record, request, mfaId, "password", Map.of(), origin, body, null);
+    AuthFailedAttemptTracker.recordSuccess(identity, remoteIp);
+    return res;
   }
 
   public synchronized Map<String, Object> authRefresh(

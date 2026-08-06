@@ -814,7 +814,7 @@ button.subtle.outline-button:focus-visible,
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 20px var(--spacing) 6px;
+  padding: 20px var(--spacing) 10px;
 }
 
 .app-body-wide .workspace {
@@ -1203,33 +1203,63 @@ button.subtle.outline-button:focus-visible,
 
 .page-footer {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 16px;
-  padding: 0;
-  margin-top: 4px;
+  min-height: 0;
+  padding: 6px 0 0;
+  margin-top: 6px;
   color: var(--surfaceTxtHintColor);
   font-size: 12px;
-  line-height: 1.2;
+  line-height: 1.25;
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .page-footer-left,
 .page-footer-right {
   display: flex;
   align-items: center;
-  gap: var(--smSpacing);
+  gap: 10px;
+  min-height: 0;
+  overflow: visible;
+}
+
+.page-footer-left {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.page-footer-right {
+  flex-shrink: 0;
 }
 
 .footer-link {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 0;
+  padding: 0;
   color: var(--surfaceTxtHintColor);
   text-decoration: none;
   transition: color 0.15s ease;
+  overflow: visible;
+}
+
+/*
+ * Footer icons are filled 16×16 SVGs with inset paths (see DocsBookIcon /
+ * GithubMarkIcon). Keep a fixed box so flex layout cannot squeeze them.
+ */
+.page-footer .footer-icon,
+.page-footer .footer-link svg {
+  display: block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  overflow: visible;
 }
 
 .footer-link:hover {
@@ -1239,6 +1269,7 @@ button.subtle.outline-button:focus-visible,
 .footer-link-separator {
   color: var(--surfaceAlt2Color);
   user-select: none;
+  line-height: 1;
 }
 
 .icon-button {
@@ -1520,6 +1551,16 @@ button.subtle.outline-button:focus-visible,
 
 .auth-shell .auth-form input:focus {
   background: var(--inputFocusColor);
+}
+
+.auth-shell .auth-account-locked {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--borderRadius);
+  background: color-mix(in srgb, var(--dangerColor) 12%, var(--surfaceColor));
+  color: var(--dangerColor);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .auth-shell .password-input {

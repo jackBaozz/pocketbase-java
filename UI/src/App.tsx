@@ -2,7 +2,6 @@ import {
   Activity,
   ArrowRight,
   Archive,
-  BookOpen,
   CheckSquare2,
   ChevronDown,
   ChevronRight,
@@ -495,6 +494,21 @@ function logTimeRangeFromRoute(params: Record<string, string>): LogTimeRange | n
   return startTime !== undefined && endTime !== undefined && endTime > startTime ? { start, end } : null;
 }
 
+function translateErrorMessage(err: unknown, t: (key: string, defaultVal: string) => string): string {
+  const text = errorMessage(err);
+  if (!text) return t("notifications.failed_to_authenticate", "Failed to authenticate. Incorrect email or password.");
+  if (text.includes("Failed to authenticate")) {
+    return t("notifications.failed_to_authenticate", "Failed to authenticate. Incorrect email or password.");
+  }
+  if (text.includes("Too many failed login attempts")) {
+    return t("notifications.too_many_login_attempts", "Too many failed login attempts. Please try again after 10 minutes.");
+  }
+  if (text.includes("Too many requests")) {
+    return t("notifications.too_many_requests", "Too many requests. Please try again later.");
+  }
+  return text;
+}
+
 function parseLogDate(value: string) {
   const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T"));
   return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -683,6 +697,18 @@ const HIDDEN_COLUMNS_KEY = "pbj_hidden_columns";
 const THEME_KEY = "pbj_theme";
 const ACTIVE_COLLECTION_KEY = "pbj_active_collection";
 const SIDEBAR_WIDTH_KEY = "pbj_sidebar_width";
+/**
+ * Per-identity failed login state in sessionStorage:
+ * { [emailLower]: { count, lockedUntil } }. Survives refresh; server remains authoritative.
+ */
+const AUTH_ATTEMPTS_KEY = "pbj_auth_attempts_v1";
+/** Legacy single counter — migrated once into AUTH_ATTEMPTS_KEY. */
+const AUTH_FAILED_COUNT_KEY_LEGACY = "pbj_auth_failed_count";
+/** Show captcha after this many failed login attempts in the current cycle. */
+const CAPTCHA_AFTER_FAILURES = 3;
+/** Match server AuthFailedAttemptTracker.MAX_FAILED_ATTEMPTS / LOCK_DURATION. */
+const MAX_AUTH_FAILURES = 10;
+const AUTH_LOCK_DURATION_MS = 10 * 60 * 1000;
 const SEARCH_HISTORY_LIMIT = 15;
 // Keep bulk deletion bounded even when selection spans many loaded pages. This
 // matches PocketBase's batch-oriented UX without flooding a Java server with an
@@ -722,6 +748,53 @@ function App() {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [failedCount, setFailedCount] = useState(0);
+  const [authLockedUntil, setAuthLockedUntil] = useState(0);
+  const [captchaCode, setCaptchaCode] = useState(generateCaptchaCode);
+  const [captchaInput, setCaptchaInput] = useState("");
+  // Re-render when a lock timer expires so the submit button reappears.
+  const [authLockTick, setAuthLockTick] = useState(0);
+
+  const accountLocked = authLockedUntil > Date.now();
+
+  // Load per-email attempt state whenever the identity field changes.
+  useEffect(() => {
+    const state = getAuthAttemptState(authEmail);
+    setFailedCount(state.count);
+    setAuthLockedUntil(state.lockedUntil);
+  }, [authEmail, authLockTick]);
+
+  useEffect(() => {
+    if (authLockedUntil <= Date.now()) return;
+    const delay = Math.max(250, authLockedUntil - Date.now() + 50);
+    const timer = window.setTimeout(() => {
+      clearAuthAttemptState(authEmail);
+      setAuthLockTick((n) => n + 1);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [authEmail, authLockedUntil]);
+
+  const updateAuthAttempt = useCallback((email: string, count: number, lock: boolean) => {
+    const nextCount = Math.max(0, count);
+    const shouldLock = lock || nextCount >= MAX_AUTH_FAILURES;
+    const prev = getAuthAttemptState(email);
+    const now = Date.now();
+    let lockedUntil = 0;
+    if (shouldLock) {
+      lockedUntil =
+        prev.lockedUntil > now ? prev.lockedUntil : now + AUTH_LOCK_DURATION_MS;
+    }
+    writeAuthAttemptState(email, nextCount, lockedUntil);
+    if (normalizeAuthIdentity(email) === normalizeAuthIdentity(authEmail)) {
+      setFailedCount(nextCount);
+      setAuthLockedUntil(lockedUntil);
+    }
+  }, [authEmail]);
+
+  const refreshCaptcha = useCallback(() => {
+    setCaptchaCode(generateCaptchaCode());
+    setCaptchaInput("");
+  }, []);
   const [collectionEditor, setCollectionEditor] = useState<CollectionEditorState | null>(null);
   const [recordEditor, setRecordEditor] = useState<RecordEditorState | null>(null);
   const [relationRecordEditors, setRelationRecordEditors] = useState<RelationRecordEditorState[]>([]);
@@ -1682,10 +1755,19 @@ function App() {
   }, [api, authenticated, includeSuperuserRequests, logFilter, logRouteId, logRoutePage, notify, replaceLogRoute, selectedLog?.id, view]);
 
   async function completeAuth(auth: AuthResponse) {
+    const signedInEmail =
+      typeof auth.record?.email === "string" && auth.record.email
+        ? String(auth.record.email)
+        : authEmail;
+    clearAuthAttemptState(signedInEmail);
+    clearAuthAttemptState(authEmail);
     setAuthToken(auth.token);
     setAuthRecord(auth.record ?? null);
     setAuthEmail("");
     setAuthPassword("");
+    setFailedCount(0);
+    setAuthLockedUntil(0);
+    setCaptchaInput("");
     setMfaChallenge(null);
     setOtpCode("");
     const [, bootstrap] = await Promise.all([refreshHealth(auth.token), refreshBootstrapStatus()]);
@@ -1703,9 +1785,71 @@ function App() {
     notify(t("notifications.otp_sent", "A one-time code has been sent to your email"));
   }
 
+  function applyAuthFailure(error: unknown, email: string) {
+    const prev = getAuthAttemptState(email);
+    const serverCount = failedAttemptsFromError(error);
+    const lockedByServer = error instanceof ApiRequestError && error.status === 429;
+    // Count failures per email for UI lock/captcha. Do not use server max(IP, identity)
+    // as the UI counter — an IP-wide lock would otherwise freeze every new account too.
+    let count = prev.count + 1;
+    if (serverCount != null && !lockedByServer) {
+      count = Math.max(count, serverCount);
+    }
+    // Lock this identity only after *its* own 10 failures (or the 10th attempt that 429s).
+    const lock = count >= MAX_AUTH_FAILURES;
+    updateAuthAttempt(email, count, lock);
+    refreshCaptcha();
+  }
+
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const email = authEmail.trim();
+    if (!email) return;
+
+    // Per-account UI lock: this identity cannot submit until the lock expires.
+    // Changing the email field loads another identity's state and may re-enable submit.
+    if (!setupRequired && isAuthIdentityLocked(email)) {
+      notify(
+        t(
+          "notifications.too_many_login_attempts",
+          "Too many failed login attempts. Please try again after 10 minutes."
+        ),
+        "error"
+      );
+      return;
+    }
+
+    // Captcha is client UX, but every failed attempt (including wrong captcha) must hit the
+    // server so identity+IP lockout still advances. Wrong captcha uses a dummy password so a
+    // correct password is never accepted when captcha fails.
+    if (!setupRequired && failedCount >= CAPTCHA_AFTER_FAILURES && !isAuthIdentityLocked(email)) {
+      if (captchaInput.trim().toUpperCase() !== captchaCode.toUpperCase()) {
+        setLoading(true);
+        try {
+          await apiRequest<AuthResponse>("/api/collections/_superusers/auth-with-password", "", {
+            method: "POST",
+            body: {
+              email,
+              identity: email,
+              // Deliberately invalid — records a server-side failure for lockout without
+              // revealing whether the real password was correct.
+              password: `\0captcha-reject-${Date.now()}`
+            }
+          });
+        } catch (error) {
+          applyAuthFailure(error, email);
+          if (error instanceof ApiRequestError && error.status === 429) {
+            notify(translateErrorMessage(error, t), "error");
+            return;
+          }
+        } finally {
+          setLoading(false);
+        }
+        notify(t("notifications.captcha_incorrect", "Incorrect verification code. Please try again."), "error");
+        return;
+      }
+    }
+
     const body = { email, identity: email, password: authPassword };
     setLoading(true);
     try {
@@ -1719,15 +1863,17 @@ function App() {
       });
       await completeAuth(auth);
     } catch (error) {
+      // Password was accepted; MFA is a next step, not a failed attempt.
       if (error instanceof ApiRequestError && error.mfaId) {
         try {
           await requestOtp(email, error.mfaId);
         } catch (otpError) {
-          notify(errorMessage(otpError), "error");
+          notify(translateErrorMessage(otpError, t), "error");
         }
-      } else {
-        notify(errorMessage(error), "error");
+        return;
       }
+      applyAuthFailure(error, email);
+      notify(translateErrorMessage(error, t), "error");
     } finally {
       setLoading(false);
     }
@@ -2771,11 +2917,17 @@ function App() {
               email={authEmail}
               password={authPassword}
               loading={loading}
+              accountLocked={accountLocked}
               mfaChallenge={mfaChallenge}
               otpCode={otpCode}
+              failedCount={failedCount}
+              captchaCode={captchaCode}
+              captchaInput={captchaInput}
               onEmail={setAuthEmail}
               onPassword={setAuthPassword}
               onOtpCode={setOtpCode}
+              onCaptchaInput={setCaptchaInput}
+              onRefreshCaptcha={refreshCaptcha}
               onSubmit={handleAuth}
               onOtpSubmit={handleOtpSubmit}
               onResendOtp={resendOtp}
@@ -3143,16 +3295,249 @@ type AuthPanelProps = {
   email: string;
   password: string;
   loading: boolean;
+  /** Current email identity is locked after 10 failed attempts (UI + session). */
+  accountLocked: boolean;
   mfaChallenge: MfaChallenge | null;
   otpCode: string;
+  failedCount: number;
+  captchaCode: string;
+  captchaInput: string;
   onEmail: (value: string) => void;
   onPassword: (value: string) => void;
   onOtpCode: (value: string) => void;
+  onCaptchaInput: (value: string) => void;
+  onRefreshCaptcha: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onOtpSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onResendOtp: () => void;
   onCancelMfa: () => void;
 };
+
+type StoredAuthAttempt = {
+  count: number;
+  lockedUntil: number;
+};
+
+function normalizeAuthIdentity(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function readAllAuthAttempts(): Record<string, StoredAuthAttempt> {
+  try {
+    const raw = sessionStorage.getItem(AUTH_ATTEMPTS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isPlainObject(parsed)) return {};
+    const result: Record<string, StoredAuthAttempt> = {};
+    const now = Date.now();
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!isPlainObject(value)) continue;
+      const count = typeof value.count === "number" && Number.isFinite(value.count) ? Math.max(0, Math.floor(value.count)) : 0;
+      const lockedUntil =
+        typeof value.lockedUntil === "number" && Number.isFinite(value.lockedUntil)
+          ? Math.max(0, Math.floor(value.lockedUntil))
+          : 0;
+      // Drop expired locks with zero remaining interest.
+      if (lockedUntil > 0 && lockedUntil <= now) continue;
+      if (count <= 0 && lockedUntil <= now) continue;
+      result[key] = { count, lockedUntil: lockedUntil > now ? lockedUntil : 0 };
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function writeAllAuthAttempts(map: Record<string, StoredAuthAttempt>) {
+  try {
+    if (Object.keys(map).length === 0) {
+      sessionStorage.removeItem(AUTH_ATTEMPTS_KEY);
+    } else {
+      sessionStorage.setItem(AUTH_ATTEMPTS_KEY, JSON.stringify(map));
+    }
+    // Drop legacy single counter if present.
+    sessionStorage.removeItem(AUTH_FAILED_COUNT_KEY_LEGACY);
+  } catch {
+    // Private mode / storage full — in-memory state still works for this page session.
+  }
+}
+
+function getAuthAttemptState(email: string): StoredAuthAttempt {
+  const key = normalizeAuthIdentity(email);
+  if (!key) return { count: 0, lockedUntil: 0 };
+  const state = readAllAuthAttempts()[key];
+  if (!state) return { count: 0, lockedUntil: 0 };
+  const now = Date.now();
+  if (state.lockedUntil > 0 && state.lockedUntil <= now) {
+    return { count: 0, lockedUntil: 0 };
+  }
+  return {
+    count: state.count,
+    lockedUntil: state.lockedUntil > now ? state.lockedUntil : 0
+  };
+}
+
+function writeAuthAttemptState(email: string, count: number, lockedUntil: number) {
+  const key = normalizeAuthIdentity(email);
+  if (!key) return;
+  const all = readAllAuthAttempts();
+  const now = Date.now();
+  if (count <= 0 && lockedUntil <= now) {
+    delete all[key];
+  } else {
+    all[key] = {
+      count: Math.max(0, count),
+      lockedUntil: lockedUntil > now ? lockedUntil : 0
+    };
+  }
+  writeAllAuthAttempts(all);
+}
+
+function clearAuthAttemptState(email: string) {
+  writeAuthAttemptState(email, 0, 0);
+}
+
+function isAuthIdentityLocked(email: string): boolean {
+  return getAuthAttemptState(email).lockedUntil > Date.now();
+}
+
+/** Reads server-reported failure count from auth error payload data.failedAttempts. */
+function failedAttemptsFromError(error: unknown): number | null {
+  if (!(error instanceof ApiRequestError) || !isPlainObject(error.data)) return null;
+  const value = error.data.failedAttempts;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+  return null;
+}
+
+function generateCaptchaCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+  for (let i = 0; i < 4; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+/**
+ * Footer icons use filled 16×16 glyphs with a padded viewBox.
+ * Lucide stroke icons (and edge-touching fills) get clipped by the SVG viewport
+ * at small sizes, so icons look incomplete on the page footer.
+ */
+function DocsBookIcon() {
+  return (
+    <svg
+      className="footer-icon"
+      viewBox="0 0 16 16"
+      width={16}
+      height={16}
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/*
+        Bootstrap Icons "book" path, slightly inset so stroke-less fills are not
+        clipped by the SVG canvas edge at 16px.
+      */}
+      <g transform="translate(0.5 0.5) scale(0.9375)">
+        <path
+          fill="currentColor"
+          d="M1 2.828c.885-.37 2.154-.769 3.388-.893 1.23-.124 2.503.063 3.112.752v9.746c-.935-.53-2.12-.603-3.213-.493-1.18.12-2.37.461-3.287.811zm7.5-.141c.654-.689 1.923-.876 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492zM8 1.783C7.015.936 5.587.81 4.287.94c-1.514.153-3.042.672-3.994 1.105A.5.5 0 0 0 0 2.5v11a.5.5 0 0 0 .707.455c.882-.4 2.303-.881 3.68-1.02 1.409-.142 2.59.087 3.223.877a.5.5 0 0 0 .78 0c.633-.79 1.814-1.019 3.222-.877 1.378.139 2.8.62 3.681 1.02A.5.5 0 0 0 16 13.5v-11a.5.5 0 0 0-.293-.455c-.952-.433-2.48-.952-3.994-1.105C10.413.809 8.985.936 8 1.783"
+        />
+      </g>
+    </svg>
+  );
+}
+
+function GithubMarkIcon() {
+  return (
+    <svg
+      className="footer-icon"
+      viewBox="0 0 16 16"
+      width={16}
+      height={16}
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/*
+        Official Octicons mark, scaled slightly inward so the circle/ears are not
+        clipped by the SVG canvas anti-alias edge (looks "cut off" at 16px).
+      */}
+      <g transform="translate(0.6 0.6) scale(0.925)">
+        <path
+          fill="currentColor"
+          d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+        />
+      </g>
+    </svg>
+  );
+}
+
+function CaptchaView(props: { code: string; onRefresh: () => void }) {
+  const { t } = useTranslation();
+  const chars = props.code.split("");
+  const colors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+  const lines = [
+    { x1: 10, y1: 15, x2: 110, y2: 25, stroke: "#64748b" },
+    { x1: 5, y1: 30, x2: 115, y2: 10, stroke: "#94a3b8" }
+  ];
+  const refreshLabel = t("auth.captcha_refresh", "Refresh");
+  const refreshTitle = t("auth.captcha_refresh_title", "Click to refresh captcha");
+  return (
+    <div className="captcha-container" style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.5rem" }}>
+      <svg
+        width="120"
+        height="38"
+        viewBox="0 0 120 38"
+        onClick={props.onRefresh}
+        role="img"
+        aria-label={refreshTitle}
+        style={{
+          background: "var(--surface-muted, #1e293b)",
+          borderRadius: "6px",
+          border: "1px solid var(--border, #334155)",
+          cursor: "pointer",
+          userSelect: "none"
+        }}
+      >
+        <title>{refreshTitle}</title>
+        {lines.map((l, i) => (
+          <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.stroke} strokeWidth="1.5" opacity="0.6" />
+        ))}
+        {chars.map((char, index) => {
+          const x = 18 + index * 24;
+          const y = 26;
+          const rotate = (index % 2 === 0 ? 1 : -1) * (10 + (index * 7) % 15);
+          const color = colors[index % colors.length];
+          return (
+            <text
+              key={index}
+              x={x}
+              y={y}
+              fill={color}
+              fontSize="22"
+              fontWeight="bold"
+              fontFamily="monospace"
+              transform={`rotate(${rotate}, ${x}, ${y})`}
+            >
+              {char}
+            </text>
+          );
+        })}
+      </svg>
+      <button
+        type="button"
+        className="subtle compact"
+        onClick={props.onRefresh}
+        title={refreshTitle}
+        aria-label={refreshLabel}
+        style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+      >
+        {refreshLabel}
+      </button>
+    </div>
+  );
+}
 
 function AuthPanel(props: AuthPanelProps) {
   const { t } = useTranslation();
@@ -3259,8 +3644,29 @@ function AuthPanel(props: AuthPanelProps) {
             minLength={8}
             value={props.password}
             onChange={(event) => props.onPassword(event.target.value)}
+            disabled={props.accountLocked}
           />
         </label>
+        {!props.setupRequired && !props.accountLocked && props.failedCount >= CAPTCHA_AFTER_FAILURES && (
+          <label style={{ marginTop: "0.75rem" }}>
+            <span className="auth-field-label">
+              {t("auth.captcha_label", "Verification Code")}
+              <span className="auth-required" aria-hidden="true">*</span>
+            </span>
+            <input
+              id="superuser-captcha"
+              name="captcha"
+              type="text"
+              maxLength={4}
+              required
+              autoComplete="off"
+              value={props.captchaInput}
+              onChange={(event) => props.onCaptchaInput(event.target.value)}
+              placeholder={t("auth.captcha_placeholder", "4-digit code")}
+            />
+            <CaptchaView code={props.captchaCode} onRefresh={props.onRefreshCaptcha} />
+          </label>
+        )}
         {!props.setupRequired && (
           <button
             type="button"
@@ -3272,19 +3678,28 @@ function AuthPanel(props: AuthPanelProps) {
             {t("auth.forgot_password", "Forgot password?")}
           </button>
         )}
-        <button className="primary submit" type="submit" disabled={props.loading}>
-          {props.setupRequired ? (
-            <>
-              {t("auth.create_and_sign_in", "Create and sign in")}
-              <KeyRound size={16} />
-            </>
-          ) : (
-            <>
-              {t("auth.sign_in", "Sign in")}
-              <ArrowRight size={18} />
-            </>
-          )}
-        </button>
+        {props.accountLocked ? (
+          <p className="auth-account-locked" role="alert">
+            {t(
+              "auth.account_locked",
+              "This account is temporarily locked after too many failed attempts. Try again in 10 minutes, or sign in with a different account."
+            )}
+          </p>
+        ) : (
+          <button className="primary submit" type="submit" disabled={props.loading}>
+            {props.setupRequired ? (
+              <>
+                {t("auth.create_and_sign_in", "Create and sign in")}
+                <KeyRound size={16} />
+              </>
+            ) : (
+              <>
+                {t("auth.sign_in", "Sign in")}
+                <ArrowRight size={18} />
+              </>
+            )}
+          </button>
+        )}
       </form>
     </section>
   );
@@ -4101,7 +4516,7 @@ function RecordsView(props: RecordsViewProps) {
             onClick={(e) => e.preventDefault()}
             title={t("footer.docs", "Docs")}
           >
-            <BookOpen size={14} />
+            <DocsBookIcon />
             <span>Docs</span>
           </a>
           <span className="footer-link-separator">|</span>
@@ -4112,7 +4527,7 @@ function RecordsView(props: RecordsViewProps) {
             className="footer-link"
             title="PocketBase Java GitHub"
           >
-            <GitBranch size={14} />
+            <GithubMarkIcon />
             <span>PocketBase v0.3.2</span>
           </a>
         </div>
@@ -6998,22 +7413,22 @@ function LogsView(props: LogsViewProps) {
             onClick={(e) => e.preventDefault()}
             title={t("footer.docs", "Docs")}
           >
-            <BookOpen size={14} />
+            <DocsBookIcon />
             <span>Docs</span>
           </a>
           <span className="footer-link-separator">|</span>
           <a
             href="https://github.com/jackBaozz/pocketbase-java"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="footer-link"
-              title="PocketBase Java GitHub"
-            >
-              <GitBranch size={14} />
-              <span>PocketBase v0.3.1</span>
-            </a>
-          </div>
-        </footer>
+            target="_blank"
+            rel="noopener noreferrer"
+            className="footer-link"
+            title="PocketBase Java GitHub"
+          >
+            <GithubMarkIcon />
+            <span>PocketBase v0.3.2</span>
+          </a>
+        </div>
+      </footer>
       </div>
     </section>
   );

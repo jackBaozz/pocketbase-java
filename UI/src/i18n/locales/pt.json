@@ -334,7 +334,12 @@
     "otp_code": "Código de uso único",
     "otp_sent_to": "Enviamos um código de uso único para {{email}}.",
     "request_another_otp": "Solicitar outro código",
-    "verify_and_sign_in": "Verificar e entrar"
+    "verify_and_sign_in": "Verificar e entrar",
+    "captcha_label": "Código de verificação",
+    "captcha_placeholder": "Código de 4 dígitos",
+    "captcha_refresh": "Atualizar",
+    "captcha_refresh_title": "Clique para atualizar o captcha",
+    "account_locked": "Esta conta foi temporariamente bloqueada após demasiadas tentativas falhadas. Tente novamente em 10 minutos ou inicie sessão com outra conta."
   },
   "collections": {
     "title": "Coleções",
@@ -797,6 +802,11 @@
     "test_email_queued": "E-mail de teste na fila",
     "s3_check_completed": "Verificação de conexão S3 concluída",
     "collections_imported": "Coleções importadas",
+    "failed_to_authenticate": "Falha na autenticação. E-mail ou senha incorretos.",
+    "too_many_login_attempts": "Muitas tentativas de login com falha. Tente novamente após 10 minutos.",
+    "captcha_required": "Digite o código de verificação.",
+    "captcha_incorrect": "Código de verificação incorreto. Tente novamente.",
+    "too_many_requests": "Muitas solicitações. Tente novamente mais tarde.",
     "sql_executed": "SQL executado",
     "cron_triggered": "{{id}} acionado",
     "copied": "Copiado",

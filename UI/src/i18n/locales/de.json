@@ -164,7 +164,12 @@
     "otp_code": "Einmalcode",
     "otp_sent_to": "Wir haben einen Einmalcode an {{email}} gesendet.",
     "request_another_otp": "Neuen Code anfordern",
-    "verify_and_sign_in": "Bestätigen und anmelden"
+    "verify_and_sign_in": "Bestätigen und anmelden",
+    "captcha_label": "Bestätigungscode",
+    "captcha_placeholder": "4-stelliger Code",
+    "captcha_refresh": "Aktualisieren",
+    "captcha_refresh_title": "Klicken, um Captcha zu aktualisieren",
+    "account_locked": "Dieses Konto wurde nach zu vielen fehlgeschlagenen Versuchen vorübergehend gesperrt. Versuchen Sie es in 10 Minuten erneut oder melden Sie sich mit einem anderen Konto an."
   },
   "auth_actions": {
     "install": {
@@ -797,6 +802,11 @@
     "test_email_queued": "Test-E-Mail eingereiht",
     "s3_check_completed": "S3-Verbindungsprüfung abgeschlossen",
     "collections_imported": "Sammlungen importiert",
+    "failed_to_authenticate": "Authentifizierung fehlgeschlagen. E-Mail oder Passwort ist falsch.",
+    "too_many_login_attempts": "Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es in 10 Minuten erneut.",
+    "captcha_required": "Bitte geben Sie den Bestätigungscode ein.",
+    "captcha_incorrect": "Falscher Bestätigungscode. Bitte versuchen Sie es erneut.",
+    "too_many_requests": "Zu viele Anfragen. Bitte versuchen Sie es später erneut.",
     "sql_executed": "SQL ausgeführt",
     "cron_triggered": "{{id}} ausgelöst",
     "copied": "Kopiert",

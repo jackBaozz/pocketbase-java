@@ -334,7 +334,12 @@
     "otp_code": "ワンタイムコード",
     "otp_sent_to": "{{email}} にワンタイムコードを送信しました。",
     "request_another_otp": "コードを再送信",
-    "verify_and_sign_in": "確認してサインイン"
+    "verify_and_sign_in": "確認してサインイン",
+    "captcha_label": "認証コード",
+    "captcha_placeholder": "4桁のコード",
+    "captcha_refresh": "更新",
+    "captcha_refresh_title": "クリックして認証コードを更新",
+    "account_locked": "ログイン失敗が多すぎたため、このアカウントは一時的にロックされています。10分後に再試行するか、別のアカウントでサインインしてください。"
   },
   "collections": {
     "title": "コレクション",
@@ -797,6 +802,11 @@
     "test_email_queued": "テストメールをキューに追加しました",
     "s3_check_completed": "S3 接続チェックが完了しました",
     "collections_imported": "コレクションをインポートしました",
+    "failed_to_authenticate": "認証に失敗しました。メールアドレスまたはパスワードが正しくありません。",
+    "too_many_login_attempts": "ログイン失敗が多すぎます。10分後に再試行してください。",
+    "captcha_required": "認証コードを入力してください。",
+    "captcha_incorrect": "認証コードが正しくありません。もう一度お試しください。",
+    "too_many_requests": "リクエストが多すぎます。しばらくしてから再試行してください。",
     "sql_executed": "SQL を実行しました",
     "cron_triggered": "{{id}} を実行しました",
     "copied": "コピーしました",

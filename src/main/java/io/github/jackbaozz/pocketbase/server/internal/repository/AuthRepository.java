@@ -124,6 +124,9 @@ public class AuthRepository extends BaseRepository {
       throw new ApiException(400, "Failed to authenticate.", ApiErrors.requiredField("password"));
     }
 
+    String remoteIp = origin != null ? origin.ip() : null;
+    io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.checkLock(identity, remoteIp);
+
     if (SystemCollections.isSuperuserIdentifier(collection)) {
       CollectionSchema superuserSchema = storeContext.getCollection(SUPERUSERS);
       var record =
@@ -173,7 +176,7 @@ public class AuthRepository extends BaseRepository {
             rec.put("created", created);
             rec.put("updated", updated);
             rec.put("tokenKey", tokenKey);
-            return handleAuthWithMfa(
+            Map<String, Object> res = handleAuthWithMfa(
                 superuserSchema,
                 rec,
                 request,
@@ -183,6 +186,8 @@ public class AuthRepository extends BaseRepository {
                 origin,
                 body,
                 null);
+            io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordSuccess(identity, remoteIp);
+            return res;
           }
           Duration ttl =
               tokenDuration(
@@ -203,10 +208,12 @@ public class AuthRepository extends BaseRepository {
           rec.put("collectionName", SUPERUSERS);
           rec.put("created", created);
           rec.put("updated", updated);
+          io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordSuccess(identity, remoteIp);
           return Map.of("token", token, "record", rec);
         }
       }
-      throw invalidAuthCredentials();
+      io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordFailureAndThrow(
+          identity, remoteIp);
     }
 
     CollectionSchema colSchema = storeContext.getCollection(collection);
@@ -229,7 +236,7 @@ public class AuthRepository extends BaseRepository {
     if (PasswordHasher.verifyOrDummy(
         password, passwordHash == null ? null : String.valueOf(passwordHash))) {
       if (record != null) {
-        return handleAuthWithMfa(
+        Map<String, Object> res = handleAuthWithMfa(
             colSchema,
             record,
             request,
@@ -239,9 +246,12 @@ public class AuthRepository extends BaseRepository {
             origin,
             body,
             null);
+        io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordSuccess(identity, remoteIp);
+        return res;
       }
     }
-    throw invalidAuthCredentials();
+    io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordFailureAndThrow(
+        identity, remoteIp);
   }
 
   private ApiException invalidAuthCredentials() {

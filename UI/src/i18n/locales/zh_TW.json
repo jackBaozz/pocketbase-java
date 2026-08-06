@@ -334,7 +334,12 @@
     "otp_code": "一次性驗證碼",
     "otp_sent_to": "我們已將一次性驗證碼寄送至 {{email}}。",
     "request_another_otp": "重新取得驗證碼",
-    "verify_and_sign_in": "驗證並登入"
+    "verify_and_sign_in": "驗證並登入",
+    "captcha_label": "驗證碼",
+    "captcha_placeholder": "4 位驗證碼",
+    "captcha_refresh": "重新整理",
+    "captcha_refresh_title": "點擊重新整理驗證碼",
+    "account_locked": "此帳戶因連續登入失敗次數過多已暫時鎖定。請 10 分鐘後再試，或改用其他帳戶登入。"
   },
   "collections": {
     "title": "資料集合",
@@ -797,6 +802,11 @@
     "test_email_queued": "測試郵件已排入佇列",
     "s3_check_completed": "S3 連線檢查已完成",
     "collections_imported": "集合已匯入",
+    "failed_to_authenticate": "認證失敗，電子郵件或密碼錯誤",
+    "too_many_login_attempts": "連續登入失敗次數過多，請 10 分鐘後再試",
+    "captcha_required": "請輸入驗證碼",
+    "captcha_incorrect": "驗證碼錯誤，請重新輸入",
+    "too_many_requests": "請求過於頻繁，請稍後再試",
     "sql_executed": "SQL 已執行",
     "cron_triggered": "已觸發 {{id}}",
     "copied": "已複製",
