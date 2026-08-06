@@ -5,16 +5,16 @@
     "type" : "auth",
     "system" : true,
     "authRule" : "",
-    "created" : "2026-06-14T08:53:31.793460Z",
-    "updated" : "2026-06-14T08:53:31.793460Z",
+    "created" : "2026-08-06T22:47:50.728612Z",
+    "updated" : "2026-08-06T22:47:50.728612Z",
     "passwordAuth" : {
       "enabled" : true,
       "identityFields" : [ "email" ]
     },
     "otp" : {
       "enabled" : false,
-      "duration" : 300,
-      "length" : 6,
+      "duration" : 180,
+      "length" : 8,
       "emailTemplate" : {
         "subject" : "OTP for {APP_NAME}",
         "body" : "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
@@ -22,7 +22,7 @@
     },
     "mfa" : {
       "enabled" : false,
-      "duration" : 1800
+      "duration" : 600
     },
     "oauth2" : {
       "enabled" : false,
@@ -42,24 +42,24 @@
       }
     },
     "authToken" : {
-      "duration" : 1209600,
-      "secret" : "peph5l51hfcupys34q4wlkkz366mo128qumhuuqvicgegzuxww"
+      "duration" : 86400,
+      "secret" : "l7uv2plm3jmo1fierwnyqw1qjlpjfnewhmwzhl6b5zyxxb7ibm"
     },
     "passwordResetToken" : {
       "duration" : 1800,
-      "secret" : "z2vgq5kw7cj0shfijdzxyehgfeybwg36jbo15a5puja4wxldrh"
+      "secret" : "v6j5s03e6xnpyre80rm4hfxsuwwzp6oldkpx6a8ixgq3yq7bcs"
     },
     "verificationToken" : {
-      "duration" : 604800,
-      "secret" : "plh29lfq4kpp7c479gobi0ar7sq1nbw65e6lx3jdsbumu41vc2"
+      "duration" : 86400,
+      "secret" : "3ys82gutvyppv55sm3vo9cbk18w6wewcbd5yg2y1elo1z8gxva"
     },
     "emailChangeToken" : {
       "duration" : 1800,
-      "secret" : "7uxtj7i4oulez1blf2m4rkphetf8hjen4zyqm1obtyewzmz7a0"
+      "secret" : "tnj5ie5abqculparsnrcdmb8ktvmu5vp07eu2zp7am9gsfehgr"
     },
     "fileToken" : {
       "duration" : 180,
-      "secret" : "olzzy30gm1v8r5tlt4zlnm0wshdxtbcm5nbh8g5u20c45v2iqx"
+      "secret" : "424gv3ys0d55cfwm7g6z4m4jfklbn58mfipqt5qiy39zcxtx9c"
     },
     "verificationTemplate" : {
       "subject" : "Verify your {APP_NAME} email",
@@ -73,7 +73,7 @@
       "subject" : "Confirm your {APP_NAME} new email address",
       "body" : "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
     },
-    "indexes" : [ "CREATE UNIQUE INDEX `idx_tokenKey_pbc_superusers` ON `_superusers` (`tokenKey`)", "CREATE UNIQUE INDEX `idx_email_pbc_superusers` ON `_superusers` (`email`) WHERE `email` != ''" ],
+    "indexes" : [ "CREATE UNIQUE INDEX `idx_tokenKey_pbc_3142635823` ON `_superusers` (`tokenKey`)", "CREATE UNIQUE INDEX `idx_email_pbc_3142635823` ON `_superusers` (`email`) WHERE `email` != ''" ],
     "fields" : [ {
       "id" : "text3208210256",
       "name" : "id",
@@ -157,198 +157,6 @@
     } ],
     "manageRule" : null
   }, {
-    "id" : "pbc_fn5t6ejzdg3z",
-    "name" : "steel",
-    "type" : "base",
-    "system" : false,
-    "authRule" : "",
-    "created" : "2026-06-29T05:44:39.212201Z",
-    "updated" : "2026-06-29T05:44:39.212201Z",
-    "passwordAuth" : {
-      "enabled" : true,
-      "identityFields" : [ "email" ]
-    },
-    "otp" : {
-      "enabled" : false,
-      "duration" : 300,
-      "length" : 6,
-      "emailTemplate" : {
-        "subject" : "OTP for {APP_NAME}",
-        "body" : "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-      }
-    },
-    "mfa" : {
-      "enabled" : false,
-      "duration" : 1800
-    },
-    "oauth2" : {
-      "enabled" : false,
-      "providers" : [ ],
-      "mappedFields" : {
-        "id" : "",
-        "name" : "",
-        "username" : "",
-        "avatarURL" : ""
-      }
-    },
-    "authAlert" : {
-      "enabled" : true,
-      "emailTemplate" : {
-        "subject" : "Login from a new location",
-        "body" : "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-      }
-    },
-    "authToken" : {
-      "duration" : 1209600
-    },
-    "passwordResetToken" : {
-      "duration" : 1800
-    },
-    "verificationToken" : {
-      "duration" : 604800
-    },
-    "emailChangeToken" : {
-      "duration" : 1800
-    },
-    "fileToken" : {
-      "duration" : 180
-    },
-    "verificationTemplate" : {
-      "subject" : "Verify your {APP_NAME} email",
-      "body" : "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p><i>If you didn't recently register, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "resetPasswordTemplate" : {
-      "subject" : "Reset your {APP_NAME} password",
-      "body" : "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "confirmEmailChangeTemplate" : {
-      "subject" : "Confirm your {APP_NAME} new email address",
-      "body" : "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "indexes" : [ ],
-    "fields" : [ {
-      "id" : "text3208210256",
-      "name" : "id",
-      "type" : "text",
-      "required" : true,
-      "unique" : false,
-      "hidden" : false,
-      "system" : true,
-      "presentable" : false,
-      "options" : { }
-    }, {
-      "id" : "field_teokv8w1goj2",
-      "name" : "title",
-      "type" : "text",
-      "required" : true,
-      "unique" : false,
-      "hidden" : false,
-      "system" : false,
-      "presentable" : false,
-      "options" : { }
-    }, {
-      "id" : "field_4lqgtvhvsy8k",
-      "name" : "number",
-      "type" : "number",
-      "required" : false,
-      "unique" : false,
-      "hidden" : false,
-      "system" : false,
-      "presentable" : false,
-      "options" : { }
-    } ]
-  }, {
-    "id" : "pbc_54epesrj8too",
-    "name" : "t_auth",
-    "type" : "base",
-    "system" : false,
-    "authRule" : "",
-    "created" : "2026-06-29T05:45:07.789230Z",
-    "updated" : "2026-06-29T05:45:07.789230Z",
-    "passwordAuth" : {
-      "enabled" : true,
-      "identityFields" : [ "email" ]
-    },
-    "otp" : {
-      "enabled" : false,
-      "duration" : 300,
-      "length" : 6,
-      "emailTemplate" : {
-        "subject" : "OTP for {APP_NAME}",
-        "body" : "<p>Hello,</p>\n<p>Your one-time password is: <strong>{OTP}</strong></p>\n<p><i>If you didn't ask for the one-time password, you can ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-      }
-    },
-    "mfa" : {
-      "enabled" : false,
-      "duration" : 1800
-    },
-    "oauth2" : {
-      "enabled" : false,
-      "providers" : [ ],
-      "mappedFields" : {
-        "id" : "",
-        "name" : "",
-        "username" : "",
-        "avatarURL" : ""
-      }
-    },
-    "authAlert" : {
-      "enabled" : true,
-      "emailTemplate" : {
-        "subject" : "Login from a new location",
-        "body" : "<p>Hello,</p>\n<p>We noticed a login to your {APP_NAME} account from a new location:</p>\n<p><em>{ALERT_INFO}</em></p>\n<p><strong>If this wasn't you, you should immediately change your {APP_NAME} account password to revoke access from all other locations.</strong></p>\n<p>If this was you, you may disregard this email.</p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-      }
-    },
-    "authToken" : {
-      "duration" : 1209600
-    },
-    "passwordResetToken" : {
-      "duration" : 1800
-    },
-    "verificationToken" : {
-      "duration" : 604800
-    },
-    "emailChangeToken" : {
-      "duration" : 1800
-    },
-    "fileToken" : {
-      "duration" : 180
-    },
-    "verificationTemplate" : {
-      "subject" : "Verify your {APP_NAME} email",
-      "body" : "<p>Hello,</p>\n<p>Thank you for joining us at {APP_NAME}.</p>\n<p>Click on the button below to verify your email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-verification/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Verify</a>\n</p>\n<p><i>If you didn't recently register, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "resetPasswordTemplate" : {
-      "subject" : "Reset your {APP_NAME} password",
-      "body" : "<p>Hello,</p>\n<p>Click on the button below to reset your password.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-password-reset/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Reset password</a>\n</p>\n<p><i>If you didn't ask to reset your password, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "confirmEmailChangeTemplate" : {
-      "subject" : "Confirm your {APP_NAME} new email address",
-      "body" : "<p>Hello,</p>\n<p>Click on the button below to confirm your new email address.</p>\n<p>\n  <a class=\"btn\" href=\"{APP_URL}/_/#/auth/confirm-email-change/{TOKEN}\" target=\"_blank\" rel=\"noopener\">Confirm new email</a>\n</p>\n<p><i>If you didn't ask to change your email address, please ignore this email.</i></p>\n<p>\n  Thanks,<br/>\n  {APP_NAME} team\n</p>\n"
-    },
-    "indexes" : [ ],
-    "fields" : [ {
-      "id" : "text3208210256",
-      "name" : "id",
-      "type" : "text",
-      "required" : true,
-      "unique" : false,
-      "hidden" : false,
-      "system" : true,
-      "presentable" : false,
-      "options" : { }
-    }, {
-      "id" : "field_0zf9xoiukwac",
-      "name" : "title",
-      "type" : "text",
-      "required" : true,
-      "unique" : false,
-      "hidden" : false,
-      "system" : false,
-      "presentable" : false,
-      "options" : { }
-    } ]
-  }, {
     "id" : "pbc_4275539003",
     "name" : "_authOrigins",
     "type" : "base",
@@ -357,8 +165,8 @@
     "viewRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "deleteRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "authRule" : "",
-    "created" : "2026-07-20T14:32:10.925125Z",
-    "updated" : "2026-07-20T14:32:10.925125Z",
+    "created" : "2026-08-06T22:47:50.728755Z",
+    "updated" : "2026-08-06T22:47:50.728755Z",
     "passwordAuth" : {
       "enabled" : true,
       "identityFields" : [ "email" ]
@@ -491,8 +299,8 @@
     "viewRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "deleteRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "authRule" : "",
-    "created" : "2026-07-20T14:32:10.925165Z",
-    "updated" : "2026-07-20T14:32:10.925165Z",
+    "created" : "2026-08-06T22:47:50.728767Z",
+    "updated" : "2026-08-06T22:47:50.728767Z",
     "passwordAuth" : {
       "enabled" : true,
       "identityFields" : [ "email" ]
@@ -634,8 +442,8 @@
     "listRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "viewRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "authRule" : "",
-    "created" : "2026-07-20T14:32:10.925204Z",
-    "updated" : "2026-07-20T14:32:10.925204Z",
+    "created" : "2026-08-06T22:47:50.728775Z",
+    "updated" : "2026-08-06T22:47:50.728775Z",
     "passwordAuth" : {
       "enabled" : true,
       "identityFields" : [ "email" ]
@@ -767,8 +575,8 @@
     "listRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "viewRule" : "@request.auth.id != '' && recordRef = @request.auth.id && collectionRef = @request.auth.collectionId",
     "authRule" : "",
-    "created" : "2026-07-20T14:32:10.925284Z",
-    "updated" : "2026-07-20T14:32:10.925284Z",
+    "created" : "2026-08-06T22:47:50.728784Z",
+    "updated" : "2026-08-06T22:47:50.728784Z",
     "passwordAuth" : {
       "enabled" : true,
       "identityFields" : [ "email" ]

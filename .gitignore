@@ -20,11 +20,26 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+identifier.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ==================== Runtime data (pb_data) ====================
+# Local runtime dir: records, settings, uploads, logs, backups, secrets.
+# Only the shared schema scaffold is kept in git (optional).
 pb_data/*
 !pb_data/pb_schema.json
-identifier.db
+# App signing secret — must never be committed (also covered by pb_data/*).
+pb_data/pb_secret
+
+# ==================== Env / secrets ====================
+.env
+.env.*
+!.env.example
 
 # ==================== Frontend ====================
+# Repo path is UI/ (case-sensitive on Linux CI).
 UI/node_modules/
 UI/.vite/
 UI/dist/
