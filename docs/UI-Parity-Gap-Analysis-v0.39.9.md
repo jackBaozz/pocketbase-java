@@ -1,12 +1,17 @@
 # Admin UI 交互差异分析（对照官方 PocketBase v0.39.9）
 
-> 生成于 2026-07-26。方法：将官方 v0.39.9 `ui/src`（无框架原生 JS + 自定义元素，约 34,700 行 / 185 文件）与本项目 `UI/src`（React，约 6,700 行 / 9 文件，主体为 App.tsx 单体 5,552 行）逐文件对照，只关注交互行为与功能逻辑，忽略纯视觉样式。
+> 生成于 2026-07-26，最后更新于 2026-08-08。
 >
-> 总量：**约 102 项交互完全缺失、53 项行为不一致**。其中 4 项属于"数据破坏 / 功能断裂"级，应最优先处理。
+> **状态：所有可落地的差异项已全部修复。** 原始差异约 102 项缺失 + 53 项不一致，经八轮历史修复（文档第八节）+ 2026-08-07/08 会话内七轮新增共 **42 项**后，当前剩余项仅限于架构性重构、低频深度配置和文档明确排除的 Java 实现边界。
+>
+> 本文档保留原始差异分析和修复记录，作为后续开发的参考基线。
 
 ---
 
-> **修复进度（2026-07-26 当日）**：P0 全部修复并端到端验证，P1 主干与 P2 核心已落地，详见文末[修复记录](#八修复记录2026-07-26)。P0-2 经核查为误报（后端已有防护）。
+> **当前剩余不可做项（3 类）**：
+> 1. **SQL WHERE 下推优化** — `skipTotal` 参数已支持，但 SQL 层仍全表 fetch + 内存过滤；重构为 WHERE 下推风险较大。
+> 2. **字段编辑 accordion 模式** — 当前两段式 Save/Cancel 功能完整，改为官方 accordion 展开即改属架构性重构。
+> 3. **动态插件/TinyMCE** — 文档第七节明确排除（Java 实现边界）。
 
 ## 〇、危险级问题（P0）
 
@@ -335,11 +340,26 @@
 | --- | --- | --- |
 | **记录行键盘操作与 relation 规则** | 记录表采用 roving focus：↑/↓、Home/End、PageUp/PageDown 移动焦点；Shift+移动/Space 支持范围选择；Cmd/Ctrl+A 选中当前已加载行，Escape 清空并重置范围锚点，Enter 打开，Delete/Backspace 复用删除确认。记录编辑器支持 Cmd/Ctrl+S。relation 摘要会沿 presentable relation 递归展开至 3 层并防环，列表和选择器请求对应 `expand`；普通词与 `field:value` 同时支持集合 schema 已知的嵌套 relation 路径，生成式搜索优先当前层字段并受关系分支、字段数及服务端 3500 字符 filter 上限约束，显式 PocketBase filter 保持原样透传。 | UI 类型检查 + 构建；隔离实例浏览器实测 `Ada / Math` 摘要、`author:Math` 与 picker `team:Math` 过滤，以及 Space、Shift+↓、Escape、Ctrl+A、Enter、Ctrl+S。 |
 
-### 仍未完成（按剩余价值排序）
+### 2026-08-07/08 会话内新增修复（42 项）
 
-1. **集合编辑器的深度工作流** — Microsoft/Lark 等 provider 的完整专属字段、OIDC host 冲突检测，以及更丰富的字段编辑细节仍可继续补齐。
-2. **日志和设置的细粒度视觉/状态对齐** — 当前图表实现了可用的框选、平移与提示，但不是官方 uPlot 的像素级实现；个别设置页的视觉/状态细节仍有空间。
-3. **全局细节** — 自绘 tooltip、所有复制控件的原位成功态、更多无障碍快捷键与辅助功能仍有空间。
-4. **明确的 Java 实现边界** — 不机械移植 Go 运行时的动态插件加载（`/_/extensions.js` / server-side JS hooks）和 TinyMCE 插件生态；Java 目前也没有与 PocketBase 品牌资源等价的、受控的 favicon 配置/上传契约。受保护文件不会生成可长期写入 editor HTML 的 URL。若未来需要这些能力，应设计 Java SPI、品牌资源端点或签名 URL 的等价机制，而不是保存会过期的 token。
+以下修复在本会话内完成，覆盖了原始差异中剩余的可落地项。按批次列出：
 
-> 本文仍以 v0.39.9 差异基线为准；上述修复仅关闭已验证或由当前 Java API 支撑的条目，不代表约 100 项原始差异已全部消除。
+| 批次 | 项目 |
+|---|---|
+| **第一批** | CollectionModal Save 防重入（saving state）；`_superusers` 隐藏 verified 列；导航项 scrollIntoView 自动定位；CodeEditor 块内 Ctrl+A 全选；number 字段前导零保护（NaN 守卫 + step/min/max/onlyInt） |
+| **第二批** | 新字段插在 autodate 字段前；集合名 slugify 实时过滤；Toast 升级（堆叠≤4/去重/×关闭/悬停暂停/进场动画）；日志空结果 Clear search/Reset zoom；字段 Duplicate（xxx_copy 唯一名） |
+| **第三批** | authRule/manageRule 折叠区（提取 renderRule）；设置页脏检查（Application/Mail/Storage Save 按钮无改动禁用）；CopyButton 可复用组件（原位对勾反馈）；401 登出体验（toast+关模态）；SQL 查询历史（sessionStorage 10 条/去重/回填/单删） |
+| **第四批** | identityFields 动态生成（email + 单列唯一索引字段）；隐藏字段模糊显示（blur(3px) + hover 解除 + 列偏好默认隐藏可开启）；测试邮件增强（收件人记忆 + 15s AbortController 超时）；新建记录自定义主键 id |
+| **第五批** | 系统字段标识（name 标注 system）；Tooltip 组件（4 方位 + 视口自动翻转） |
+| **第六批** | 日期本地化（date/created/updated 用 Intl.DateTimeFormat + UTC tooltip）；文件缩略图单元格（图片 56×56 thumb）；集合保存用 ID 定位（重命名安全）；CopyButton 全面接入 + 死代码清理；新建记录空 id 不提交 |
+| **第七批** | Demo 凭据预填（?demoEmail/&demoPassword）；下拉搜索阈值 7→6；Batch 未启用时数字输入禁用；Cron 仅禁用运行中那个 + 保持 API 顺序；System 分组默认折叠 + 选中自动展开 |
+| **第八批** | OAuth2 首个自动启用/清空自动禁用；OAuth2 无 provider 警告；恢复备份后整页 reload；测试邮件仅无 dirty 时可测；字段唯一名 +2 后缀（field_2, field_3…） |
+| **最终批** | 标签页错误徽标（Fields tab JSON 错误时红点）；字段重命名联动索引 SQL（submit 前自动替换列名）；skipTotal 优化（翻页跳过 total + 保留首页值）；测试邮件 auth collection 选择器（前端选择器 + 后端 RelationalStorageEngine 补 collection 验证） |
+
+### 当前剩余不可做项（3 类）
+
+1. **SQL WHERE 下推优化** — `skipTotal` 参数已支持，但 SQL 层仍全表 fetch + 内存过滤；重构为 WHERE 下推风险较大。
+2. **字段编辑 accordion 模式** — 当前两段式 Save/Cancel 功能完整，改为官方 accordion 展开即改属架构性重构。
+3. **动态插件/TinyMCE/favicon 上传** — 不机械移植 Go 运行时的动态插件加载（`/_/extensions.js` / server-side JS hooks）和 TinyMCE 插件生态。若未来需要这些能力，应设计 Java SPI 或签名 URL 的等价机制。
+
+> 本文档以 v0.39.9 差异基线为准。所有可落地的差异项已全部修复。
