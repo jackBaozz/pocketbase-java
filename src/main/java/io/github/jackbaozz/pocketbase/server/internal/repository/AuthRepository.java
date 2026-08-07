@@ -252,6 +252,9 @@ public class AuthRepository extends BaseRepository {
     }
     io.github.jackbaozz.pocketbase.server.internal.AuthFailedAttemptTracker.recordFailureAndThrow(
         identity, remoteIp);
+    // Unreachable: recordFailureAndThrow always throws. Satisfies the compiler's
+    // flow analysis since it cannot see across the helper method boundary.
+    throw invalidAuthCredentials();
   }
 
   private ApiException invalidAuthCredentials() {

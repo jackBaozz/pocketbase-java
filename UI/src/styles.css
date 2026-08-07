@@ -524,6 +524,13 @@ h2 {
   text-align: left;
 }
 
+/* "系统" group title keeps its chevron tucked next to the label rather than
+   pushed to the far edge of the sidebar. */
+.sidebar-group > .sidebar-group-toggle {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
 .sidebar-group-toggle:hover,
 .sidebar-group-toggle:focus-visible {
   color: var(--surfaceTxtColor);
@@ -2343,9 +2350,9 @@ td code {
 }
 
 .row-actions {
-  width: 104px;
-  min-width: 92px;
-  white-space: nowrap;
+  width: 44px;
+  min-width: 44px;
+  text-align: right;
 }
 
 td.row-actions {
@@ -2360,6 +2367,26 @@ td.row-actions .icon-button {
 
 td.row-actions .icon-button:last-child {
   margin-right: 0;
+}
+
+/* Record list rows are clickable (open the editor). The trailing chevron is a
+   visual affordance mirroring the official `ri-arrow-right-line` — muted at
+   rest, brightening on hover/selected to signal the row is actionable. */
+.record-row {
+  cursor: pointer;
+}
+
+.row-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--surfaceTxtHintColor);
+  transition: color 0.15s ease;
+}
+
+.record-row:hover .row-arrow,
+.record-row.selected .row-arrow {
+  color: var(--surfaceTxtColor);
 }
 
 .empty-row {
@@ -3932,6 +3959,23 @@ td.row-actions .icon-button:last-child {
 }
 
 .drawer-panel > form.collection-upsert-form > .modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: auto;
+  background: var(--surfaceColor);
+}
+
+.drawer-panel > form.record-upsert-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+}
+
+.drawer-panel > form.record-upsert-form > .record-footer-actions {
   position: sticky;
   bottom: 0;
   z-index: 1;

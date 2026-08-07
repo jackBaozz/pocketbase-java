@@ -411,7 +411,8 @@ function adminRouteFromHash(hash: string): AdminRoute | null {
     // Accept the existing path route and the official query form (#/collections?collection=...).
     const collectionName = params.collection || segments[1];
     const routeView = params.view || params.tab || segments[2];
-    const view = routeView === "schema" || routeView === "fields" ? "schema" : "records";
+    // The standalone schema view was removed; legacy schema/fields routes fall back to records.
+    const view = "records";
     return collectionName ? { view, collectionName, params } : { view: "records", params };
   }
   return null;
@@ -436,7 +437,7 @@ function adminHashFor(view: ViewName, collectionName?: string, params: Record<st
   if (view === "logs") return withParams("#/logs");
   if (settingsRoutes[view]) return withParams(settingsRoutes[view]!);
   const base = collectionName ? `#/collections/${encodeURIComponent(collectionName)}` : "#/collections";
-  return withParams(view === "schema" ? `${base}/schema` : `${base}/records`);
+  return withParams(`${base}/records`);
 }
 
 function routeNumber(value: string | undefined, fallback: number, minimum: number, maximum: number) {
@@ -2041,7 +2042,7 @@ function App() {
       notify(t("parity.notifications.collection_duplicated", { name: created.name, defaultValue: "Collection {{name}} created" }));
       await refreshCollections();
       broadcastSync("collections");
-      navigateTo("schema", created.name);
+      navigateTo("records", created.name);
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -2935,19 +2936,6 @@ function App() {
             />
           ) : (
             <>
-              {collectionView && (
-                <div className="view-tabs" role="tablist" aria-label={t("collections.views", "Collection views")}>
-                  <button className={view === "records" ? "active" : ""} onClick={() => navigateTo("records")}>
-                    <Database size={16} />
-                    {t("collections.records", "Records")}
-                  </button>
-                  <button className={view === "schema" ? "active" : ""} onClick={() => navigateTo("schema")}>
-                    <ListFilter size={16} />
-                    {t("collections.schema", "Schema")}
-                  </button>
-                </div>
-              )}
-
               {view === "backups" ? (
                 <BackupView
                   backups={backups}
@@ -3102,7 +3090,6 @@ function App() {
               ) : view === "crons" ? (
                 <CronsView crons={crons} loading={loading} onRefresh={refreshCrons} onRun={runCron} />
               ) : selected ? (
-                view === "records" ? (
                   <RecordsView
                     collection={selected}
                     collections={collections}
@@ -3120,7 +3107,7 @@ function App() {
                       setQuery((current) =>
                         current.filter === nextQuery.filter &&
                         current.sort === nextQuery.sort &&
-                        current.perPage === nextQuery.perPage
+                          current.perPage === nextQuery.perPage
                           ? current
                           : nextQuery
                       );
@@ -3145,25 +3132,6 @@ function App() {
                     onClearSelection={clearRecordSelection}
                     onOpenFile={openFile}
                   />
-                ) : (
-                  <SchemaView
-                    collection={selected}
-                    authMethods={authMethods}
-                    oauthTestingProvider={oauthTestingProvider}
-                    hideControls={hideControls}
-                    onEdit={() => setCollectionEditor({ mode: "edit", collection: selected })}
-                    onDelete={() => deleteCollection(selected)}
-                    onTruncate={() => truncateCollection(selected)}
-                    onDuplicate={() => duplicateCollection(selected)}
-                    onOAuthTest={startOAuthTest}
-                    onCopy={(value) => {
-                      navigator.clipboard.writeText(value).then(
-                        () => notify(t("notifications.copied", "Copied")),
-                        (error) => notify(errorMessage(error), "error")
-                      );
-                    }}
-                  />
-                )
               ) : (
                 <EmptyState icon={Database} title={t("collections.no_collection_selected", "No collection selected")} />
               )}
@@ -3182,6 +3150,16 @@ function App() {
           onDryRunView={dryRunView}
           onGenerateAppleClientSecret={generateAppleClientSecret}
           onSubmit={(payload) => saveCollection(payload)}
+          onCopyJson={() => {
+            if (!selected) return;
+            navigator.clipboard.writeText(JSON.stringify(selected, null, 2)).then(
+              () => notify(t("notifications.copied", "Copied")),
+              (error) => notify(errorMessage(error), "error")
+            );
+          }}
+          onDuplicate={() => selected && duplicateCollection(selected)}
+          onTruncate={() => selected && truncateCollection(selected)}
+          onDelete={() => selected && deleteCollection(selected)}
         />
       )}
 
@@ -3255,7 +3233,7 @@ function App() {
           onClose={() => setCollectionsOverviewOpen(false)}
           onSelect={(name) => {
             setCollectionsOverviewOpen(false);
-            navigateTo("schema", name);
+            navigateTo("records", name);
           }}
         />
       )}
@@ -4349,7 +4327,7 @@ function RecordsView(props: RecordsViewProps) {
                   </th>
                 );
               })}
-              <th className="actions-col">{t("collections.actions")}</th>
+              <th className="row-actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -4392,11 +4370,15 @@ function RecordsView(props: RecordsViewProps) {
                     aria-selected={selected}
                     onFocus={() => setActiveRecordId(record.id)}
                     onKeyDown={(event) => handleRecordRowKeyDown(event, record, index)}
+                    onClick={() => props.onEdit(record)}
                   >
                     <td className="select-col">
                       <button
                         className={`checkbox-button${selected ? " is-checked" : ""}`}
-                        onClick={(event) => props.onToggleSelected(record.id, event.shiftKey)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          props.onToggleSelected(record.id, event.shiftKey);
+                        }}
                         title={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                         aria-label={selected ? t("actions.unselect_record", "Unselect record") : t("actions.select_record", "Select record")}
                       >
@@ -4415,24 +4397,9 @@ function RecordsView(props: RecordsViewProps) {
                       </td>
                     ))}
                     <td className="row-actions">
-                      <button
-                        className="icon-button"
-                        onClick={() => props.onEdit(record)}
-                        title={canDeleteRecords ? t("actions.edit", "Edit") : t("actions.view", "View")}
-                        aria-label={canDeleteRecords ? t("actions.edit", "Edit") : t("actions.view", "View")}
-                      >
-                        <Edit3 size={16} />
-                      </button>
-                      {canDeleteRecords && (
-                        <button
-                          className="icon-button danger"
-                          onClick={() => props.onDelete(record)}
-                          title={t("actions.delete", "Delete")}
-                          aria-label={t("actions.delete", "Delete")}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
+                      <span className="row-arrow" aria-hidden="true">
+                        <ChevronRight size={16} />
+                      </span>
                     </td>
                   </tr>
                 );
@@ -4582,7 +4549,10 @@ function CellValue({ collection, collections, column, record, onOpenFile }: Cell
           <button
             className="file-pill"
             key={String(filename)}
-            onClick={() => onOpenFile(record, String(filename))}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenFile(record, String(filename));
+            }}
             title={String(filename)}
           >
             <Download size={13} />
@@ -4600,141 +4570,6 @@ function CellValue({ collection, collections, column, record, onOpenFile }: Cell
   return <code>{formatValue(value)}</code>;
 }
 
-type SchemaViewProps = {
-  collection: CollectionSchema;
-  authMethods: AuthMethodsResponse | null;
-  oauthTestingProvider: string;
-  hideControls: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
-  onTruncate: () => void;
-  onDuplicate: () => void;
-  onOAuthTest: (provider: AuthMethodProvider) => void;
-  onCopy: (value: string) => void;
-};
-
-function SchemaView({ collection, authMethods, oauthTestingProvider, hideControls, onEdit, onDelete, onTruncate, onDuplicate, onOAuthTest, onCopy }: SchemaViewProps) {
-  const { t } = useTranslation();
-  const json = JSON.stringify(collection, null, 2);
-  return (
-    <section className="schema-layout">
-      <div className="schema-summary">
-        <div className="summary-row">
-          <span>{t("collections.id")}</span>
-          <code>{collection.id}</code>
-        </div>
-        <div className="summary-row">
-          <span>{t("collections.type")}</span>
-          <strong>{collection.type}</strong>
-        </div>
-        <div className="summary-row">
-          <span>{t("collections.system")}</span>
-          <strong>{collection.system ? "true" : "false"}</strong>
-        </div>
-        <div className="schema-actions">
-          {!hideControls && (
-            <button className="primary" onClick={onEdit}>
-              <Edit3 size={16} />
-              {t("actions.edit_schema", "Edit schema")}
-            </button>
-          )}
-          <button className="subtle" onClick={() => onCopy(json)}>
-            <Copy size={16} />
-            {t("actions.copy_json", "Copy JSON")}
-          </button>
-          {!hideControls && (
-            <>
-              <button className="subtle" onClick={onDuplicate} disabled={collection.system}>
-                <Copy size={16} />
-                {t("parity.collection.duplicate", "Duplicate")}
-              </button>
-              <button className="danger subtle" onClick={onTruncate} disabled={collection.system}>
-                <Archive size={16} />
-                {t("parity.collection.truncate", "Truncate")}
-              </button>
-              <button className="danger subtle" onClick={onDelete} disabled={collection.system}>
-                <Trash2 size={16} />
-                {t("actions.delete", "Delete")}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {collection.type === "auth" && authMethods && (
-        <div className="auth-methods-panel">
-          <article className="auth-method-card">
-            <header>
-              <strong>{t("auth.password")}</strong>
-              <span>{authMethods.password.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
-            </header>
-            <p>{authMethods.password.identityFields.join(", ") || t("common.none", "none")}</p>
-          </article>
-          <article className="auth-method-card">
-            <header>
-              <strong>{t("auth.otp")}</strong>
-              <span>{authMethods.otp.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
-            </header>
-            <p>{authMethods.otp.enabled ? t("auth.otp_window", { seconds: authMethods.otp.duration, defaultValue: "{{seconds}}s window" }) : t("auth.no_otp", "No one-time passwords")}</p>
-          </article>
-          <article className="auth-method-card">
-            <header>
-              <strong>{t("auth.mfa")}</strong>
-              <span>{authMethods.mfa.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
-            </header>
-            <p>{authMethods.mfa.enabled ? t("auth.mfa_challenge", { seconds: authMethods.mfa.duration, defaultValue: "{{seconds}}s challenge" }) : t("auth.no_second_factor", "No second factor")}</p>
-          </article>
-          <article className="auth-method-card auth-method-card-wide">
-            <header>
-              <strong>{t("settings.oauth2")}</strong>
-              <span>{authMethods.oauth2.enabled ? t("common.enabled_status", "enabled") : t("common.disabled_status", "disabled")}</span>
-            </header>
-            {authMethods.oauth2.providers.length === 0 ? (
-              <p>{t("settings.no_providers")}</p>
-            ) : (
-              <div className="provider-chip-list">
-                {authMethods.oauth2.providers.map((provider) => (
-                  <div className="provider-chip provider-chip-detailed" key={provider.name}>
-                    <div className="provider-chip-header">
-                      <strong>{provider.displayName || provider.name}</strong>
-                      <button
-                        className="subtle provider-test-button"
-                        onClick={() => onOAuthTest(provider)}
-                        disabled={!provider.authURL || oauthTestingProvider === provider.name}
-                      >
-                        {oauthTestingProvider === provider.name ? t("common.waiting", "Waiting...") : t("actions.test", "Test")}
-                      </button>
-                    </div>
-                    <span>{provider.authURL ? t("common.ready", "ready") : t("settings.missing_credentials", "missing credentials")}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </article>
-        </div>
-      )}
-
-      <div className="field-grid">
-        {(collection.fields ?? []).map((field) => (
-          <article className="field-row" key={field.id || field.name}>
-            <div>
-              <strong>{field.name}</strong>
-              <span>{field.type}</span>
-            </div>
-            <div className="chips">
-              {field.required && <span>{t("collections.required")}</span>}
-              {field.unique && <span>{t("collections.unique")}</span>}
-              {field.hidden && <span>{t("collections.hidden")}</span>}
-              {field.protected && <span>{t("collections.protected")}</span>}
-            </div>
-          </article>
-        ))}
-      </div>
-
-      <pre className="json-panel">{json}</pre>
-    </section>
-  );
-}
 
 type BackupViewProps = {
   backups: BackupInfo[];
@@ -7479,6 +7314,11 @@ type CollectionModalProps = {
   onDryRunView: (query: string) => Promise<ViewQueryPreview>;
   onGenerateAppleClientSecret: (input: AppleClientSecretInput) => Promise<{ secret: string }>;
   onSubmit: (payload: CollectionPayload) => Promise<boolean>;
+  /** Collection-level actions, shown only when editing an existing collection. */
+  onCopyJson?: () => void;
+  onDuplicate?: () => void;
+  onTruncate?: () => void;
+  onDelete?: () => void;
 };
 
 function CollectionModal({
@@ -7489,7 +7329,11 @@ function CollectionModal({
   onConfirm,
   onDryRunView,
   onGenerateAppleClientSecret,
-  onSubmit
+  onSubmit,
+  onCopyJson,
+  onDuplicate,
+  onTruncate,
+  onDelete
 }: CollectionModalProps) {
   const { t } = useTranslation();
   const collection = state.collection;
@@ -8544,6 +8388,27 @@ function CollectionModal({
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
+          {collection && (
+            <>
+              <button type="button" className="subtle" onClick={onCopyJson} disabled={exiting}>
+                <Copy size={16} />
+                {t("actions.copy_json", "Copy JSON")}
+              </button>
+              <button type="button" className="subtle" onClick={onDuplicate} disabled={exiting}>
+                <Copy size={16} />
+                {t("parity.collection.duplicate", "Duplicate")}
+              </button>
+              <button type="button" className="danger subtle" onClick={onTruncate} disabled={exiting || Boolean(collection.system)}>
+                <Archive size={16} />
+                {t("parity.collection.truncate", "Truncate")}
+              </button>
+              <button type="button" className="danger subtle" onClick={onDelete} disabled={exiting || Boolean(collection.system)}>
+                <Trash2 size={16} />
+                {t("actions.delete", "Delete")}
+              </button>
+              <span className="modal-actions-spacer" />
+            </>
+          )}
           <button type="button" className="subtle" onClick={requestClose} disabled={exiting}>
             <X size={16} />
             {t("actions.cancel", "Cancel")}
@@ -8648,6 +8513,7 @@ function RecordModal({
   // existing record can be inspected/edited but requires an explicit unlock
   // before any change can be submitted.
   const [locked, setLocked] = useState(() => editing && !readOnly && hideControls);
+  const [exiting, setExiting] = useState(false);
   const showTabs = !duplicating && Boolean(state.record?.id) && collection.type === "auth" && collection.name !== "_superusers";
   const invalidJsonFieldNames = Object.keys(invalidJsonFields);
   const hasInvalidJsonFields = invalidJsonFieldNames.length > 0;
@@ -8690,6 +8556,7 @@ function RecordModal({
   }, [duplicating, fileFields.length, getFileToken, readOnly, state.record?.id]);
 
   async function requestClose() {
+    if (exiting) return;
     if (changed) {
       const discard = await onConfirm({
         title: t("confirm.discard_changes_title", "Discard changes"),
@@ -8703,7 +8570,7 @@ function RecordModal({
       if (!discard) return;
       localStorage.removeItem(draftKey);
     }
-    onClose();
+    setExiting(true);
   }
 
   function updatePayload(field: FieldSchema, value: unknown) {
@@ -8914,14 +8781,17 @@ function RecordModal({
     return (
       <Modal
         title={t("records.view_record_title", { id: state.record?.id ?? "", defaultValue: "View {{id}}" })}
-        onClose={onClose}
+        onClose={requestClose}
+        variant="drawer"
         wide
+        exiting={exiting}
+        onExitComplete={onClose}
       >
         <section className="record-preview">
           <p>{t("parity.records.view_read_only", "View collection records are read-only.")}</p>
           <pre>{exportJson}</pre>
           <div className="modal-actions record-footer-actions">
-            <button type="button" className="subtle" onClick={onClose}>
+            <button type="button" className="subtle" onClick={requestClose} disabled={exiting}>
               <X size={16} />
               {t("actions.close", "Close")}
             </button>
@@ -8950,7 +8820,10 @@ function RecordModal({
           : t("records.new_record_title", { name: collection.name, defaultValue: "New {{name}}" })
       }
       onClose={requestClose}
+      variant="drawer"
       wide
+      exiting={exiting}
+      onExitComplete={onClose}
     >
       <form
         className="modal-grid record-upsert-form"
@@ -9159,16 +9032,16 @@ function RecordModal({
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions record-footer-actions">
-          <button type="button" className="subtle" onClick={requestClose}>
+          <button type="button" className="subtle" onClick={requestClose} disabled={exiting}>
             <X size={16} />
             {t("actions.close", "Close")}
           </button>
-          <button type="button" className="subtle" onClick={resetForm} disabled={!changed || saving}>
+          <button type="button" className="subtle" onClick={resetForm} disabled={!changed || saving || exiting}>
             <RotateCcw size={16} />
             {t("actions.reset_form", "Reset form")}
           </button>
           {editing && (
-            <button type="button" className="subtle" onClick={onDuplicate} disabled={saving}>
+            <button type="button" className="subtle" onClick={onDuplicate} disabled={saving || exiting}>
               <Copy size={16} />
               {t("parity.records.duplicate", "Duplicate")}
             </button>
@@ -9179,19 +9052,19 @@ function RecordModal({
               type="button"
               className="subtle outline-button"
               onClick={() => setLocked(false)}
-              disabled={saving || !changed}
+              disabled={saving || !changed || exiting}
             >
               <Unlock size={16} />
               {t("parity.records.unlock_to_save", "Unlock to save")}
             </button>
           ) : (
             <>
-              <button className="primary" type="submit" disabled={!canSubmit}>
+              <button className="primary" type="submit" disabled={!canSubmit || exiting}>
                 <Save size={16} />
                 {editing ? t("actions.save_changes", "Save changes") : t("actions.create", "Create")}
               </button>
               {!editing && (
-                <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={!canSubmit}>
+                <button className="subtle" type="button" onClick={() => submit(null, false)} disabled={!canSubmit || exiting}>
                   {t("actions.save_and_continue", "Save and continue")}
                 </button>
               )}

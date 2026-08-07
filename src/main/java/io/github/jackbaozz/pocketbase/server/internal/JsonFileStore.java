@@ -3632,10 +3632,6 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     return fields.stream().anyMatch(field -> authIdentityValueMatches(record, field, identity));
   }
 
-  private ApiException invalidAuthCredentials() {
-    return new ApiException(400, "Failed to authenticate.");
-  }
-
   private boolean authIdentityValueMatches(
       Map<String, Object> record, String field, String identity) {
     Object value = record.get(field);
