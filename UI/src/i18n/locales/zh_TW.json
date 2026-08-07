@@ -58,6 +58,7 @@
     "apply_changes": "套用變更",
     "clear": "清空",
     "clear_search": "清除搜尋",
+    "reset_zoom": "重置縮放",
     "clear_selection": "清除選取",
     "select_page": "選取本頁",
     "select_record": "選取紀錄",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "啟用 Auth Id 記錄",
     "accent_custom": "自訂顏色",
     "accent_eyedropper": "從螢幕取色",
-    "accent_presets": "預設顏色"
+    "accent_presets": "預設顏色",
+    "collection": "認證集合"
   },
   "auth": {
     "login": "登入",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "提供者 ID 欄位",
     "oauth_name_field": "名稱欄位",
     "oauth_username_field": "使用者名稱欄位",
-    "oauth_avatar_field": "頭像欄位"
+    "oauth_avatar_field": "頭像欄位",
+    "auth_manage_rules": "認證與管理規則",
+    "field_identity": "{{name}} 識別",
+    "no_identity_fields": "沒有符合條件的欄位（為欄位新增唯一索引）",
+    "oauth_no_providers_warning": "OAuth2 已啟用但未設定任何 Provider。請在下方至少選擇一個 Provider。"
   },
   "api_preview": {
     "title": "API 預覽",
@@ -650,6 +656,7 @@
     "unknown": "未知",
     "edit_field": "編輯欄位",
     "remove_field": "刪除欄位",
+    "duplicate_field": "複製欄位",
     "select_placeholder": "-- 請選擇 --",
     "no_options_configured": "未配置選項",
     "select_mode": "選擇模式",
@@ -755,7 +762,8 @@
     "export_csv": "匯出 CSV",
     "load_more": "再載入 250 筆（剩餘 {{count}} 筆）",
     "showing_rows": "顯示 {{shown}} / {{count}} 行",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "最近"
   },
   "logs": {
     "activity": "日誌活動",
@@ -821,7 +829,9 @@
     "record_payload_object": "紀錄內容必須是物件。",
     "invalid_json": "請先修正無效的 JSON 再儲存。",
     "oauth_popup_closed": "OAuth2 彈窗在認證完成前已關閉。",
-    "oauth_popup_timed_out": "OAuth2 彈窗已逾時。"
+    "oauth_popup_timed_out": "OAuth2 彈窗已逾時。",
+    "session_expired": "工作階段已過期，請重新登入。",
+    "test_email_timeout": "測試郵件在 15 秒後逾時。請檢查 SMTP 設定。"
   },
   "confirm": {
     "delete_collection_title": "刪除集合",

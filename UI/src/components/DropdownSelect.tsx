@@ -34,7 +34,7 @@ export function DropdownSelect<T extends string | number = string>({
   className = "",
   style,
   disabled = false,
-  searchThreshold = 7
+  searchThreshold = 6
 }: DropdownSelectProps<T>) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);

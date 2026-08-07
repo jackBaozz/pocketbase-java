@@ -152,6 +152,31 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
   @Override
   public void testEmail(JsonNode body) {
+    // Validate the optional collection parameter: it must refer to an auth
+    // collection, matching the JsonFileStore implementation.
+    if (body != null && body.isObject() && body.hasNonNull("collection")) {
+      String collectionName = body.get("collection").asText().trim();
+      if (!collectionName.isBlank() && !"_superusers".equals(collectionName)) {
+        try {
+          CollectionSchema col = collectionRepository.getCollectionSchema(collectionName);
+          if (!"auth".equals(col.type)) {
+            throw new ApiException(
+                400,
+                "Failed to send the test email.",
+                ApiErrors.invalidField(
+                    "collection", "Must be a valid auth collection id or name."));
+          }
+        } catch (ApiException e) {
+          throw e;
+        } catch (Exception e) {
+          throw new ApiException(
+              400,
+              "Failed to send the test email.",
+              ApiErrors.invalidField(
+                  "collection", "Must be a valid auth collection id or name."));
+        }
+      }
+    }
     settingsRepository.testEmail(body);
   }
 

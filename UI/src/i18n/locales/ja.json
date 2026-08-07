@@ -58,6 +58,7 @@
     "apply_changes": "変更を適用",
     "clear": "クリア",
     "clear_search": "検索をクリア",
+    "reset_zoom": "ズームをリセット",
     "clear_selection": "選択を解除",
     "select_page": "ページを選択",
     "select_record": "レコードを選択",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "Auth Id ログを有効化",
     "accent_custom": "カスタムカラー",
     "accent_eyedropper": "画面から色を取得",
-    "accent_presets": "プリセット"
+    "accent_presets": "プリセット",
+    "collection": "認証コレクション"
   },
   "auth": {
     "login": "ログイン",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "プロバイダー ID フィールド",
     "oauth_name_field": "名前フィールド",
     "oauth_username_field": "ユーザー名フィールド",
-    "oauth_avatar_field": "アバターフィールド"
+    "oauth_avatar_field": "アバターフィールド",
+    "auth_manage_rules": "認証・管理ルール",
+    "field_identity": "{{name}} 認証",
+    "no_identity_fields": "適格なフィールドがありません（フィールドにユニークインデックスを追加）",
+    "oauth_no_providers_warning": "OAuth2は有効ですが、プロバイダーが設定されていません。以下から少なくとも1つ選択してください。"
   },
   "api_preview": {
     "title": "API プレビュー",
@@ -650,6 +656,7 @@
     "unknown": "不明",
     "edit_field": "フィールドを編集",
     "remove_field": "フィールドを削除",
+    "duplicate_field": "フィールドを複製",
     "select_placeholder": "-- 選択 --",
     "no_options_configured": "オプション未設定",
     "select_mode": "選択モード",
@@ -755,7 +762,8 @@
     "export_csv": "CSV をエクスポート",
     "load_more": "さらに 250 件を読み込む（残り {{count}} 件）",
     "showing_rows": "{{count}} 件中 {{shown}} 件を表示",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "最近"
   },
   "logs": {
     "activity": "ログアクティビティ",
@@ -821,7 +829,9 @@
     "record_payload_object": "レコードペイロードはオブジェクトである必要があります。",
     "invalid_json": "保存する前に有効な JSON を入力してください。",
     "oauth_popup_closed": "認証完了前に OAuth2 ポップアップが閉じられました。",
-    "oauth_popup_timed_out": "OAuth2 ポップアップがタイムアウトしました。"
+    "oauth_popup_timed_out": "OAuth2 ポップアップがタイムアウトしました。",
+    "session_expired": "セッションの有効期限が切れました。再度ログインしてください。",
+    "test_email_timeout": "テストメールが15秒でタイムアウトしました。SMTP設定を確認してください。"
   },
   "confirm": {
     "delete_collection_title": "コレクションを削除",

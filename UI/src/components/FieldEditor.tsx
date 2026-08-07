@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Edit3, Check, X, Trash2 } from "lucide-react";
+import { Edit3, Check, X, Trash2, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Switch } from "./Switch";
 
@@ -51,6 +51,7 @@ type FieldEditorProps = {
   index: number;
   onUpdate: (index: number, updatedField: FieldSchema) => void;
   onRemove: (index: number) => void;
+  onDuplicate?: (index: number) => void;
   /** Optional target list for `relation` fields. Falls back to a raw collectionId input. */
   collections?: CollectionOption[];
 };
@@ -229,7 +230,7 @@ function applyTypeChange(current: FieldSchema, nextType: string): FieldSchema {
   return next as FieldSchema;
 }
 
-export function FieldEditor({ field, index, onUpdate, onRemove, collections }: FieldEditorProps) {
+export function FieldEditor({ field, index, onUpdate, onRemove, onDuplicate, collections }: FieldEditorProps) {
   const { t } = useTranslation();
   const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<FieldSchema>(field);
@@ -787,7 +788,7 @@ export function FieldEditor({ field, index, onUpdate, onRemove, collections }: F
         <div className="field-edit-form">
           <div className="field-edit-row">
             <label>
-              {t("common.name", "Name")}
+              {t("common.name", "Name")}{field.system ? ` (${t("collections.system", "system")})` : ""}
               <input
                 type="text"
                 value={editState.name}
@@ -877,6 +878,18 @@ export function FieldEditor({ field, index, onUpdate, onRemove, collections }: F
         >
           <Edit3 size={15} />
         </button>
+        {onDuplicate && (
+          <button
+            className="icon-button"
+            type="button"
+            onClick={() => onDuplicate(index)}
+            title={t("fields.duplicate_field", "Duplicate field")}
+            aria-label={t("fields.duplicate_field", "Duplicate field")}
+            disabled={field.system}
+          >
+            <Copy size={15} />
+          </button>
+        )}
         <button
           className="icon-button danger"
           type="button"

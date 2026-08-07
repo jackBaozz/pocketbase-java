@@ -58,6 +58,7 @@
     "apply_changes": "Применить изменения",
     "clear": "Очистить",
     "clear_search": "Очистить поиск",
+    "reset_zoom": "Сбросить масштаб",
     "clear_selection": "Снять выбор",
     "select_page": "Выбрать страницу",
     "select_record": "Выбрать запись",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "Включить запись Auth Id",
     "accent_custom": "Свой цвет",
     "accent_eyedropper": "Взять цвет с экрана",
-    "accent_presets": "Пресеты"
+    "accent_presets": "Пресеты",
+    "collection": "Коллекция auth"
   },
   "auth": {
     "login": "Войти",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "Поле ID провайдера",
     "oauth_name_field": "Поле имени",
     "oauth_username_field": "Поле имени пользователя",
-    "oauth_avatar_field": "Поле аватара"
+    "oauth_avatar_field": "Поле аватара",
+    "auth_manage_rules": "Правила auth и управления",
+    "field_identity": "Идентификация {{name}}",
+    "no_identity_fields": "Нет подходящих полей (добавьте уникальный индекс к полю)",
+    "oauth_no_providers_warning": "OAuth2 включён, но провайдеры не настроены. Выберите хотя бы одного провайдера ниже."
   },
   "api_preview": {
     "title": "Предпросмотр API",
@@ -650,6 +656,7 @@
     "unknown": "неизвестно",
     "edit_field": "Редактировать поле",
     "remove_field": "Удалить поле",
+    "duplicate_field": "Дублировать поле",
     "select_placeholder": "-- Выберите --",
     "no_options_configured": "Параметры не настроены",
     "select_mode": "Режим выбора",
@@ -755,7 +762,8 @@
     "export_csv": "Экспорт CSV",
     "load_more": "Загрузить ещё 250 (осталось {{count}})",
     "showing_rows": "Показано {{shown}} из {{count}} строк",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "Недавние"
   },
   "logs": {
     "activity": "Активность логов",
@@ -821,7 +829,9 @@
     "record_payload_object": "Payload записи должен быть объектом.",
     "invalid_json": "Введите корректный JSON перед сохранением.",
     "oauth_popup_closed": "Окно OAuth2 было закрыто до завершения аутентификации.",
-    "oauth_popup_timed_out": "Окно OAuth2 истекло по времени."
+    "oauth_popup_timed_out": "Окно OAuth2 истекло по времени.",
+    "session_expired": "Срок действия сессии истёк. Пожалуйста, войдите снова.",
+    "test_email_timeout": "Тестовое письмо истекло через 15с. Проверьте настройки SMTP."
   },
   "confirm": {
     "delete_collection_title": "Удаление коллекции",

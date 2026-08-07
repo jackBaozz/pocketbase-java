@@ -47,7 +47,7 @@ import {
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AnimationEvent as ReactAnimationEvent,
   FormEvent,
@@ -66,7 +66,8 @@ import { AccentColorPicker } from "./components/AccentColorPicker";
 import { ApiPreview } from "./components/ApiPreview";
 import { CodeEditor, buildRuleCompletions } from "./components/CodeEditor";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { IndexManager } from "./components/IndexManager";
+import { CopyButton } from "./components/CopyButton";
+import { buildIndex, IndexManager, parseIndex } from "./components/IndexManager";
 import type { ConfirmRequest } from "./components/ConfirmDialog";
 import { RecordFieldControl } from "./components/RecordFieldControl";
 import { RefreshButton } from "./components/RefreshButton";
@@ -669,6 +670,7 @@ type RelationRecordEditorState = RecordEditorState & {
 };
 
 type ToastState = {
+  id: number;
   kind: "ok" | "error";
   message: string;
 };
@@ -695,6 +697,9 @@ type ApiOptions = Omit<RequestInit, "body"> & {
 const TOKEN_KEY = "pbj_token";
 const PINNED_COLLECTIONS_KEY = "pbj_pinned_collections";
 const HIDDEN_COLUMNS_KEY = "pbj_hidden_columns";
+// A visibility snapshot records every hidden column, including schema defaults.
+// Older preference arrays only tracked ad-hoc hidden columns and have no marker.
+const HIDDEN_COLUMNS_SNAPSHOT_MARKER = "__pbj_hidden_columns_v2__";
 const THEME_KEY = "pbj_theme";
 const ACTIVE_COLLECTION_KEY = "pbj_active_collection";
 const SIDEBAR_WIDTH_KEY = "pbj_sidebar_width";
@@ -746,9 +751,24 @@ function App() {
   const [view, setView] = useState<ViewName>("records");
   const [collectionSearch, setCollectionSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<ToastState | null>(null);
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
+  const [toasts, setToasts] = useState<ToastState[]>([]);
+  const toastIdRef = useRef(0);
+  const toastTimersRef = useRef<Map<number, number>>(new Map());
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((current) => current.filter((item) => item.id !== id));
+    const timer = toastTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      toastTimersRef.current.delete(id);
+    }
+  }, []);
+  const [authEmail, setAuthEmail] = useState(() => new URLSearchParams(window.location.search).get("demoEmail") ?? "");
+  // Passwords in URLs leak through browser history, referers and access logs. Keep
+  // the local demo convenience out of production bundles entirely.
+  const [authPassword, setAuthPassword] = useState(() =>
+    import.meta.env.DEV ? new URLSearchParams(window.location.search).get("demoPassword") ?? "" : ""
+  );
   const [failedCount, setFailedCount] = useState(0);
   const [authLockedUntil, setAuthLockedUntil] = useState(0);
   const [captchaCode, setCaptchaCode] = useState(generateCaptchaCode);
@@ -757,6 +777,14 @@ function App() {
   const [authLockTick, setAuthLockTick] = useState(0);
 
   const accountLocked = authLockedUntil > Date.now();
+
+  useLayoutEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("demoPassword")) return;
+    url.searchParams.delete("demoPassword");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   // Load per-email attempt state whenever the identity field changes.
   useEffect(() => {
@@ -839,11 +867,19 @@ function App() {
   const [sqlResult, setSqlResult] = useState<SqlResult | null>(null);
   const [sqlError, setSqlError] = useState("");
   const [sqlElapsedMs, setSqlElapsedMs] = useState<number | null>(null);
+  const [sqlHistory, setSqlHistory] = useState<string[]>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("pbj_sql_history") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const [exportDraft, setExportDraft] = useState("");
   const [importDraft, setImportDraft] = useState("");
   const [deleteMissingCollections, setDeleteMissingCollections] = useState(true);
-  const [testEmail, setTestEmail] = useState("");
+  const [testEmail, setTestEmail] = useState(() => localStorage.getItem("pbj_test_email_recipient") ?? "");
   const [testEmailTemplate, setTestEmailTemplate] = useState("verification");
+  const [testEmailCollection, setTestEmailCollection] = useState("_superusers");
   const [testS3Target, setTestS3Target] = useState("storage");
   const [s3TestState, setS3TestState] = useState<S3TestState>({ status: "idle", message: "" });
   const backupUploadRef = useRef<HTMLInputElement>(null);
@@ -1002,14 +1038,21 @@ function App() {
   const hiddenColumns = useMemo(() => {
     if (!selected) return [];
     const preferences = hiddenColumnPreferencesFor(selected, hiddenColumnsByCollection);
-    return recordColumns(selected).filter((column) => preferences.includes(columnPreferenceKey(selected, column)) || preferences.includes(column));
+    const hidden = new Set(hiddenColumnPreferenceSnapshot(selected, preferences).slice(1));
+    return recordColumns(selected).filter((column) => hidden.has(columnPreferenceKey(selected, column)));
   }, [hiddenColumnsByCollection, selected]);
 
   const notify = useCallback((message: string, kind: ToastState["kind"] = "ok") => {
-    setToast({ message, kind });
-    window.clearTimeout((notify as unknown as { timer?: number }).timer);
-    (notify as unknown as { timer?: number }).timer = window.setTimeout(() => setToast(null), 3200);
-  }, []);
+    const id = ++toastIdRef.current;
+    setToasts((current) => {
+      // Dedupe by message: a duplicate simply refreshes the existing entry.
+      if (current.some((item) => item.message === message)) return current;
+      // Cap the stack at 4 so a flood stays readable.
+      return [...current.slice(-3), { id, message, kind }];
+    });
+    const timer = window.setTimeout(() => dismissToast(id), 3200);
+    toastTimersRef.current.set(id, timer);
+  }, [dismissToast]);
 
   const api = useCallback(
     async <T,>(path: string, options: ApiOptions = {}): Promise<T> => {
@@ -1098,11 +1141,14 @@ function App() {
         const cached = cache.pages.get(page);
         if (cached) return cached;
       }
+      // First page fetch requests the total count; subsequent pages (Load more,
+      // deep-link pagination) skip it to stay lightweight, matching the official UI.
       const qs = buildQuery({
         page,
         perPage: nextQuery.perPage,
         sort: nextQuery.sort,
         filter,
+        ...(page > 1 ? { skipTotal: 1 } : {}),
         ...(relationFields.length ? { expand: relationFields.join(",") } : {})
       });
       const data = await apiRequest<ListResponse<RecordItem>>(
@@ -1133,7 +1179,13 @@ function App() {
           force: options.force ?? true
         });
         if (!data || options.signal?.aborted || generation !== recordsLoadGenerationRef.current) return data;
-        setRecordPage(data);
+        // Subsequent pages use skipTotal so their totals are -1. Preserve the
+        // first page's authoritative totals without capturing stale state.
+        setRecordPage((current) =>
+          data.totalItems < 0 && page > 1 && current && current.totalItems >= 0
+            ? { ...data, totalItems: current.totalItems, totalPages: current.totalPages }
+            : data
+        );
         setRecords((prev) => (page > 1 ? mergeRecordItems(prev, data.items) : data.items));
         setRecordsNeedRefresh(false);
         return data;
@@ -1465,6 +1517,12 @@ function App() {
 
   useEffect(() => {
     const handleUnauthorized = () => {
+      notify(t("errors.session_expired", "Your session has expired. Please log in again."), "error");
+      // Close any open editor so stale state doesn't linger behind the login screen.
+      setCollectionEditor(null);
+      setRecordEditor(null);
+      setRelationRecordEditors([]);
+      setConfirmState(null);
       logout();
     };
     window.addEventListener("pbj_unauthorized", handleUnauthorized);
@@ -1479,9 +1537,10 @@ function App() {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(hiddenColumnsByCollection));
   }, [hiddenColumnsByCollection]);
 
-  // Older versions keyed both the collection and fields by their mutable names.
-  // Migrate each still-known preference as soon as schemas load, so subsequent
-  // field/collection renames retain the user's column visibility choice.
+  // Older versions keyed both the collection and fields by their mutable names,
+  // and stored only columns manually hidden by the user. Migrate each still-known
+  // preference to a full visibility snapshot so schema-hidden fields stay hidden
+  // until the user explicitly opts in.
   useEffect(() => {
     if (collections.length === 0) return;
     setHiddenColumnsByCollection((current) => {
@@ -1491,13 +1550,16 @@ function App() {
         const storeKey = collectionPreferenceStoreKey(collection);
         const legacyKey = collection.name;
         const source = hiddenColumnPreferencesFor(collection, current);
-        const normalized = normalizeColumnPreferences(collection, source);
+        const hasStoredPreference =
+          Object.prototype.hasOwnProperty.call(current, storeKey) ||
+          Object.prototype.hasOwnProperty.call(current, legacyKey);
+        if (!hasStoredPreference) continue;
+        const normalized = hiddenColumnPreferenceSnapshot(collection, source);
         const stored = current[storeKey] ?? [];
         const hasLegacy = storeKey !== legacyKey && Object.prototype.hasOwnProperty.call(current, legacyKey);
         if (sameStringValues(stored, normalized) && !hasLegacy) continue;
         changed = true;
-        if (normalized.length > 0) next[storeKey] = normalized;
-        else delete next[storeKey];
+        next[storeKey] = normalized;
         if (storeKey !== legacyKey) delete next[legacyKey];
       }
       return changed ? next : current;
@@ -1587,7 +1649,13 @@ function App() {
         if (controller.signal.aborted || generation !== recordsLoadGenerationRef.current) return;
         const pages = result.filter((page): page is ListResponse<RecordItem> => page !== null);
         if (pages.length !== requestedPages.length) return;
-        setRecordPage(pages.at(-1) ?? null);
+        const firstPage = pages[0];
+        const lastPage = pages.at(-1) ?? null;
+        setRecordPage(
+          lastPage && firstPage && lastPage.totalItems < 0
+            ? { ...lastPage, totalItems: firstPage.totalItems, totalPages: firstPage.totalPages }
+            : lastPage
+        );
         setRecords(mergeRecordItems([], pages.flatMap((page) => page.items)));
         setRecordsNeedRefresh(false);
       } catch (error) {
@@ -1966,7 +2034,10 @@ function App() {
   async function saveCollection(payload: CollectionPayload): Promise<boolean> {
     try {
       if (collectionEditor?.mode === "edit" && collectionEditor.collection) {
-        await api(`/api/collections/${encodeURIComponent(collectionEditor.collection.name)}`, {
+        // Use the collection id for the PATCH path so a rename is safe: the URL
+        // target stays stable regardless of the new name (official parity).
+        const target = collectionEditor.collection.id || collectionEditor.collection.name;
+        await api(`/api/collections/${encodeURIComponent(target)}`, {
           method: "PATCH",
           body: payload
         });
@@ -2436,15 +2507,17 @@ function App() {
     setHiddenColumnsByCollection((current) => {
       const storeKey = collectionPreferenceStoreKey(selected);
       const key = columnPreferenceKey(selected, column);
-      const existing = new Set(normalizeColumnPreferences(selected, hiddenColumnPreferencesFor(selected, current)));
+      const source = hiddenColumnPreferencesFor(selected, current);
+      const existing = new Set(hiddenColumnPreferenceSnapshot(selected, source).slice(1));
       if (existing.has(key)) {
         existing.delete(key);
       } else {
         existing.add(key);
       }
       const next = { ...current };
-      if (existing.size > 0) next[storeKey] = Array.from(existing);
-      else delete next[storeKey];
+      // Keep the marker even when every column is visible; removing it would
+      // reapply schema defaults and make a hidden field impossible to reveal.
+      next[storeKey] = [HIDDEN_COLUMNS_SNAPSHOT_MARKER, ...existing];
       if (storeKey !== selected.name) delete next[selected.name];
       return next;
     });
@@ -2549,10 +2622,9 @@ function App() {
     try {
       await api(`/api/backups/${encodeURIComponent(backup.key)}/restore`, { method: "POST" });
       notify(t("notifications.backup_restored", "Backup restored"));
-      await refreshCollections();
-      await refreshBackups();
-      broadcastSync("collections");
-      broadcastSync("settings");
+      // A restore replaces the entire application state (records, files, settings).
+      // Reload the page so no stale state lingers, matching the official behavior.
+      window.location.reload();
     } catch (error) {
       notify(errorMessage(error), "error");
     } finally {
@@ -2633,17 +2705,31 @@ function App() {
   }
 
   async function testEmailSettings() {
+    const email = testEmail.trim();
+    if (!email) return;
+    // Remember the recipient for convenience across sessions.
+    localStorage.setItem("pbj_test_email_recipient", email);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
       await api("/api/settings/test/email", {
         method: "POST",
         body: {
-          email: testEmail.trim(),
-          template: testEmailTemplate || "verification"
-        }
+          email,
+          template: testEmailTemplate || "verification",
+          collection: testEmailCollection
+        },
+        signal: controller.signal
       });
       notify(t("notifications.test_email_queued", "Test email queued"));
     } catch (error) {
-      notify(errorMessage(error), "error");
+      if (controller.signal.aborted) {
+        notify(t("errors.test_email_timeout", "Test email timed out after 15s. Check your SMTP settings."), "error");
+      } else {
+        notify(errorMessage(error), "error");
+      }
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 
@@ -2702,6 +2788,24 @@ function App() {
     }
   }
 
+  function pushSqlHistory(query: string) {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    setSqlHistory((prev) => {
+      const next = [trimmed, ...prev.filter((item) => item !== trimmed)].slice(0, 10);
+      sessionStorage.setItem("pbj_sql_history", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function removeSqlHistory(query: string) {
+    setSqlHistory((prev) => {
+      const next = prev.filter((item) => item !== query);
+      sessionStorage.setItem("pbj_sql_history", JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function runSql() {
     // Match statements anywhere in a batch/CTE, as the official console does.
     // Checking only the first token misses `select ...; drop ...` and
@@ -2738,6 +2842,7 @@ function App() {
     try {
       const result = await api<SqlResult>("/api/sql", { method: "POST", body: { query: sqlQuery } });
       setSqlResult(result);
+      pushSqlHistory(sqlQuery);
       notify(t("notifications.sql_executed", "SQL executed"));
       await refreshCollections();
     } catch (error) {
@@ -2975,11 +3080,14 @@ function App() {
                   draft={settingsDraft}
                   email={testEmail}
                   template={testEmailTemplate}
+                  collection={testEmailCollection}
+                  collections={collections}
                   loading={loading}
                   onDraft={setSettingsDraft}
                   onSave={saveSettings}
                   onEmail={setTestEmail}
                   onTemplate={setTestEmailTemplate}
+                  onCollection={setTestEmailCollection}
                   onTest={testEmailSettings}
                 />
               ) : view === "storage" ? (
@@ -3042,8 +3150,10 @@ function App() {
                   elapsedMs={sqlElapsedMs}
                   loading={loading}
                   sqlCompletions={sqlCompletions}
+                  history={sqlHistory}
                   onQuery={setSqlQuery}
                   onRun={runSql}
+                  onRemoveHistory={removeSqlHistory}
                 />
               ) : view === "logs" ? (
                 <LogsView
@@ -3103,6 +3213,7 @@ function App() {
                     loading={loading}
                     refreshSuggested={recordsNeedRefresh}
                     hideControls={hideControls}
+                    fileAccessToken={token}
                     onApply={(nextQuery) => {
                       setQuery((current) =>
                         current.filter === nextQuery.filter &&
@@ -3150,13 +3261,7 @@ function App() {
           onDryRunView={dryRunView}
           onGenerateAppleClientSecret={generateAppleClientSecret}
           onSubmit={(payload) => saveCollection(payload)}
-          onCopyJson={() => {
-            if (!selected) return;
-            navigator.clipboard.writeText(JSON.stringify(selected, null, 2)).then(
-              () => notify(t("notifications.copied", "Copied")),
-              (error) => notify(errorMessage(error), "error")
-            );
-          }}
+          onNotify={notify}
           onDuplicate={() => selected && duplicateCollection(selected)}
           onTruncate={() => selected && truncateCollection(selected)}
           onDelete={() => selected && deleteCollection(selected)}
@@ -3263,7 +3368,34 @@ function App() {
         />
       )}
 
-      {toast && <div className={`toast ${toast.kind}`}>{toast.message}</div>}
+      {toasts.length > 0 && (
+        <div className="toast-stack" role="region" aria-label="Notifications">
+          {toasts.map((item) => (
+            <div
+              key={item.id}
+              className={`toast ${item.kind}`}
+              onMouseEnter={() => {
+                const timer = toastTimersRef.current.get(item.id);
+                if (timer) window.clearTimeout(timer);
+              }}
+              onMouseLeave={() => {
+                const timer = window.setTimeout(() => dismissToast(item.id), 3200);
+                toastTimersRef.current.set(item.id, timer);
+              }}
+            >
+              <span>{item.message}</span>
+              <button
+                type="button"
+                className="toast-close"
+                onClick={() => dismissToast(item.id)}
+                aria-label={t("actions.close", "Close")}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3814,8 +3946,22 @@ type CollectionGroupProps = {
 
 function CollectionGroup(props: CollectionGroupProps) {
   const { t } = useTranslation();
-  const [collapsed, setCollapsed] = useState(false);
+  // `collapsible` is the semantic System-group flag. Do not infer behavior from
+  // a translated title, which would leave the group expanded in non-English UI.
+  const [collapsed, setCollapsed] = useState(Boolean(props.collapsible));
   const expanded = !props.collapsible || !collapsed;
+  // Keep the active collection visible as the selection changes (keyboard nav,
+  // deep links) without scrolling the whole page.
+  const activeRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [props.currentName]);
+  // Auto-expand when the active collection lives in this group.
+  useEffect(() => {
+    if (props.currentName && props.collections.some((collection) => collection.name === props.currentName)) {
+      setCollapsed(false);
+    }
+  }, [props.currentName, props.collections]);
   return (
     <section className={`sidebar-group${expanded ? "" : " collapsed"}`}>
       {props.collapsible ? (
@@ -3839,8 +3985,13 @@ function CollectionGroup(props: CollectionGroupProps) {
         <div className="sidebar-group-items">
           {props.collections.map((collection) => {
             const pinned = props.pinnedNames.includes(collection.name);
+            const isActive = props.currentName === collection.name;
             return (
-              <div className={props.currentName === collection.name ? "collection-nav-row active" : "collection-nav-row"} key={collection.id || collection.name}>
+              <div
+                ref={isActive ? activeRowRef : undefined}
+                className={isActive ? "collection-nav-row active" : "collection-nav-row"}
+                key={collection.id || collection.name}
+              >
                 <button
                   className="collection-nav-main"
                   onClick={() => {
@@ -3965,6 +4116,7 @@ type RecordsViewProps = {
   loading: boolean;
   refreshSuggested: boolean;
   hideControls: boolean;
+  fileAccessToken: string;
   onApply: (query: QueryState) => void;
   onRefresh: () => void | Promise<void>;
   onLoadMore: () => void | Promise<void>;
@@ -4385,17 +4537,22 @@ function RecordsView(props: RecordsViewProps) {
                         {selected ? <CheckSquare2 size={17} /> : <Square size={17} />}
                       </button>
                     </td>
-                    {props.columns.map((column) => (
-                      <td key={column}>
-                        <CellValue
-                          collection={props.collection}
-                          collections={props.collections}
-                          column={column}
-                          record={record}
-                          onOpenFile={props.onOpenFile}
-                        />
-                      </td>
-                    ))}
+                    {props.columns.map((column) => {
+                      const fieldDef = (props.collection.fields ?? []).find((f) => f.name === column);
+                      const isHiddenField = Boolean(fieldDef?.hidden);
+                      return (
+                        <td key={column} className={isHiddenField ? "hidden-field-col" : ""}>
+                          <CellValue
+                            collection={props.collection}
+                            collections={props.collections}
+                            column={column}
+                            record={record}
+                            fileAccessToken={props.fileAccessToken}
+                            onOpenFile={props.onOpenFile}
+                          />
+                        </td>
+                      );
+                    })}
                     <td className="row-actions">
                       <span className="row-arrow" aria-hidden="true">
                         <ChevronRight size={16} />
@@ -4508,12 +4665,21 @@ type CellValueProps = {
   column: string;
   record: RecordItem;
   collections?: CollectionSchema[];
+  fileAccessToken: string;
   onOpenFile: (record: RecordItem, filename: string) => void;
 };
 
-function CellValue({ collection, collections, column, record, onOpenFile }: CellValueProps) {
+function CellValue({ collection, collections, column, record, fileAccessToken, onOpenFile }: CellValueProps) {
   const field = collection.fields?.find((item) => item.name === column);
   const value = record[column];
+
+  // Date-like fields (schema date/autodate and the system created/updated) show a
+  // localized timestamp with the raw UTC value available on hover, like the official UI.
+  if ((field?.type === "date" || field?.type === "autodate" || column === "created" || column === "updated") && value) {
+    const iso = String(value);
+    const local = formatDate(iso);
+    return <code title={iso}>{local}</code>;
+  }
 
   if (field?.type === "relation" && value) {
     const ids = (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
@@ -4543,22 +4709,36 @@ function CellValue({ collection, collections, column, record, onOpenFile }: Cell
 
   if (field?.type === "file" && value) {
     const files = Array.isArray(value) ? value : [value];
+    const collectionId = collection.id || collection.name;
     return (
       <div className="file-list">
-        {files.filter(Boolean).map((filename) => (
-          <button
-            className="file-pill"
-            key={String(filename)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenFile(record, String(filename));
-            }}
-            title={String(filename)}
-          >
-            <Download size={13} />
-            {String(filename)}
-          </button>
-        ))}
+        {files.filter(Boolean).map((filename) => {
+          const name = String(filename);
+          const isImage = safeImageFilename(name);
+          const baseUrl = `/api/files/${encodeURIComponent(collectionId)}/${encodeURIComponent(record.id)}/${encodeURIComponent(name)}`;
+          const thumbnail = fileThumbnailSpec(field);
+          const fileUrl = thumbnail ? `${baseUrl}?thumb=${encodeURIComponent(thumbnail)}` : baseUrl;
+          return (
+            <button
+              className={isImage ? "file-thumb" : "file-pill"}
+              key={name}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenFile(record, name);
+              }}
+              title={name}
+            >
+              {isImage ? (
+                <FileThumbnail url={fileUrl} filename={name} accessToken={fileAccessToken} />
+              ) : (
+                <>
+                  <Download size={13} />
+                  {name}
+                </>
+              )}
+            </button>
+          );
+        })}
       </div>
     );
   }
@@ -4568,6 +4748,87 @@ function CellValue({ collection, collections, column, record, onOpenFile }: Cell
   }
 
   return <code>{formatValue(value)}</code>;
+}
+
+type FileThumbnailProps = {
+  url: string;
+  filename: string;
+  accessToken: string;
+};
+
+/**
+ * Browser image elements cannot attach the dashboard bearer token. Fetch the
+ * file with authorization and render an object URL instead, keeping protected
+ * images private without putting a file token into the DOM.
+ */
+function FileThumbnail({ url, filename, accessToken }: FileThumbnailProps) {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const [shouldLoad, setShouldLoad] = useState(false);
+  const [source, setSource] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node || !("IntersectionObserver" in window)) {
+      setShouldLoad(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setShouldLoad(true);
+        observer.disconnect();
+      },
+      { rootMargin: "160px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!shouldLoad) return undefined;
+    const controller = new AbortController();
+    let objectUrl = "";
+    setSource("");
+    setFailed(false);
+    void fetch(url, {
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Failed to load file (${response.status})`);
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) throw new Error("The file is not an image.");
+        return blob;
+      })
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSource(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [accessToken, shouldLoad, url]);
+
+  return (
+    <span ref={rootRef} className="file-thumb-content">
+      {failed ? (
+        <span className="file-thumb-fallback">
+          <Download size={13} />
+          <span>{filename}</span>
+        </span>
+      ) : source ? (
+        <img className="file-thumb-img" src={source} alt={filename} />
+      ) : (
+        <span className="file-thumb-loading" aria-hidden="true" />
+      )}
+    </span>
+  );
 }
 
 
@@ -4976,10 +5237,11 @@ type CronsViewProps = {
 function CronsView(props: CronsViewProps) {
   const { t } = useTranslation();
   const [runningCronId, setRunningCronId] = useState("");
-  const sortedCrons = useMemo(() => [...props.crons].sort((left, right) => left.id.localeCompare(right.id)), [props.crons]);
+  // Keep the API's original order rather than re-sorting by id (official parity).
+  const sortedCrons = props.crons;
 
   async function runCron(job: CronJob) {
-    if (runningCronId) return;
+    if (runningCronId === job.id) return;
     setRunningCronId(job.id);
     try {
       await props.onRun(job);
@@ -5027,7 +5289,7 @@ function CronsView(props: CronsViewProps) {
                     onClick={() => runCron(cron)}
                     title={t("actions.run", "Run")}
                     aria-label={t("actions.run", "Run")}
-                    disabled={props.loading || Boolean(runningCronId)}
+                    disabled={props.loading || runningCronId === cron.id}
                   >
                     <Play size={16} />
                   </button>
@@ -5229,6 +5491,8 @@ function SettingsView(props: SettingsViewProps) {
     updateSetting(["meta", "accentColor"], normalized);
   }
 
+  const dirty = Boolean(props.draft) && props.draft !== JSON.stringify(props.settings ?? {}, null, 2);
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
@@ -5303,6 +5567,7 @@ function SettingsView(props: SettingsViewProps) {
                       type="number"
                       value={String(batch.maxRequests ?? 50)}
                       onChange={(event) => updateNumber(["batch", "maxRequests"], event.target.value)}
+                      disabled={!Boolean(batch.enabled)}
                     />
                   </label>
                   <label>
@@ -5313,6 +5578,7 @@ function SettingsView(props: SettingsViewProps) {
                       type="number"
                       value={String(batch.timeout ?? 3)}
                       onChange={(event) => updateNumber(["batch", "timeout"], event.target.value)}
+                      disabled={!Boolean(batch.enabled)}
                     />
                   </label>
                   <label>
@@ -5323,6 +5589,7 @@ function SettingsView(props: SettingsViewProps) {
                       type="number"
                       value={String(batch.maxBodySize ?? 33554432)}
                       onChange={(event) => updateNumber(["batch", "maxBodySize"], event.target.value)}
+                      disabled={!Boolean(batch.enabled)}
                     />
                   </label>
                 </div>
@@ -5589,7 +5856,7 @@ function SettingsView(props: SettingsViewProps) {
         </div>
 
         <footer className="application-settings-footer">
-          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading || !dirty}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
@@ -5803,11 +6070,14 @@ type MailSettingsViewProps = {
   draft: string;
   email: string;
   template: string;
+  collection: string;
+  collections: CollectionSchema[];
   loading: boolean;
   onDraft: (value: string) => void;
   onSave: () => void;
   onEmail: (value: string) => void;
   onTemplate: (value: string) => void;
+  onCollection: (value: string) => void;
   onTest: () => void;
 };
 
@@ -5829,12 +6099,14 @@ function MailSettingsView(props: MailSettingsViewProps) {
     updateSetting(path, value === "" ? undefined : Number(value));
   }
 
+  const dirty = Boolean(props.draft) && props.draft !== JSON.stringify(props.settings ?? {}, null, 2);
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
         section={t("settings.nav.mail", "Mail settings")}
         actions={
-          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading || !dirty}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
@@ -6027,7 +6299,23 @@ function MailSettingsView(props: MailSettingsViewProps) {
               <option value="login-alert">login-alert</option>
             </select>
           </label>
-          <button className="primary apply-button" onClick={props.onTest} disabled={props.loading || !props.email.trim()}>
+          <label>
+            {t("settings.collection", "Auth collection")}
+            <select
+              value={props.collection}
+              onChange={(event) => props.onCollection(event.target.value)}
+            >
+              <option value="_superusers">_superusers</option>
+              {props.collections
+                .filter((collection) => collection.type === "auth" && collection.name !== "_superusers")
+                .map((collection) => (
+                  <option key={collection.id || collection.name} value={collection.name}>
+                    {collection.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button className="primary apply-button" onClick={props.onTest} disabled={props.loading || !props.email.trim() || dirty}>
             <Play size={16} />
             {t("actions.send_test", "Send test")}
           </button>
@@ -6101,12 +6389,14 @@ function StorageSettingsView(props: StorageSettingsViewProps) {
     return () => window.clearTimeout(timer);
   }, [automaticTestFingerprint, canAutomaticallyTest]);
 
+  const dirty = Boolean(props.draft) && props.draft !== JSON.stringify(props.settings ?? {}, null, 2);
+
   return (
     <section className="settings-page">
       <SettingsPageHeader
         section={t("settings.nav.storage", "File storage")}
         actions={
-          <button className="primary" onClick={() => props.onSave()} disabled={props.loading}>
+          <button className="primary" onClick={() => props.onSave()} disabled={props.loading || !dirty}>
             <Save size={16} />
             {t("actions.save_settings", "Save settings")}
           </button>
@@ -6671,14 +6961,15 @@ type SqlViewProps = {
   elapsedMs: number | null;
   loading: boolean;
   sqlCompletions: string[];
+  history?: string[];
   onQuery: (value: string) => void;
   onRun: () => void;
+  onRemoveHistory?: (query: string) => void;
 };
 
 function SqlView(props: SqlViewProps) {
   const { t } = useTranslation();
-  const columns = props.result?.columns ?? [];
-  const rows = props.result?.rows ?? [];
+  const columns = props.result?.columns ?? [];  const rows = props.result?.rows ?? [];
   const [visibleRows, setVisibleRows] = useState(250);
   const [sort, setSort] = useState<{ index: number; direction: SortDirection } | null>(null);
 
@@ -6739,6 +7030,36 @@ function SqlView(props: SqlViewProps) {
               minHeight={140}
             />
           </label>
+          {props.history && props.history.length > 0 && (
+            <div className="sql-history">
+              <span className="sql-history-label">{t("sql.history", "Recent")}</span>
+              <div className="sql-history-list">
+                {props.history.map((item) => (
+                  <div className="sql-history-item" key={item}>
+                    <button
+                      type="button"
+                      className="sql-history-query"
+                      onClick={() => props.onQuery(item)}
+                      title={item}
+                    >
+                      {item.length > 60 ? `${item.slice(0, 60)}…` : item}
+                    </button>
+                    {props.onRemoveHistory && (
+                      <button
+                        type="button"
+                        className="icon-button sql-history-remove"
+                        onClick={() => props.onRemoveHistory?.(item)}
+                        title={t("actions.remove", "Remove")}
+                        aria-label={t("actions.remove", "Remove")}
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="surface sql-result">
@@ -7164,7 +7485,27 @@ function LogsView(props: LogsViewProps) {
             {props.logs.length === 0 ? (
               <tr>
                 <td className="empty-row" colSpan={5}>
-                  {t("logs.no_logs", "No logs")}
+                  <div className="empty-table-message">
+                    <strong>{t("logs.no_logs", "No logs")}</strong>
+                    <div className="empty-row-actions">
+                      {props.filter.trim() && (
+                        <button className="subtle" onClick={() => props.onFilter("")}>
+                          {t("actions.clear_search", "Clear search")}
+                        </button>
+                      )}
+                      {(props.timeRange || chartWindowStart > 0) && (
+                        <button
+                          className="subtle"
+                          onClick={() => {
+                            props.onClearTimeRange();
+                            setChartWindowStart(0);
+                          }}
+                        >
+                          {t("actions.reset_zoom", "Reset zoom")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -7314,8 +7655,8 @@ type CollectionModalProps = {
   onDryRunView: (query: string) => Promise<ViewQueryPreview>;
   onGenerateAppleClientSecret: (input: AppleClientSecretInput) => Promise<{ secret: string }>;
   onSubmit: (payload: CollectionPayload) => Promise<boolean>;
+  onNotify: (message: string, kind?: "ok" | "error") => void;
   /** Collection-level actions, shown only when editing an existing collection. */
-  onCopyJson?: () => void;
   onDuplicate?: () => void;
   onTruncate?: () => void;
   onDelete?: () => void;
@@ -7330,7 +7671,7 @@ function CollectionModal({
   onDryRunView,
   onGenerateAppleClientSecret,
   onSubmit,
-  onCopyJson,
+  onNotify,
   onDuplicate,
   onTruncate,
   onDelete
@@ -7412,6 +7753,7 @@ function CollectionModal({
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("fields");
   const [exiting, setExiting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const tabs = useMemo(() => collectionModalTabs(type, t), [type, t]);
 
   const snapshot = JSON.stringify({
@@ -7495,9 +7837,27 @@ function CollectionModal({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     try {
       const parsedFields = JSON.parse(fields || "[]") as FieldSchema[];
       if (!Array.isArray(parsedFields)) throw new Error(t("errors.fields_must_be_array", "Fields must be an array."));
+
+      // When editing an existing collection, sync index SQL so renamed fields
+      // keep referencing the correct columns (official parity).
+      let syncedIndexes = indexes;
+      if (collection && type !== "view") {
+        const renames = new Map<string, string>();
+        for (const originalField of collection.fields ?? []) {
+          const match = parsedFields.find((item) => item.id && originalField.id && item.id === originalField.id);
+          if (match && match.name !== originalField.name) {
+            renames.set(originalField.name, match.name);
+          }
+        }
+        if (renames.size > 0) {
+          syncedIndexes = indexes.map((sql) => renameIndexColumns(sql, renames));
+        }
+      }
 
       // Editing an existing collection can drop columns or break clients — show what
       // is about to change before it is applied, like the official confirmation modal.
@@ -7518,7 +7878,7 @@ function CollectionModal({
         name: name.trim(),
         type,
         fields: type === "view" ? (collection?.fields ?? []) : parsedFields,
-        ...(type === "view" ? {} : { indexes }),
+        ...(type === "view" ? {} : { indexes: syncedIndexes }),
         listRule: normalizeRule(rules.listRule),
         viewRule: normalizeRule(rules.viewRule),
         createRule: normalizeRule(rules.createRule),
@@ -7578,7 +7938,72 @@ function CollectionModal({
       if (saved) setExiting(true);
     } catch (err) {
       setError(errorMessage(err));
+    } finally {
+      setSaving(false);
     }
+  }
+
+  function renderRule(key: RuleKey) {
+    const value = rules[key];
+    const locked = value === null;
+    const isReadOnly = Boolean(collection?.system);
+    return (
+      <div key={key} className={`rule-field${locked ? " locked" : ""}`}>
+        <div className="rule-field-header">
+          <span className="rule-field-label">
+            {collectionRuleLabel(key, t)}
+            {locked && (
+              <em className="rule-field-hint">
+                {t("collections.superusers_only", "(Superusers only)")}
+              </em>
+            )}
+          </span>
+          {!isReadOnly &&
+            (locked ? (
+              <button
+                type="button"
+                className="subtle rule-field-toggle"
+                onClick={() => setRules({ ...rules, [key]: ruleMemory[key] ?? "" })}
+              >
+                <Unlock size={14} />
+                {t("collections.unlock_rule", "Unlock and set custom rule")}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="subtle rule-field-toggle"
+                onClick={() => {
+                  setRuleMemory({ ...ruleMemory, [key]: value ?? "" });
+                  setRules({ ...rules, [key]: null });
+                }}
+              >
+                <Lock size={14} />
+                {t("collections.set_superusers_only", "Set superusers only")}
+              </button>
+            ))}
+        </div>
+        {locked ? (
+          <div className="rule-field-locked" aria-hidden="true">
+            <Lock size={15} />
+            <span>{t("collections.rule_locked", "Superusers only")}</span>
+          </div>
+        ) : (
+          <CodeEditor
+            value={value}
+            onChange={(next) => setRules({ ...rules, [key]: next })}
+            language="pbrule"
+            completions={ruleCompletions}
+            placeholder={t(
+              "collections.rule_placeholder",
+              'Leave empty to grant everyone access, eg. @request.auth.id != ""'
+            )}
+            disabled={isReadOnly}
+            name={key}
+            ariaLabel={collectionRuleLabel(key, t)}
+          />
+        )}
+      </div>
+    );
   }
 
   function toggleIdentityField(field: string) {
@@ -7592,10 +8017,17 @@ function CollectionModal({
 
   function toggleOauthProvider(name: string) {
     setOauthProviderNames((current) => {
+      let next: string[];
       if (current.includes(name)) {
-        return current.filter((item) => item !== name);
+        next = current.filter((item) => item !== name);
+      } else {
+        next = [...current, name];
       }
-      return [...current, name];
+      // Official parity: adding the first provider enables OAuth2; removing the
+      // last one disables it so the toggle never points at an empty list.
+      if (next.length > 0 && !oauthEnabled) setOauthEnabled(true);
+      else if (next.length === 0 && oauthEnabled) setOauthEnabled(false);
+      return next;
     });
     setOauthProviderConfigs((current) => ({
       ...current,
@@ -7663,6 +8095,18 @@ function CollectionModal({
   }
 
   const fieldsPreview = useMemo(() => parseFieldsPreview(fields, t), [fields, t]);
+  // Official identity candidates: email plus any field backed by a single-column
+  // unique index. Stays in sync as fields and indexes change.
+  const identityFieldCandidates = useMemo(() => {
+    const candidates = new Set<string>(["email"]);
+    for (const raw of indexes) {
+      const parsed = parseIndex(raw);
+      if (parsed.unique && parsed.columns.length === 1) {
+        candidates.add(parsed.columns[0]);
+      }
+    }
+    return [...candidates].filter((name) => fieldsPreview.fields.some((field) => field.name === name));
+  }, [indexes, fieldsPreview.fields]);
 
   function updateFields(nextFields: FieldSchema[]) {
     setFields(JSON.stringify(nextFields, null, 2));
@@ -7675,17 +8119,20 @@ function CollectionModal({
     }
     const current = fieldsPreview.fields;
     const fieldName = uniqueFieldName(current, fieldType);
-    updateFields([
-      ...current,
-      {
-        name: fieldName,
-        type: fieldType,
-        required: false,
-        unique: false,
-        hidden: false,
-        system: false
-      }
-    ]);
+    const newField = {
+      name: fieldName,
+      type: fieldType,
+      required: false,
+      unique: false,
+      hidden: false,
+      system: false
+    };
+    // Insert before trailing autodate fields (created/updated), like the official editor.
+    let insertAt = current.length;
+    while (insertAt > 0 && current[insertAt - 1].type === "autodate") insertAt--;
+    const next = [...current];
+    next.splice(insertAt, 0, newField);
+    updateFields(next);
   }
 
   function removeField(index: number) {
@@ -7715,6 +8162,28 @@ function CollectionModal({
     nextFields.splice(Math.min(deleted.index, nextFields.length), 0, deleted.field);
     updateFields(nextFields);
     setPendingDeletedFields((current) => current.filter((item) => item.field.id !== deleted.field.id));
+  }
+
+  function duplicateField(index: number) {
+    if (fieldsPreview.error) {
+      setError(fieldsPreview.error);
+      return;
+    }
+    const source = fieldsPreview.fields[index];
+    if (!source) return;
+    const base = `${source.name}_copy`.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 63) || "field_copy";
+    const existing = new Set(fieldsPreview.fields.map((field) => field.name));
+    let copyName = base;
+    if (existing.has(copyName)) {
+      let n = 2;
+      while (existing.has(`${base}_${n}`)) n++;
+      copyName = `${base}_${n}`;
+    }
+    // A duplicate is a fresh field: no persisted id, never a system field.
+    const copy: FieldSchema = { ...source, id: undefined, system: false, name: copyName };
+    const next = [...fieldsPreview.fields];
+    next.splice(index + 1, 0, copy);
+    updateFields(next);
   }
 
   function updateFieldAt(index: number, updatedField: FieldSchema) {
@@ -7759,7 +8228,7 @@ function CollectionModal({
               {t("common.name", "Name")}{collection?.system ? ` (${t("collections.system", "system")})` : ""}
               <input
                 value={name}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => setName(event.target.value.replace(/\s+/g, "_").replace(/[^A-Za-z0-9_]/g, ""))}
                 required
                 pattern="[A-Za-z_][A-Za-z0-9_]{0,62}"
                 placeholder="posts"
@@ -7799,6 +8268,7 @@ function CollectionModal({
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}
+              {tab.id === "fields" && fieldsPreview.error && <span className="tab-error-dot" aria-hidden="true" />}
             </button>
           ))}
         </nav>
@@ -7870,6 +8340,7 @@ function CollectionModal({
                       collections={allCollections}
                       onUpdate={updateFieldAt}
                       onRemove={removeField}
+                      onDuplicate={duplicateField}
                     />
                   </div>
                 ))
@@ -7977,22 +8448,19 @@ function CollectionModal({
                 label={t("common.enabled", "Enabled")}
               />
               <div className="stacked-checks">
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={identityFields.includes("email")}
-                    onChange={() => toggleIdentityField("email")}
-                  />
-                  {t("collections.email_identity", "Email identity")}
-                </label>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={identityFields.includes("username")}
-                    onChange={() => toggleIdentityField("username")}
-                  />
-                  {t("collections.username_identity", "Username identity")}
-                </label>
+                {identityFieldCandidates.map((fieldName) => (
+                  <label className="check-row" key={fieldName}>
+                    <input
+                      type="checkbox"
+                      checked={identityFields.includes(fieldName)}
+                      onChange={() => toggleIdentityField(fieldName)}
+                    />
+                    {t("collections.field_identity", { name: fieldName, defaultValue: "{{name}} identity" })}
+                  </label>
+                ))}
+                {identityFieldCandidates.length === 0 && (
+                  <span className="sidebar-empty">{t("collections.no_identity_fields", "No eligible fields (add a unique index to a field)")}</span>
+                )}
               </div>
             </article>
 
@@ -8082,6 +8550,11 @@ function CollectionModal({
                 onChange={(checked) => setOauthEnabled(checked)}
                 label={t("common.enabled", "Enabled")}
               />
+              {oauthEnabled && oauthProviderNames.length === 0 && (
+                <p className="field-option-help" style={{ color: "var(--dangerColor)" }}>
+                  {t("collections.oauth_no_providers_warning", "OAuth2 is enabled but no providers are configured. Select at least one provider below.")}
+                </p>
+              )}
               <div className="two-col oauth-provider-fields">
                 {([
                   ["id", t("collections.oauth_provider_id_field", "Provider ID field")],
@@ -8297,8 +8770,7 @@ function CollectionModal({
         )}
 
         {activeTab === "rules" && (
-          <section className="collection-rules-panel collection-tab-panel">
-            <div className="rules-helper">
+          <section className="collection-rules-panel collection-tab-panel">            <div className="rules-helper">
               <div>
                 <strong>{t("collections.available_fields", "Available fields")}</strong>
                 <div className="chips">
@@ -8321,79 +8793,29 @@ function CollectionModal({
               </div>
             </div>
             <div className="rules-grid official">
-              {collectionRuleKeys(type).map((key) => {
-                const value = rules[key];
-                const locked = value === null;
-                const readOnly = Boolean(collection?.system);
-                return (
-                  <div key={key} className={`rule-field${locked ? " locked" : ""}`}>
-                    <div className="rule-field-header">
-                      <span className="rule-field-label">
-                        {collectionRuleLabel(key, t)}
-                        {locked && (
-                          <em className="rule-field-hint">
-                            {t("collections.superusers_only", "(Superusers only)")}
-                          </em>
-                        )}
-                      </span>
-                      {!readOnly &&
-                        (locked ? (
-                          <button
-                            type="button"
-                            className="subtle rule-field-toggle"
-                            onClick={() => setRules({ ...rules, [key]: ruleMemory[key] ?? "" })}
-                          >
-                            <Unlock size={14} />
-                            {t("collections.unlock_rule", "Unlock and set custom rule")}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="subtle rule-field-toggle"
-                            onClick={() => {
-                              setRuleMemory({ ...ruleMemory, [key]: value ?? "" });
-                              setRules({ ...rules, [key]: null });
-                            }}
-                          >
-                            <Lock size={14} />
-                            {t("collections.set_superusers_only", "Set superusers only")}
-                          </button>
-                        ))}
-                    </div>
-                    {locked ? (
-                      <div className="rule-field-locked" aria-hidden="true">
-                        <Lock size={15} />
-                        <span>{t("collections.rule_locked", "Superusers only")}</span>
-                      </div>
-                    ) : (
-                      <CodeEditor
-                        value={value}
-                        onChange={(next) => setRules({ ...rules, [key]: next })}
-                        language="pbrule"
-                        completions={ruleCompletions}
-                        placeholder={t(
-                          "collections.rule_placeholder",
-                          'Leave empty to grant everyone access, eg. @request.auth.id != ""'
-                        )}
-                        disabled={readOnly}
-                        name={key}
-                        ariaLabel={collectionRuleLabel(key, t)}
-                      />
-                    )}
-                  </div>
-                );
-              })}
+              {collectionRuleKeys(type)
+                .filter((key) => key !== "authRule" && key !== "manageRule")
+                .map((key) => renderRule(key))}
             </div>
+            {type === "auth" && (
+              <details className="auth-rules-collapse">
+                <summary>{t("collections.auth_manage_rules", "Auth & manage rules")}</summary>
+                <div className="rules-grid official">
+                  {(["authRule", "manageRule"] as RuleKey[]).map((key) => renderRule(key))}
+                </div>
+              </details>
+            )}
           </section>
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           {collection && (
             <>
-              <button type="button" className="subtle" onClick={onCopyJson} disabled={exiting}>
-                <Copy size={16} />
-                {t("actions.copy_json", "Copy JSON")}
-              </button>
+              <CopyButton
+                value={collection ? JSON.stringify(collection, null, 2) : ""}
+                label={t("actions.copy_json", "Copy JSON")}
+                onError={(error) => onNotify(errorMessage(error), "error")}
+              />
               <button type="button" className="subtle" onClick={onDuplicate} disabled={exiting}>
                 <Copy size={16} />
                 {t("parity.collection.duplicate", "Duplicate")}
@@ -8413,9 +8835,9 @@ function CollectionModal({
             <X size={16} />
             {t("actions.cancel", "Cancel")}
           </button>
-          <button className="primary" type="submit" disabled={exiting}>
+          <button className="primary" type="submit" disabled={saving || exiting}>
             <Save size={16} />
-            {t("actions.save", "Save")}
+            {saving ? t("common.submitting", "Submitting...") : t("actions.save", "Save")}
           </button>
         </div>
       </form>
@@ -8479,8 +8901,13 @@ function RecordModal({
       : [];
   const passwordField =
     collection.type === "auth" ? (collection.fields ?? []).find((field) => field.name === "password") : undefined;
-  const editableFields = [...authVisibleFields, ...ordinaryEditableFields];
   const duplicating = state.mode === "duplicate";
+  const editing = Boolean(state.record) && !duplicating;
+  // Creating a new record lets the user supply a custom id (leave empty for autogenerate).
+  const idFieldSchema: FieldSchema = { id: "id", name: "id", type: "text", system: true };
+  const editableFields = editing
+    ? [...authVisibleFields, ...ordinaryEditableFields]
+    : [idFieldSchema, ...authVisibleFields, ...ordinaryEditableFields];
   const readOnly = collection.type === "view";
   const initialPayload = useMemo(
     () => (duplicating ? duplicateRecordPayload(collection, state.record) : recordEditorPayload(collection, state.record)),
@@ -8508,7 +8935,6 @@ function RecordModal({
   const [invalidRecordJson, setInvalidRecordJson] = useState(false);
   const [jsonFieldResetVersion, setJsonFieldResetVersion] = useState(0);
   const [saving, setSaving] = useState(false);
-  const editing = Boolean(state.record) && !duplicating;
   // Match PocketBase's safety mode: a new record remains creatable, while an
   // existing record can be inspected/edited but requires an explicit unlock
   // before any change can be submitted.
@@ -8714,6 +9140,8 @@ function RecordModal({
       const parsedPayload = JSON.parse(json || "{}") as Record<string, unknown>;
       if (!isPlainObject(parsedPayload)) throw new Error(t("errors.record_payload_object", "Record payload must be an object."));
       const requestPayload = { ...parsedPayload };
+      // An empty custom id means "let the server autogenerate" — don't send it.
+      if (requestPayload.id === "") delete requestPayload.id;
       if (passwordField && changePassword && passwordValue !== passwordConfirmation) {
         throw new Error(t("parity.errors.password_confirmation_mismatch", "Password confirmation does not match."));
       }
@@ -8759,13 +9187,6 @@ function RecordModal({
     }
   }
 
-  function copyRecordJson() {
-    navigator.clipboard.writeText(exportJson).then(
-      () => onNotify(t("notifications.copied", "Copied")),
-      (error) => onNotify(errorMessage(error), "error")
-    );
-  }
-
   function downloadRecordJson() {
     const id = state.record?.id || "new";
     downloadJsonFile(exportRecord, `pocketbase-${collection.name}-${id}.json`);
@@ -8796,10 +9217,11 @@ function RecordModal({
               {t("actions.close", "Close")}
             </button>
             <span className="modal-actions-spacer" />
-            <button type="button" className="subtle" onClick={copyRecordJson}>
-              <Copy size={16} />
-              {t("actions.copy_json", "Copy JSON")}
-            </button>
+            <CopyButton
+              value={exportJson}
+              label={t("actions.copy_json", "Copy JSON")}
+              onError={(error) => onNotify(errorMessage(error), "error")}
+            />
             <button type="button" className="primary" onClick={downloadRecordJson}>
               <Download size={16} />
               {t("actions.download_json", "Download as JSON")}
@@ -9004,10 +9426,12 @@ function RecordModal({
               <div className="record-json-heading">
                 <strong>JSON</strong>
                 <div>
-                  <button type="button" className="subtle compact" onClick={copyRecordJson}>
-                    <Copy size={14} />
-                    {t("actions.copy_json", "Copy JSON")}
-                  </button>
+                  <CopyButton
+                    value={json}
+                    variant="compact"
+                    label={t("actions.copy_json", "Copy JSON")}
+                    onError={(error) => onNotify(errorMessage(error), "error")}
+                  />
                   <button type="button" className="subtle compact" onClick={downloadRecordJson}>
                     <Download size={14} />
                     {t("actions.download_json", "Download as JSON")}
@@ -9437,8 +9861,11 @@ function buildQuery(params: Record<string, string | number | undefined>) {
 
 function recordColumns(collection: CollectionSchema | null) {
   if (!collection) return [];
+  // The official UI hides the "verified" column for the _superusers collection.
+  const isSuperusers = collection.name === "_superusers";
   const fieldNames = (collection.fields ?? [])
-    .filter((field) => field.type !== "password" && !field.hidden)
+    .filter((field) => field.type !== "password")
+    .filter((field) => !(isSuperusers && field.name === "verified"))
     .map((field) => field.name);
   // id/created/updated are ordinary schema fields since PB v0.23, so they may already
   // be present — dedupe or the header ends up wider than the rows and shifts out of line.
@@ -9461,6 +9888,21 @@ function columnPreferenceKey(collection: CollectionSchema, column: string) {
 function hiddenColumnPreferencesFor(collection: CollectionSchema, preferences: Record<string, string[]>) {
   const keys = [collectionPreferenceStoreKey(collection), collection.name];
   return Array.from(new Set(keys.flatMap((key) => preferences[key] ?? [])));
+}
+
+/**
+ * Normalizes a stored column preference into a complete visibility snapshot.
+ * Pre-v2 arrays only described manually hidden columns, so schema-hidden fields
+ * need to be carried forward before the user changes an individual checkbox.
+ */
+function hiddenColumnPreferenceSnapshot(collection: CollectionSchema, values: string[]) {
+  const hidden = new Set(normalizeColumnPreferences(collection, values));
+  if (!values.includes(HIDDEN_COLUMNS_SNAPSHOT_MARKER)) {
+    for (const field of collection.fields ?? []) {
+      if (field.hidden) hidden.add(columnPreferenceKey(collection, field.name));
+    }
+  }
+  return [HIDDEN_COLUMNS_SNAPSHOT_MARKER, ...hidden];
 }
 
 function normalizeColumnPreferences(collection: CollectionSchema, values: string[]) {
@@ -9609,6 +10051,16 @@ function mergeLogItems(existing: LogItem[], additions: LogItem[]) {
 
 function safeImageFilename(filename: string) {
   return /\.(?:gif|jpe?g|png|webp)$/i.test(filename);
+}
+
+function fileThumbnailSpec(field?: FieldSchema) {
+  const configured = field?.thumbs ?? field?.options?.thumbs;
+  const candidates = Array.isArray(configured)
+    ? configured
+    : typeof configured === "string"
+      ? [configured]
+      : [];
+  return candidates.map((value) => String(value).trim()).find(Boolean) ?? "";
 }
 
 function normalizeRule(value: string | null) {
@@ -10144,6 +10596,19 @@ function fieldIdentity(field: FieldSchema) {
   return field.id ? `id:${field.id}` : `name:${field.name}`;
 }
 
+/**
+ * Rebuilds only parseable index column lists. Replacing arbitrary text in raw
+ * SQL corrupts partial-index predicates and expression literals when a field is
+ * renamed, so non-simple/unknown SQL is deliberately left untouched.
+ */
+function renameIndexColumns(sql: string, renames: ReadonlyMap<string, string>) {
+  const parsed = parseIndex(sql);
+  if (!parsed.tableName || parsed.columns.length === 0) return sql;
+  const columns = parsed.columns.map((column) => renames.get(column) ?? column);
+  if (columns.every((column, index) => column === parsed.columns[index])) return sql;
+  return buildIndex({ ...parsed, columns });
+}
+
 function stableJsonStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => stableJsonStringify(item)).join(",")}]`;
   if (isPlainObject(value)) {
@@ -10396,7 +10861,8 @@ function uniqueFieldName(fields: FieldSchema[], type: string) {
   const base = type.replace(/[^A-Za-z0-9_]/g, "_") || "field";
   const existing = new Set(fields.map((field) => field.name));
   if (!existing.has(base)) return base;
-  let index = fields.length + 1;
+  // Official convention: append an incrementing suffix starting at 2.
+  let index = 2;
   while (existing.has(`${base}_${index}`)) index++;
   return `${base}_${index}`;
 }

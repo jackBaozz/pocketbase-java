@@ -85,6 +85,7 @@
     "apply_changes": "Änderungen anwenden",
     "clear": "Leeren",
     "clear_search": "Suche leeren",
+    "reset_zoom": "Zoom zurücksetzen",
     "clear_selection": "Auswahl aufheben",
     "select_page": "Seite auswählen",
     "select_record": "Datensatz auswählen",
@@ -299,7 +300,11 @@
     "oauth_provider_id_field": "Feld für Anbieter-ID",
     "oauth_name_field": "Feld für Namen",
     "oauth_username_field": "Feld für Benutzernamen",
-    "oauth_avatar_field": "Feld für Avatar"
+    "oauth_avatar_field": "Feld für Avatar",
+    "auth_manage_rules": "Auth- & Verwaltungsregeln",
+    "field_identity": "{{name}}-Identität",
+    "no_identity_fields": "Keine geeigneten Felder (fügen Sie einem Feld einen eindeutigen Index hinzu)",
+    "oauth_no_providers_warning": "OAuth2 ist aktiviert, aber keine Anbieter konfiguriert. Wählen Sie unten mindestens einen Anbieter aus."
   },
   "api_preview": {
     "title": "API-Vorschau",
@@ -477,6 +482,7 @@
     "unknown": "unbekannt",
     "edit_field": "Feld bearbeiten",
     "remove_field": "Feld entfernen",
+    "duplicate_field": "Feld duplizieren",
     "select_placeholder": "-- Auswählen --",
     "no_options_configured": "Keine Optionen konfiguriert",
     "select_mode": "Auswahlmodus",
@@ -709,7 +715,8 @@
     "enable_auth_id_logging": "Auth-Id-Protokollierung aktivieren",
     "accent_custom": "Benutzerdefinierte Farbe",
     "accent_eyedropper": "Farbe vom Bildschirm wählen",
-    "accent_presets": "Vorlagen"
+    "accent_presets": "Vorlagen",
+    "collection": "Auth-Sammlung"
   },
   "transfer": {
     "export_intro": "Unten findest du die aktuelle Sammlungskonfiguration, die du in eine andere PocketBase-Umgebung importieren kannst.",
@@ -755,7 +762,8 @@
     "export_csv": "CSV exportieren",
     "load_more": "250 weitere laden ({{count}} verbleibend)",
     "showing_rows": "{{shown}} von {{count}} Zeilen angezeigt",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "Neueste"
   },
   "logs": {
     "activity": "Protokollaktivität",
@@ -821,7 +829,9 @@
     "record_payload_object": "Record-Payload muss ein Objekt sein.",
     "invalid_json": "Geben Sie vor dem Speichern gültiges JSON ein.",
     "oauth_popup_closed": "OAuth2-Popup wurde vor Abschluss der Authentifizierung geschlossen.",
-    "oauth_popup_timed_out": "OAuth2-Popup ist abgelaufen."
+    "oauth_popup_timed_out": "OAuth2-Popup ist abgelaufen.",
+    "session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+    "test_email_timeout": "Test-E-Mail nach 15s abgebrochen. Überprüfen Sie Ihre SMTP-Einstellungen."
   },
   "confirm": {
     "delete_collection_title": "Sammlung löschen",

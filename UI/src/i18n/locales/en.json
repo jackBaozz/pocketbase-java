@@ -58,6 +58,7 @@
     "apply_changes": "Apply changes",
     "clear": "Clear",
     "clear_search": "Clear search",
+    "reset_zoom": "Reset zoom",
     "clear_selection": "Clear selection",
     "select_page": "Select page",
     "select_record": "Select record",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "Enable Auth Id logging",
     "accent_custom": "Custom color",
     "accent_eyedropper": "Pick color from screen",
-    "accent_presets": "Presets"
+    "accent_presets": "Presets",
+    "collection": "Auth collection"
   },
   "auth": {
     "login": "Login",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "Provider ID field",
     "oauth_name_field": "Name field",
     "oauth_username_field": "Username field",
-    "oauth_avatar_field": "Avatar field"
+    "oauth_avatar_field": "Avatar field",
+    "auth_manage_rules": "Auth & manage rules",
+    "field_identity": "{{name}} identity",
+    "no_identity_fields": "No eligible fields (add a unique index to a field)",
+    "oauth_no_providers_warning": "OAuth2 is enabled but no providers are configured. Select at least one provider below."
   },
   "api_preview": {
     "title": "API Preview",
@@ -650,6 +656,7 @@
     "unknown": "unknown",
     "edit_field": "Edit field",
     "remove_field": "Remove field",
+    "duplicate_field": "Duplicate field",
     "select_placeholder": "-- Select --",
     "no_options_configured": "No options configured",
     "select_mode": "Select mode",
@@ -755,7 +762,8 @@
     "export_csv": "Export CSV",
     "load_more": "Load 250 more ({{count}} remaining)",
     "showing_rows": "Showing {{shown}} of {{count}} rows",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "Recent"
   },
   "logs": {
     "activity": "Log activity",
@@ -821,7 +829,9 @@
     "record_payload_object": "Record payload must be an object.",
     "invalid_json": "Enter valid JSON before saving.",
     "oauth_popup_closed": "OAuth2 popup was closed before authentication completed.",
-    "oauth_popup_timed_out": "OAuth2 popup timed out."
+    "oauth_popup_timed_out": "OAuth2 popup timed out.",
+    "session_expired": "Your session has expired. Please log in again.",
+    "test_email_timeout": "Test email timed out after 15s. Check your SMTP settings."
   },
   "confirm": {
     "delete_collection_title": "Delete collection",

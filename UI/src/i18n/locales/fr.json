@@ -58,6 +58,7 @@
     "apply_changes": "Appliquer les modifications",
     "clear": "Effacer",
     "clear_search": "Effacer la recherche",
+    "reset_zoom": "Réinitialiser le zoom",
     "clear_selection": "Effacer la sélection",
     "select_page": "Sélectionner la page",
     "select_record": "Sélectionner",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "Activer la journalisation Auth Id",
     "accent_custom": "Couleur personnalisée",
     "accent_eyedropper": "Prélever une couleur à l'écran",
-    "accent_presets": "Préréglages"
+    "accent_presets": "Préréglages",
+    "collection": "Collection d'auth"
   },
   "auth": {
     "login": "Connexion",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "Champ ID du fournisseur",
     "oauth_name_field": "Champ nom",
     "oauth_username_field": "Champ nom d'utilisateur",
-    "oauth_avatar_field": "Champ avatar"
+    "oauth_avatar_field": "Champ avatar",
+    "auth_manage_rules": "Règles d'auth et de gestion",
+    "field_identity": "Identité {{name}}",
+    "no_identity_fields": "Aucun champ éligible (ajoutez un index unique à un champ)",
+    "oauth_no_providers_warning": "OAuth2 est activé mais aucun fournisseur n'est configuré. Sélectionnez au moins un fournisseur ci-dessous."
   },
   "api_preview": {
     "title": "Aperçu de l’API",
@@ -650,6 +656,7 @@
     "unknown": "inconnu",
     "edit_field": "Modifier le champ",
     "remove_field": "Supprimer le champ",
+    "duplicate_field": "Dupliquer le champ",
     "select_placeholder": "-- Sélectionner --",
     "no_options_configured": "Aucune option configurée",
     "select_mode": "Mode de sélection",
@@ -755,7 +762,8 @@
     "export_csv": "Exporter le CSV",
     "load_more": "Charger 250 de plus ({{count}} restants)",
     "showing_rows": "{{shown}} lignes affichées sur {{count}}",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "Récents"
   },
   "logs": {
     "activity": "Activité des journaux",
@@ -821,7 +829,9 @@
     "record_payload_object": "Le payload de l’enregistrement doit être un objet.",
     "invalid_json": "Saisissez du JSON valide avant d’enregistrer.",
     "oauth_popup_closed": "La fenêtre OAuth2 a été fermée avant la fin de l’authentification.",
-    "oauth_popup_timed_out": "La fenêtre OAuth2 a expiré."
+    "oauth_popup_timed_out": "La fenêtre OAuth2 a expiré.",
+    "session_expired": "Votre session a expiré. Veuillez vous reconnecter.",
+    "test_email_timeout": "L'e-mail de test a expiré après 15s. Vérifiez vos paramètres SMTP."
   },
   "confirm": {
     "delete_collection_title": "Supprimer la collection",

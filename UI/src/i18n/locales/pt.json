@@ -58,6 +58,7 @@
     "apply_changes": "Aplicar alterações",
     "clear": "Limpar",
     "clear_search": "Limpar busca",
+    "reset_zoom": "Redefinir zoom",
     "clear_selection": "Limpar seleção",
     "select_page": "Selecionar página",
     "select_record": "Selecionar registro",
@@ -305,7 +306,8 @@
     "enable_auth_id_logging": "Ativar registro de Auth Id",
     "accent_custom": "Cor personalizada",
     "accent_eyedropper": "Escolher cor da tela",
-    "accent_presets": "Predefinições"
+    "accent_presets": "Predefinições",
+    "collection": "Coleção de auth"
   },
   "auth": {
     "login": "Entrar",
@@ -425,7 +427,11 @@
     "oauth_provider_id_field": "Campo de ID do provedor",
     "oauth_name_field": "Campo de nome",
     "oauth_username_field": "Campo de nome de usuário",
-    "oauth_avatar_field": "Campo de avatar"
+    "oauth_avatar_field": "Campo de avatar",
+    "auth_manage_rules": "Regras de auth e gerenciamento",
+    "field_identity": "Identidade {{name}}",
+    "no_identity_fields": "Nenhum campo elegível (adicione um índice único a um campo)",
+    "oauth_no_providers_warning": "OAuth2 está ativado, mas nenhum provedor configurado. Selecione pelo menos um provedor abaixo."
   },
   "api_preview": {
     "title": "Prévia da API",
@@ -650,6 +656,7 @@
     "unknown": "desconhecido",
     "edit_field": "Editar campo",
     "remove_field": "Remover campo",
+    "duplicate_field": "Duplicar campo",
     "select_placeholder": "-- Selecionar --",
     "no_options_configured": "Nenhuma opção configurada",
     "select_mode": "Modo de seleção",
@@ -755,7 +762,8 @@
     "export_csv": "Exportar CSV",
     "load_more": "Carregar mais 250 ({{count}} restantes)",
     "showing_rows": "Mostrando {{shown}} de {{count}} linhas",
-    "null": "NULL"
+    "null": "NULL",
+    "history": "Recentes"
   },
   "logs": {
     "activity": "Atividade de registros",
@@ -821,7 +829,9 @@
     "record_payload_object": "O payload do registro deve ser um objeto.",
     "invalid_json": "Insira JSON válido antes de salvar.",
     "oauth_popup_closed": "A janela OAuth2 foi fechada antes da autenticação terminar.",
-    "oauth_popup_timed_out": "A janela OAuth2 expirou."
+    "oauth_popup_timed_out": "A janela OAuth2 expirou.",
+    "session_expired": "Sua sessão expirou. Faça login novamente.",
+    "test_email_timeout": "O e-mail de teste expirou após 15s. Verifique as configurações de SMTP."
   },
   "confirm": {
     "delete_collection_title": "Excluir coleção",

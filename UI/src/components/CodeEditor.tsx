@@ -707,6 +707,14 @@ export function CodeEditor({
       return;
     }
 
+    // Ctrl/Cmd+A selects the whole editor content instead of the page.
+    if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === "a") {
+      event.preventDefault();
+      const target = event.currentTarget;
+      target.setSelectionRange(0, target.value.length);
+      return;
+    }
+
     if (key === "Tab" && !singleLine) {
       event.preventDefault();
       indent(event.shiftKey);

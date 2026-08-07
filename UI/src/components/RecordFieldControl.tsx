@@ -209,6 +209,9 @@ export function RecordFieldControl({
   }
 
   if (field.type === "number" || field.type === "autonumber") {
+    const onlyInt = Boolean(field.options?.onlyInt);
+    const min = typeof field.options?.min === "number" ? (field.options.min as number) : undefined;
+    const max = typeof field.options?.max === "number" ? (field.options.max as number) : undefined;
     return (
       <label className="record-field-card">
         <span>
@@ -219,8 +222,21 @@ export function RecordFieldControl({
           name={field.name}
           autoComplete="off"
           type="number"
+          step={onlyInt ? 1 : "any"}
+          min={min}
+          max={max}
           value={value === undefined || value === null ? "" : String(value)}
-          onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+          onChange={(event) => {
+            if (event.target.value === "") {
+              onChange(null);
+              return;
+            }
+            // Guard against NaN and the "0X" leading-zero edge case (v0.39.8 parity).
+            let parsed = Number(event.target.value);
+            if (Number.isNaN(parsed)) return;
+            if (onlyInt) parsed = Math.trunc(parsed);
+            onChange(parsed);
+          }}
         />
       </label>
     );

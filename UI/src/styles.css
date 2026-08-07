@@ -2307,6 +2307,18 @@ td code {
   white-space: nowrap;
 }
 
+/* Schema-hidden fields shown when the user opts in via column preferences are
+   blurred to signal their sensitive/hidden nature (official: hidden-field-blur). */
+td.hidden-field-col {
+  filter: blur(3px);
+  cursor: help;
+  transition: filter 0.15s ease;
+}
+
+td.hidden-field-col:hover {
+  filter: blur(0);
+}
+
 .actions-col {
   width: 104px;
 }
@@ -2428,6 +2440,59 @@ td.row-actions .icon-button:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Image file cells render configured thumbnails (or a safe fallback) through
+   lazy, authenticated fetches so protected files remain previewable. */
+.file-thumb {
+  display: inline-flex;
+  padding: 0;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--surfaceAlt1Color);
+}
+
+.file-thumb-img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+}
+
+.file-thumb-content,
+.file-thumb-loading {
+  display: block;
+}
+
+.file-thumb-loading {
+  width: 56px;
+  height: 56px;
+  background: var(--surfaceAlt2Color);
+}
+
+.file-thumb-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 56px;
+  min-height: 56px;
+  max-width: 180px;
+  padding: 0 8px;
+  color: var(--surfaceTxtColor);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.file-thumb-fallback > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-thumb:hover {
+  border-color: var(--accentColor);
 }
 
 .bool,
@@ -3375,6 +3440,64 @@ td.row-actions .icon-button:last-child {
   min-height: 220px;
 }
 
+.sql-history {
+  border-top: 1px solid var(--surfaceAlt2Color);
+  padding: 10px 15px;
+}
+
+.sql-history-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--surfaceTxtHintColor);
+}
+
+.sql-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sql-history-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+  padding: 2px 4px 2px 8px;
+}
+
+.sql-history-query {
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--surfaceTxtColor);
+  font-family: var(--monoFont, monospace);
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-history-query:hover {
+  color: var(--accentColor);
+}
+
+.sql-history-remove {
+  padding: 2px;
+  opacity: 0.5;
+}
+
+.sql-history-remove:hover {
+  opacity: 1;
+}
+
 .sql-table {
   min-width: 520px;
 }
@@ -4180,6 +4303,44 @@ td.row-actions .icon-button:last-child {
   gap: 14px;
 }
 
+.auth-rules-collapse {
+  border: 1px solid var(--surfaceAlt2Color);
+  border-radius: var(--borderRadius);
+  background: var(--surfaceAlt1Color);
+}
+
+.auth-rules-collapse > summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--surfaceTxtHintColor);
+  list-style: none;
+}
+
+.auth-rules-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.auth-rules-collapse > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s ease;
+}
+
+.auth-rules-collapse[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.auth-rules-collapse[open] > summary {
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.auth-rules-collapse .rules-grid {
+  padding: 12px;
+}
+
 .rules-helper {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -4461,6 +4622,16 @@ td.row-actions .icon-button:last-child {
   height: 7px;
   border-radius: 999px;
   background: var(--warningColor);
+}
+
+/* Error indicator on collection editor tabs (e.g. invalid fields JSON). */
+.tab-error-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--dangerColor);
 }
 
 .draft-alert {
@@ -5028,18 +5199,47 @@ td.row-actions .icon-button:last-child {
   font-weight: 700;
 }
 
-.toast {
+.toast-stack {
   position: fixed;
   right: 20px;
   bottom: 20px;
   z-index: 30;
+  display: grid;
+  gap: 8px;
   max-width: min(440px, calc(100vw - 40px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   border-radius: var(--borderRadius);
   box-shadow: var(--shadow);
   padding: 12px 14px;
   color: var(--surfaceTxtColor);
   font-size: 13px;
   font-weight: 800;
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast > span {
+  flex: 1 1 auto;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  opacity: 1;
 }
 
 .toast.ok {
@@ -5049,6 +5249,17 @@ td.row-actions .icon-button:last-child {
 .toast.error {
   background: var(--surfaceDangerColor);
   color: var(--dangerColor);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .empty-state {
