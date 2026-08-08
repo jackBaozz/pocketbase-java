@@ -213,6 +213,22 @@ pocketbase-java/
 
 ---
 
+## System Collections
+
+On first startup, the server provisions the five internal collections below. They are part of the authentication subsystem and are maintained by the server; do not delete or change their collection definitions manually.
+
+| Collection | Role | Related operations |
+| --- | --- | --- |
+| **`_superusers`** | Stores the accounts used to sign in to the Admin UI and call administrative APIs. | Admin UI login (`/_/`), superuser bootstrap, and `/api/collections/_superusers/auth-with-password`. |
+| **`_authOrigins`** | Keeps recent login origins (IP address and device fingerprint) for auth records. When `authAlert` is enabled, it helps detect a new location and send an alert email. | Written after successful authentication and read by the authentication-alert flow. |
+| **`_externalAuths`** | Maps an auth record to an external OAuth2 identity identified by its `provider` and `providerId`. | OAuth2 sign-in, account linking, and external-auth unlinking. |
+| **`_mfas`** | Stores the short-lived MFA challenge created after password authentication when MFA is enabled. | Password authentication returns `mfaId`, followed by `request-otp` and `auth-with-otp`. |
+| **`_otps`** | Stores short-lived one-time-password records. Entries are consumed during verification or removed after they expire. | `request-otp` issues a record; `auth-with-otp` verifies and consumes it. |
+
+> Each collection has a stable built-in ID (for example, `_superusers` uses `pbc_3142635823`). Legacy identifiers such as `pbc_superusers` remain recognized for migration compatibility. The server creates and maintains these collections automatically; deleting an auth record also removes its related `_authOrigins`, `_externalAuths`, `_mfas`, and `_otps` records.
+
+---
+
 ## License
 
 This project is licensed under the [MIT](LICENSE) License.

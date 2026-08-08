@@ -213,6 +213,22 @@ pocketbase-java/
 
 ---
 
+## 系统集合
+
+服务首次启动时会创建下面 5 个内部集合。它们属于认证子系统，由服务端统一维护，不应手动删除或修改集合定义。
+
+| 集合 | 用途 | 相关流程 |
+| --- | --- | --- |
+| **`_superusers`** | 保存用于登录 Admin UI 和调用管理 API 的超级管理员账户。 | Admin UI 登录 (`/_/`)、超级管理员初始化，以及 `/api/collections/_superusers/auth-with-password`。 |
+| **`_authOrigins`** | 保存认证记录最近的登录来源（IP 地址和设备指纹）。开启 `authAlert` 后，用于识别新地点登录并发送提醒邮件。 | 成功认证后写入，由认证告警流程读取。 |
+| **`_externalAuths`** | 保存认证记录与 OAuth2 第三方身份的映射，身份由 `provider` 和 `providerId` 唯一标识。 | OAuth2 登录、账号关联和第三方身份解绑。 |
+| **`_mfas`** | 保存启用 MFA 时在密码校验通过后生成的短期 MFA 挑战记录。 | 密码登录返回 `mfaId`，随后执行 `request-otp` 和 `auth-with-otp`。 |
+| **`_otps`** | 保存短期的一次性密码（OTP）记录。记录会在验证消费或过期后清理。 | `request-otp` 创建记录；`auth-with-otp` 验证并消费记录。 |
+
+> 每个集合都有稳定的内置 ID，例如 `_superusers` 使用 `pbc_3142635823`；`pbc_superusers` 等旧标识仍作为迁移兼容别名保留。集合由服务端自动创建和维护；删除认证记录时，也会清理其关联的 `_authOrigins`、`_externalAuths`、`_mfas` 和 `_otps` 记录。
+
+---
+
 ## 授权协议
 
 本项目采用 [MIT](LICENSE) 开源协议。

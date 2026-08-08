@@ -3878,7 +3878,21 @@ function CollectionSidebar(props: CollectionSidebarProps) {
     .filter(Boolean) as CollectionSchema[];
   const pinnedSet = new Set(pinned.map((collection) => collection.name));
   const regular = props.collections.filter((collection) => !pinnedSet.has(collection.name) && !isSystemCollection(collection));
-  const system = props.collections.filter((collection) => !pinnedSet.has(collection.name) && isSystemCollection(collection));
+  const systemOrder = new Map([
+    ["_superusers", 0],
+    ["_authOrigins", 1],
+    ["_externalAuths", 2],
+    ["_mfas", 3],
+    ["_otps", 4]
+  ]);
+  const system = props.collections
+    .filter((collection) => !pinnedSet.has(collection.name) && isSystemCollection(collection))
+    .sort(
+      (left, right) =>
+        (systemOrder.get(left.name) ?? Number.MAX_SAFE_INTEGER) -
+          (systemOrder.get(right.name) ?? Number.MAX_SAFE_INTEGER) ||
+        left.name.localeCompare(right.name)
+    );
   const noMatches = props.search.trim().length > 0 && props.collections.length === 0;
 
   return (

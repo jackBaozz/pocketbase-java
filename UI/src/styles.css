@@ -915,7 +915,7 @@ button.subtle.outline-button:focus-visible,
 .page-header-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
   flex: 1;
 }
@@ -927,7 +927,7 @@ button.subtle.outline-button:focus-visible,
 .page-header-inline-btns {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -4578,7 +4578,7 @@ td.row-actions .icon-button:last-child {
 
 .field-builder-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(130px, auto) 32px;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto) max-content;
   align-items: center;
   gap: 10px;
   min-height: 44px;
@@ -5618,7 +5618,12 @@ td.row-actions .icon-button:last-child {
 
 .field-row-actions {
   display: flex;
-  gap: 4px;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.field-row-actions .icon-button {
+  flex: 0 0 var(--smBtnHeight);
 }
 
 .field-type-specific-options {
