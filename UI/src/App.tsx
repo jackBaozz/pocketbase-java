@@ -846,6 +846,9 @@ function App() {
   const [includeSuperuserRequests, setIncludeSuperuserRequests] = useState(false);
   const [selectedLog, setSelectedLog] = useState<LogItem | null>(null);
   const [logStats, setLogStats] = useState<LogStat[]>([]);
+  const [isLogListLoading, setIsLogListLoading] = useState(false);
+  const [isLogStatsLoading, setIsLogStatsLoading] = useState(false);
+  const [isLogFirstLoadReady, setIsLogFirstLoadReady] = useState(false);
   const [logRefreshVersion, setLogRefreshVersion] = useState(0);
   const [crons, setCrons] = useState<CronJob[]>([]);
   const [oauthProviders, setOauthProviders] = useState<OAuthProviderMetadata[]>([]);
@@ -891,6 +894,7 @@ function App() {
   const logPageCacheRef = useRef<LogPageCache>({ scope: "", pages: new Map(), stats: null });
   const recordsLoadGenerationRef = useRef(0);
   const logsLoadGenerationRef = useRef(0);
+  const logLoadScopeRef = useRef<string | null>(null);
   const recordDetailGenerationRef = useRef(0);
   const relationEditorSequenceRef = useRef(0);
   const s3TestRequestIdRef = useRef(0);
@@ -1702,6 +1706,8 @@ function App() {
     const generation = ++logsLoadGenerationRef.current;
     const route = adminRouteFromHash(hash);
     if (!authenticated || view !== "logs" || route?.view !== "logs") {
+      setIsLogListLoading(false);
+      setIsLogStatsLoading(false);
       return undefined;
     }
 
@@ -1720,50 +1726,80 @@ function App() {
       routeIncludesSuperuserRequests
     );
     const scope = JSON.stringify({ filter, refreshVersion: logRefreshVersion });
+    const scopeChanged = logLoadScopeRef.current !== scope;
+    logLoadScopeRef.current = scope;
+    if (scopeChanged) {
+      // `page` and `logId` hash changes reuse the same data scope, so they must
+      // not hide an already stable chart while opening a log or loading more.
+      setIsLogFirstLoadReady(false);
+      setLogStats([]);
+    }
     const cache = getLogPageCache(scope);
     const requestedPages = Array.from({ length: routePage }, (_, index) => index + 1);
     const missingPages = requestedPages.filter((page) => !cache.pages.has(page));
     const controller = new AbortController();
+    let firstLoadReadyTimer: number | undefined;
+
+    const isCurrentLoad = () =>
+      !controller.signal.aborted
+      && generation === logsLoadGenerationRef.current
+      && logPageCacheRef.current === cache;
+
+    const applyLoadedPages = () => {
+      if (!isCurrentLoad()) return;
+      const pages = requestedPages.map((page) => cache.pages.get(page));
+      if (pages.some((page) => !page)) return;
+      const loadedPages = pages as ListResponse<LogItem>[];
+      setLogPage(loadedPages.at(-1) ?? null);
+      setLogs(mergeLogItems([], loadedPages.flatMap((page) => page.items)));
+      setIsLogListLoading(false);
+      // Let React commit the list first. This is intentionally independent from
+      // the stats request so a slow chart never blocks the log table.
+      firstLoadReadyTimer = window.setTimeout(() => {
+        if (isCurrentLoad()) setIsLogFirstLoadReady(true);
+      }, 0);
+    };
 
     const loadRoutePages = async () => {
       setLoading(true);
-      try {
-        const statsPromise =
-          cache.stats === null
-            ? fetchLogStats(filter, scope, controller.signal)
-            : Promise.resolve(cache.stats);
-        const [, stats] = await Promise.all([
-          Promise.all(missingPages.map((page) => fetchLogsPage(page, filter, scope, controller.signal))),
-          statsPromise
-        ]);
-        if (
-          controller.signal.aborted ||
-          generation !== logsLoadGenerationRef.current ||
-          logPageCacheRef.current !== cache ||
-          stats === null
-        ) {
-          return;
-        }
+      const needsStats = cache.stats === null;
+      setIsLogListLoading(missingPages.length > 0);
+      setIsLogStatsLoading(needsStats);
 
-        const pages = requestedPages.map((page) => cache.pages.get(page));
-        if (pages.some((page) => !page)) return;
-        const loadedPages = pages as ListResponse<LogItem>[];
-        setLogPage(loadedPages.at(-1) ?? null);
-        setLogs(mergeLogItems([], loadedPages.flatMap((page) => page.items)));
-        // Stats are loaded only for a new query scope. Loading another page uses
-        // the same cached series instead of repeating /api/logs/stats.
-        setLogStats(stats);
-      } catch (error) {
-        if (!controller.signal.aborted && generation === logsLoadGenerationRef.current) {
+      const listTask = Promise.all(
+        missingPages.map((page) => fetchLogsPage(page, filter, scope, controller.signal))
+      )
+        .then(applyLoadedPages)
+        .catch((error) => {
+          if (!isCurrentLoad()) return;
+          setIsLogListLoading(false);
           notify(errorMessage(error), "error");
-        }
-      } finally {
-        if (generation === logsLoadGenerationRef.current) setLoading(false);
-      }
+        });
+      const statsTask = (needsStats
+        ? fetchLogStats(filter, scope, controller.signal)
+        : Promise.resolve(cache.stats))
+        .then((stats) => {
+          if (!isCurrentLoad() || stats === null) return;
+          // Stats are loaded only for a new query scope. Loading another page
+          // uses the same cached series instead of repeating /api/logs/stats.
+          setLogStats(stats);
+          setIsLogStatsLoading(false);
+        })
+        .catch((error) => {
+          if (!isCurrentLoad()) return;
+          setIsLogStatsLoading(false);
+          notify(errorMessage(error), "error");
+        });
+
+      await Promise.all([listTask, statsTask]);
+      if (isCurrentLoad()) setLoading(false);
     };
 
     void loadRoutePages();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (firstLoadReadyTimer !== undefined) window.clearTimeout(firstLoadReadyTimer);
+    };
   }, [authenticated, fetchLogStats, fetchLogsPage, getLogPageCache, hash, logRefreshVersion, notify, view]);
 
   useEffect(() => {
@@ -1997,6 +2033,10 @@ function App() {
     logPageCacheRef.current = { scope: "", pages: new Map(), stats: null };
     recordsLoadGenerationRef.current += 1;
     logsLoadGenerationRef.current += 1;
+    logLoadScopeRef.current = null;
+    setIsLogListLoading(false);
+    setIsLogStatsLoading(false);
+    setIsLogFirstLoadReady(false);
     setToken(nextToken);
     if (nextToken) {
       localStorage.setItem(TOKEN_KEY, nextToken);
@@ -3164,6 +3204,9 @@ function App() {
                   timeRange={logTimeRange}
                   includeSuperuserRequests={includeSuperuserRequests}
                   loading={loading}
+                  isLogListLoading={isLogListLoading}
+                  isLogStatsLoading={isLogStatsLoading}
+                  isLogFirstLoadReady={isLogFirstLoadReady}
                   onFilter={setLogFilterDraft}
                   onApply={() => {
                     setLogFilter(logFilterDraft);
@@ -4652,7 +4695,7 @@ function RecordsView(props: RecordsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.3.2</span>
+            <span>PocketBase v0.3.3</span>
           </a>
         </div>
       </footer>
@@ -7140,6 +7183,9 @@ type LogsViewProps = {
   timeRange: LogTimeRange | null;
   includeSuperuserRequests: boolean;
   loading: boolean;
+  isLogListLoading: boolean;
+  isLogStatsLoading: boolean;
+  isLogFirstLoadReady: boolean;
   onFilter: (value: string) => void;
   onApply: () => void;
   onIncludeSuperuserRequests: (value: boolean) => void;
@@ -7162,6 +7208,7 @@ function LogsView(props: LogsViewProps) {
   const [hoveredChartIndex, setHoveredChartIndex] = useState<number | null>(null);
   const chartStats = useMemo(() => fillLogStatGaps(props.stats), [props.stats]);
   const [chartWindowStart, setChartWindowStart] = useState(0);
+  const [chartPlaceholder, setChartPlaceholder] = useState(false);
   const total = props.logPage?.totalItems ?? props.logs.length;
   const hasMoreLogs = Boolean(props.logPage && props.logs.length > 0 && props.logs.length < total);
   const statsTotal = props.stats.reduce((sum, item) => sum + Number(item.total || 0), 0);
@@ -7191,6 +7238,19 @@ function LogsView(props: LogsViewProps) {
     setChartSelection(null);
     chartSelectionStart.current = null;
   }, [chartMaxStart, props.stats]);
+
+  // Official v0.39.10: delay the spinner briefly to avoid flicker on quick
+  // stats reads, while still revealing a clear loading state for slow reads.
+  useEffect(() => {
+    if (!props.isLogStatsLoading) {
+      setChartPlaceholder(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setChartPlaceholder(true), 250);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [props.isLogStatsLoading]);
 
   function toggleSelected(id: string, extendRange = false) {
     setSelectedIds((current) => {
@@ -7243,13 +7303,32 @@ function LogsView(props: LogsViewProps) {
     if (props.timeRange) props.onClearTimeRange();
   }
 
+  // Official v0.39.10 chart visibility states. A chart never exposes stale
+  // points while the current list or stats request is still settling.
+  const statsReady = chartStats.length > 0;
+  const hasLogItems = props.logs.length > 0;
+  const chartAwaitingList = !props.isLogFirstLoadReady;
+  const chartLoading = chartAwaitingList || props.isLogStatsLoading;
+  // Before the current list is ready, and for an unzoomed empty list, the
+  // official UI collapses the chart instead of leaving a blank blue strip.
+  const chartCollapsed = chartAwaitingList || (!hasLogItems && !props.timeRange);
+  const chartInteractive = !chartLoading && statsReady;
+
+  useEffect(() => {
+    if (chartInteractive) return;
+    chartSelectionStart.current = null;
+    setChartSelection(null);
+    setHoveredChartIndex(null);
+  }, [chartInteractive]);
+
   return (
-    <section className="logs-page">
-      <div className="logs-chart-strip">
+    <section className="logs-page" aria-busy={props.isLogListLoading || props.isLogStatsLoading || undefined}>
+      {!chartCollapsed && (
+      <div className={`logs-chart-strip${chartLoading ? " pending" : ""}${hasLogItems ? " nonempty-list" : " empty-list"}`}>
         <button
           type="button"
           className="logs-chart-pan logs-chart-pan-left"
-          disabled={chartWindowStart <= 0}
+          disabled={chartWindowStart <= 0 || !chartInteractive}
           onClick={() => setChartWindowStart((start) => Math.max(0, start - 12))}
           title={t("actions.back", "Back")}
           aria-label={t("actions.back", "Back")}
@@ -7268,10 +7347,12 @@ function LogsView(props: LogsViewProps) {
               </div>
             )}
             <div
-              className="logs-chart-canvas"
+              className={`logs-chart-canvas${!chartInteractive ? " is-pending" : ""}`}
               aria-label={t("logs.activity", "Log activity")}
+              aria-busy={chartLoading || undefined}
+              {...(!chartInteractive ? { inert: true } : {})}
               onPointerDown={(event) => {
-                if (event.button !== 0) return;
+                if (!chartInteractive || event.button !== 0) return;
                 const index = chartIndex(event);
                 if (index < 0) return;
                 chartSelectionStart.current = index;
@@ -7279,6 +7360,7 @@ function LogsView(props: LogsViewProps) {
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
               onPointerMove={(event) => {
+                if (!chartInteractive) return;
                 const index = chartIndex(event);
                 if (index >= 0) setHoveredChartIndex(index);
                 if (index >= 0 && chartSelectionStart.current !== null) {
@@ -7286,6 +7368,7 @@ function LogsView(props: LogsViewProps) {
                 }
               }}
               onPointerUp={(event) => {
+                if (!chartInteractive) return;
                 const start = chartSelectionStart.current;
                 const end = chartIndex(event);
                 chartSelectionStart.current = null;
@@ -7300,11 +7383,25 @@ function LogsView(props: LogsViewProps) {
                 setChartSelection(null);
               }}
               onPointerLeave={() => {
+                if (!chartInteractive) return;
                 if (chartSelectionStart.current === null) setHoveredChartIndex(null);
               }}
-              onDoubleClick={resetChart}
+              onDoubleClick={() => {
+                if (chartInteractive) resetChart();
+              }}
             >
-              {visibleChartStats.length === 0 ? (
+              {chartLoading && !statsReady ? (
+                <span className="logs-chart-pending">
+                  {chartPlaceholder ? (
+                    <>
+                      <span className="logs-chart-loader" aria-hidden="true" />
+                      {t("common.loading", "Loading...")}
+                    </>
+                  ) : (
+                    "\u00A0"
+                  )}
+                </span>
+              ) : visibleChartStats.length === 0 ? (
                 <span className="logs-chart-empty">{t("logs.no_activity", "No log activity")}</span>
               ) : (
                 <>
@@ -7334,12 +7431,13 @@ function LogsView(props: LogsViewProps) {
                         key={item.date}
                         type="button"
                         className={`logs-chart-hit${hoveredChartIndex === index ? " is-hover" : ""}`}
-                        tabIndex={0}
+                        disabled={!chartInteractive}
+                        tabIndex={chartInteractive ? 0 : -1}
                         aria-label={`${formatLogChartHourRange(item.date)}: ${item.total}`}
                         onFocus={() => setHoveredChartIndex(index)}
                         onBlur={() => setHoveredChartIndex(null)}
                         onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
+                          if (chartInteractive && (event.key === "Enter" || event.key === " ")) {
                             event.preventDefault();
                             selectChartRange(index, index);
                           }
@@ -7348,6 +7446,18 @@ function LogsView(props: LogsViewProps) {
                     ))}
                   </div>
                 </>
+              )}
+              {chartLoading && statsReady && (
+                <span className="logs-chart-pending logs-chart-pending-overlay">
+                  {chartPlaceholder ? (
+                    <>
+                      <span className="logs-chart-loader" aria-hidden="true" />
+                      {t("common.loading", "Loading...")}
+                    </>
+                  ) : (
+                    "\u00A0"
+                  )}
+                </span>
               )}
               {hoveredChartIndex !== null && visibleChartStats[hoveredChartIndex] && (
                 <span
@@ -7391,7 +7501,7 @@ function LogsView(props: LogsViewProps) {
         <button
           type="button"
           className="logs-chart-pan"
-          disabled={chartWindowStart >= chartMaxStart}
+          disabled={chartWindowStart >= chartMaxStart || !chartInteractive}
           onClick={() => setChartWindowStart((start) => Math.min(chartMaxStart, start + 12))}
           title={t("actions.next", "Next")}
           aria-label={t("actions.next", "Next")}
@@ -7399,6 +7509,7 @@ function LogsView(props: LogsViewProps) {
           <ChevronRight size={16} />
         </button>
       </div>
+      )}
 
       {/* Official: white panel with top rounded corners sitting over the blue chart. */}
       <div className="logs-content">
@@ -7601,7 +7712,7 @@ function LogsView(props: LogsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.3.2</span>
+            <span>PocketBase v0.3.3</span>
           </a>
         </div>
       </footer>

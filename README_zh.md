@@ -61,7 +61,7 @@ mvn -gs settings.xml -s settings.xml test
 编译打包项目并启动服务：
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.3.2-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.3.3-all.jar serve --http 127.0.0.1:8090 --dir pb_data
 ```
 
 启动后可打开：
