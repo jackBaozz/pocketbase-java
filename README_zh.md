@@ -2,7 +2,7 @@
 
 PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java SDK**，以及一个低依赖的 **嵌入式服务器 (Embedded Server)**：使用 JDK `HttpServer` 提供 PocketBase 风格的 API，内置 Admin UI，采用 JSON 文件持久化，特别面向 GraalVM Native Image 约束而设计。
 
-**官方 PocketBase 基准版本:** v0.39.7
+**官方 PocketBase 基准版本:** v0.39.10
 
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
@@ -23,9 +23,9 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 ## 核心特性
 
 - **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，核心运行时依赖极少，保持极小的体积与资源占用，且便于 Native Image 编译。
-- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.7**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
+- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.10**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
 - **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
-- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能；前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
+- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能。支持 9 种语言国际化、API 文档侧栏、Schema/索引编辑器、关联记录选择器、带语法高亮和自动补全的代码编辑器，以及 `hideControls` 安全锁定模式。前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
 - **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用零依赖的本地 JSONL 格式存储记录，并且可以通过 `-Dstorage=sqlite` (或 `mysql`/`postgresql`) 一键启用基于 jOOQ 与 HikariCP 的关系型数据库存储引擎，支持自动 schema 迁移与 DDL 事务。
 - **文件管理与 S3 支持**: 提供 `FileStorageProvider` SPI，支持本地文件系统及 AWS S3 或兼容的对象存储服务，支持多媒体缩略图自动生成、MIME 类型/大小校验和 Protected File Token 安全控制。
 - **备份与还原**: 支持在本地或 S3 远端创建、上传、下载、删除和恢复 Zip 格式的数据备份，具备事务级安全性与自动过期清理。
@@ -72,7 +72,7 @@ java -jar target/pocketbase-java-0.3.3-all.jar serve --http 127.0.0.1:8090 --dir
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.3.1-all.jar serve
+java -jar target/pocketbase-java-0.3.2-all.jar serve
 ```
 
 ### 2. 作为 Java 库嵌入使用 (Embedded Server inside Java)

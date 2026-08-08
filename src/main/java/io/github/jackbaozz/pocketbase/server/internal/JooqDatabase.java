@@ -61,13 +61,73 @@ public final class JooqDatabase implements AutoCloseable {
   public static JooqDatabase open(Engine engine, Path dataDir) {
     HikariConfig config = new HikariConfig();
     config.setPoolName("PocketBaseJooq-" + engine.name().toLowerCase(Locale.ROOT));
-    config.setMaximumPoolSize(engine == Engine.SQLITE ? 1 : 10);
 
     switch (engine) {
-      case SQLITE ->
+      case SQLITE -> {
+        config.setMaximumPoolSize(4);
         config.setJdbcUrl("jdbc:sqlite:" + dataDir.resolve("pocketbase.db").toAbsolutePath());
-      case MYSQL -> configureExternal(config, "mysql", "com.mysql.cj.jdbc.Driver");
-      case POSTGRES -> configureExternal(config, "postgres", "org.postgresql.Driver");
+        // SQLite tuning (per-connection via HikariCP init SQL):
+        //   • WAL journal mode — allows concurrent readers during a write.
+        //   • busy_timeout 5000ms — wait instead of erroring on lock contention.
+        //   • synchronous NORMAL — WAL + NORMAL is crash-safe and much faster than FULL.
+        //   • foreign_keys ON — enforce referential integrity.
+        //   • temp_store MEMORY — avoid temp tables hitting disk.
+        config.setConnectionInitSql(
+            "PRAGMA journal_mode = WAL;"
+                + "PRAGMA busy_timeout = 5000;"
+                + "PRAGMA synchronous = NORMAL;"
+                + "PRAGMA foreign_keys = ON;"
+                + "PRAGMA temp_store = MEMORY;"
+                + "PRAGMA cache_size = -65536;");
+      }
+      case MYSQL -> {
+        config.setMaximumPoolSize(10);
+        config.setConnectionTimeout(10_000);
+        config.setIdleTimeout(600_000);
+        config.setMaxLifetime(1_800_000);
+        config.setLeakDetectionThreshold(60_000);
+        configureExternal(config, "mysql", "com.mysql.cj.jdbc.Driver");
+        // MySQL connection tuning:
+        //   • utf8mb4 — full Unicode including 4-byte (emoji, CJK extensions).
+        //   • innodb_lock_wait_timeout 5s — fail fast on row lock contention.
+        //   • wait_timeout 600s — idle connections reaped after 10 min.
+        //   • SELECT 1 is cheaper than the default validation query.
+        config.setConnectionTestQuery("SELECT 1");
+        config.addDataSourceProperty("cachePrepStmts", "true");
+        config.addDataSourceProperty("prepStmtCacheSize", "250");
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        config.addDataSourceProperty("useServerPrepStmts", "true");
+        config.addDataSourceProperty("useLocalSessionState", "true");
+        config.addDataSourceProperty("rewriteBatchedStatements", "true");
+        config.addDataSourceProperty("connectionInitSqls",
+            "SET NAMES utf8mb4;"
+                + "SET SESSION innodb_lock_wait_timeout = 5;"
+                + "SET SESSION wait_timeout = 600;"
+                + "SET SESSION time_zone = '+00:00'");
+      }
+      case POSTGRES -> {
+        config.setMaximumPoolSize(10);
+        config.setConnectionTimeout(10_000);
+        config.setIdleTimeout(600_000);
+        config.setMaxLifetime(1_800_000);
+        config.setLeakDetectionThreshold(60_000);
+        configureExternal(config, "postgres", "org.postgresql.Driver");
+        // PostgreSQL connection tuning:
+        //   • lock_timeout 5s — fail fast on lock contention instead of hanging.
+        //   • idle_in_transaction_session_timeout 60s — kill leaked transactions.
+        //   • statement_timeout 30s — prevent runaway queries from holding connections.
+        //   • standard_conforming_strings ON — safe SQL string escaping.
+        config.setConnectionTestQuery("SELECT 1");
+        config.addDataSourceProperty("reWriteBatchedInserts", "true");
+        config.addDataSourceProperty("preparedStatementCacheQueries", "256");
+        config.addDataSourceProperty("defaultRowFetchSize", "500");
+        config.addDataSourceProperty("connectionInitSqls",
+            "SET lock_timeout = '5s';"
+                + "SET idle_in_transaction_session_timeout = '60s';"
+                + "SET statement_timeout = '30s';"
+                + "SET standard_conforming_strings = on;"
+                + "SET TimeZone = 'UTC'");
+      }
     }
 
     JooqDatabase database = new JooqDatabase(engine, new HikariDataSource(config));
