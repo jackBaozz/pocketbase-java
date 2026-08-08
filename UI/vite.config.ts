@@ -9,6 +9,10 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: "assets"
   },
+  test: {
+    include: ["src/**/*.test.ts"],
+    globals: true
+  },
   server: {
     port: 5173,
     strictPort: false,

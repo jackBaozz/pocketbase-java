@@ -8,52 +8,10 @@ import { RelationPicker } from "./RelationPicker";
 import type { RelationCollection, RelationFetcher, RelationRecord } from "./RelationPicker";
 import { GeoPointControl } from "./GeoPointControl";
 import { Switch } from "./Switch";
+import type { FieldSchema } from "../types/api";
+import { fieldMultiplicity } from "../domain/fields";
+import { toDatetimeLocalValue, fromDatetimeLocalValue } from "../utils/date";
 import "./RecordFieldControl.css";
-// Types derived from App.tsx
-type FieldSchema = {
-  id?: string;
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  hidden?: boolean;
-  system?: boolean;
-  presentable?: boolean;
-  collectionId?: string;
-  collectionIds?: string[];
-  minSelect?: number;
-  maxSelect?: number;
-  maxFiles?: number;
-  maxSize?: number;
-  mimeTypes?: string[];
-  thumbs?: string[];
-  protected?: boolean;
-  options?: Record<string, unknown>;
-  values?: string[]; // For select fields
-};
-
-function maxFiles(field: FieldSchema) {
-  const direct = field.maxFiles ?? field.maxSelect;
-  const option = Number(field.options?.maxFiles ?? field.options?.maxSelect ?? 1);
-  return Math.max(1, Number(direct ?? option ?? 1));
-}
-
-function toDatetimeLocalValue(value: unknown) {
-  if (typeof value !== "string" || value.trim() === "") return "";
-  const date = new Date(value.replaceAll(" ", "T"));
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
-}
-
-function fromDatetimeLocalValue(value: string) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString().replace("T", " ");
-}
 
 function fieldInputValue(value: unknown) {
   if (value === undefined || value === null) return "";
@@ -301,11 +259,11 @@ export function RecordFieldControl({
   }
 
   if (field.type === "select") {
-    const isMultiple = maxFiles(field) > 1;
+    const isMultiple = fieldMultiplicity(field) > 1;
     const options = selectFieldOptions(field);
 
     if (isMultiple) {
-       const maxSelected = maxFiles(field);
+       const maxSelected = fieldMultiplicity(field);
        const selectedValues = Array.isArray(value) ? value : (value ? [String(value)] : []);
        return (
           <label className="record-field-card wide">
@@ -375,7 +333,7 @@ export function RecordFieldControl({
   }
 
   const inputType = field.type === "email" ? "email" : field.type === "url" ? "url" : field.type === "password" ? "password" : "text";
-  const relationMulti = field.type === "relation" && maxFiles(field) > 1;
+  const relationMulti = field.type === "relation" && fieldMultiplicity(field) > 1;
   return (
     <label className="record-field-card">
       <span>

@@ -2,50 +2,7 @@ import { useState } from "react";
 import { Edit3, Check, X, Trash2, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Switch } from "./Switch";
-
-// Types derived from App.tsx
-type FieldSchema = {
-  id?: string;
-  name: string;
-  type: string;
-  required?: boolean;
-  /** @deprecated removed in PocketBase v0.23 - uniqueness is expressed through indexes. */
-  unique?: boolean;
-  hidden?: boolean;
-  system?: boolean;
-  presentable?: boolean;
-  collectionId?: string;
-  collectionIds?: string[];
-  minSelect?: number;
-  maxSelect?: number;
-  maxFiles?: number;
-  maxSize?: number;
-  mimeTypes?: string[];
-  thumbs?: string[];
-  protected?: boolean;
-  options?: Record<string, unknown>;
-  // Per-type schema options (flattened field schema, PocketBase v0.23+).
-  min?: number | string;
-  max?: number | string;
-  pattern?: string;
-  autogeneratePattern?: string;
-  onlyInt?: boolean;
-  onlyDomains?: string[];
-  exceptDomains?: string[];
-  onCreate?: boolean;
-  onUpdate?: boolean;
-  values?: string[];
-  cascadeDelete?: boolean;
-  convertURLs?: boolean;
-  cost?: number;
-};
-
-type CollectionOption = {
-  id: string;
-  name: string;
-  type: string;
-};
-
+import type { FieldSchema, CollectionOption } from "../types/api";
 type FieldEditorProps = {
   field: FieldSchema;
   index: number;

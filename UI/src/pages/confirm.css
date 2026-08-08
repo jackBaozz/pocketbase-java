@@ -1,0 +1,79 @@
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--modalOverlayColor);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  padding: 20px;
+}
+
+.confirm-dialog {
+  width: min(460px, 100%);
+  background: var(--surfaceColor);
+  color: var(--surfaceTxtColor);
+  border-radius: var(--lgBorderRadius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--surfaceAlt2Color);
+}
+
+.confirm-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+}
+
+.confirm-danger-icon {
+  color: var(--dangerColor);
+  flex-shrink: 0;
+}
+
+.confirm-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.confirm-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--surfaceTxtHintColor);
+  /* Change summaries are newline-separated bullet lists. */
+  white-space: pre-line;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.confirm-require {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--surfaceTxtHintColor);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.confirm-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

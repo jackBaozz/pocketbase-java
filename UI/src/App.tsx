@@ -59,6 +59,14 @@ import type { TFunction } from "i18next";
 import { AuthActionPages } from "./AuthActionPages";
 import { DropdownSelect } from "./components/DropdownSelect";
 import { FieldEditor } from "./components/FieldEditor";
+import { useToasts } from "./hooks/useToasts";
+import { useTheme } from "./hooks/useTheme";
+import { useRecordSelection } from "./hooks/useRecordSelection";
+import { useColumnPreferences } from "./hooks/useColumnPreferences";
+import { useCollections } from "./hooks/useCollections";
+import type { FieldSchema as SharedFieldSchema } from "./types/api";
+import { fieldMultiplicity } from "./domain/fields";
+import { formatDate as sharedFormatDate, formatValue as sharedFormatValue } from "./utils/date";
 
 import { useTranslation } from "react-i18next";
 import { LanguageSelector } from "./components/LanguageSelector";
@@ -127,26 +135,9 @@ type MfaChallenge = {
 
 type PendingConfirm = ConfirmRequest & { resolve: (confirmed: boolean) => void };
 
-type FieldSchema = {
-  id?: string;
-  name: string;
-  type: string;
-  required?: boolean;
-  unique?: boolean;
-  hidden?: boolean;
-  system?: boolean;
-  presentable?: boolean;
-  collectionId?: string;
-  collectionIds?: string[];
-  minSelect?: number;
-  maxSelect?: number;
-  maxFiles?: number;
-  maxSize?: number;
-  mimeTypes?: string[];
-  thumbs?: string[];
-  protected?: boolean;
-  options?: Record<string, unknown>;
-};
+// Re-export the shared FieldSchema type so all 11K lines of App.tsx keep working
+// without changing every import. This is the single source of truth.
+type FieldSchema = SharedFieldSchema;
 
 type PasswordAuthConfig = {
   enabled?: boolean;
@@ -741,28 +732,24 @@ function App() {
   const [collectionsOverviewOpen, setCollectionsOverviewOpen] = useState(false);
   const [mfaChallenge, setMfaChallenge] = useState<MfaChallenge | null>(null);
   const [otpCode, setOtpCode] = useState("");
-  const [collections, setCollections] = useState<CollectionSchema[]>([]);
-  const [selectedName, setSelectedName] = useState<string>("");
+  const {
+    collections, setCollections,
+    selectedName, setSelectedName,
+    selected: selectedCollection,
+    collectionSearch, setCollectionSearch,
+    visibleCollections,
+    pinnedCollectionNames,
+    togglePinned: togglePinnedCollection,
+  } = useCollections();
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [recordPage, setRecordPage] = useState<ListResponse<RecordItem> | null>(null);
   const [recordRoutePage, setRecordRoutePage] = useState(1);
   const [recordRouteId, setRecordRouteId] = useState("");
   const [query, setQuery] = useState<QueryState>({ filter: "", sort: "-created", perPage: 50 });
   const [view, setView] = useState<ViewName>("records");
-  const [collectionSearch, setCollectionSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [toasts, setToasts] = useState<ToastState[]>([]);
-  const toastIdRef = useRef(0);
-  const toastTimersRef = useRef<Map<number, number>>(new Map());
+  const { toasts, notify, dismissToast, pauseToast, resumeToast } = useToasts();
 
-  const dismissToast = useCallback((id: number) => {
-    setToasts((current) => current.filter((item) => item.id !== id));
-    const timer = toastTimersRef.current.get(id);
-    if (timer) {
-      window.clearTimeout(timer);
-      toastTimersRef.current.delete(id);
-    }
-  }, []);
   const [authEmail, setAuthEmail] = useState(() => new URLSearchParams(window.location.search).get("demoEmail") ?? "");
   // Passwords in URLs leak through browser history, referers and access logs. Keep
   // the local demo convenience out of production bundles entirely.
@@ -855,16 +842,15 @@ function App() {
   const [authMethods, setAuthMethods] = useState<AuthMethodsResponse | null>(null);
   const [oauthResult, setOauthResult] = useState<OAuthResultState | null>(null);
   const [oauthTestingProvider, setOauthTestingProvider] = useState<string>("");
-  const [themeMode, setThemeMode] = useState<ThemeMode>(readThemeMode);
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveThemeMode(readThemeMode()));
+  const { themeMode, resolvedTheme, setThemeMode } = useTheme();
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  const [pinnedCollectionNames, setPinnedCollectionNames] = useState<string[]>(() =>
-    readStringArray(PINNED_COLLECTIONS_KEY)
-  );
-  const [hiddenColumnsByCollection, setHiddenColumnsByCollection] = useState<Record<string, string[]>>(() =>
-    readStringArrayRecord(HIDDEN_COLUMNS_KEY)
-  );
-  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const {
+    selectedIds: selectedRecordIds,
+    setSelectedIds: setSelectedRecordIds,
+    toggleSelected: toggleRecordSelection,
+    toggleAll: toggleCurrentPageSelection,
+    clearSelection: clearRecordSelection,
+  } = useRecordSelection();
   const [recordsNeedRefresh, setRecordsNeedRefresh] = useState(false);
   const [sqlQuery, setSqlQuery] = useState("select 1");
   const [sqlResult, setSqlResult] = useState<SqlResult | null>(null);
@@ -886,7 +872,6 @@ function App() {
   const [testS3Target, setTestS3Target] = useState("storage");
   const [s3TestState, setS3TestState] = useState<S3TestState>({ status: "idle", message: "" });
   const backupUploadRef = useRef<HTMLInputElement>(null);
-  const lastSelectedId = useRef<string | null>(null);
   const recordPageCacheRef = useRef<{ scope: string; pages: Map<number, ListResponse<RecordItem>> }>({
     scope: "",
     pages: new Map()
@@ -907,10 +892,14 @@ function App() {
   const authenticated = Boolean(token) && !setupRequired;
   const collectionView = view === "records" || view === "schema";
   const settingsView = isSettingsView(view);
-  const selected = useMemo(
-    () => collections.find((collection) => collection.name === selectedName) ?? null,
-    [collections, selectedName]
+  const selected = selectedCollection;
+
+  // Column preferences — now in a dedicated hook, aligned with App's snapshot marker logic.
+  // Cast to satisfy the stricter CollectionSchema type in types/api.ts.
+  const { hiddenColumns, toggleColumn, resetColumns, setHiddenColumnsByCollection } = useColumnPreferences(
+    selected as unknown as import("./types/api").CollectionSchema | null
   );
+
   const hideControls = settingsHideControls(settings);
   const accentColor = accentPreview ?? settingsAccentColor(settings);
 
@@ -1030,33 +1019,6 @@ function App() {
     }
     setView(route.view);
   }, [authenticated, collections, hash, selectedName]);
-
-  const visibleCollections = useMemo(() => {
-    const search = collectionSearch.trim().toLowerCase();
-    if (!search) return collections;
-    return collections.filter((collection) => {
-      return collection.name.toLowerCase().includes(search) || collection.type.toLowerCase().includes(search);
-    });
-  }, [collectionSearch, collections]);
-
-  const hiddenColumns = useMemo(() => {
-    if (!selected) return [];
-    const preferences = hiddenColumnPreferencesFor(selected, hiddenColumnsByCollection);
-    const hidden = new Set(hiddenColumnPreferenceSnapshot(selected, preferences).slice(1));
-    return recordColumns(selected).filter((column) => hidden.has(columnPreferenceKey(selected, column)));
-  }, [hiddenColumnsByCollection, selected]);
-
-  const notify = useCallback((message: string, kind: ToastState["kind"] = "ok") => {
-    const id = ++toastIdRef.current;
-    setToasts((current) => {
-      // Dedupe by message: a duplicate simply refreshes the existing entry.
-      if (current.some((item) => item.message === message)) return current;
-      // Cap the stack at 4 so a flood stays readable.
-      return [...current.slice(-3), { id, message, kind }];
-    });
-    const timer = window.setTimeout(() => dismissToast(id), 3200);
-    toastTimersRef.current.set(id, timer);
-  }, [dismissToast]);
 
   const api = useCallback(
     async <T,>(path: string, options: ApiOptions = {}): Promise<T> => {
@@ -1353,13 +1315,7 @@ function App() {
       const message = event.data;
       if (!message || message.source === syncSourceRef.current) return;
 
-      if (message.type === "theme") {
-        if (message.theme === "light" || message.theme === "dark" || message.theme === "auto") {
-          localStorage.setItem(THEME_KEY, message.theme);
-          setThemeMode(message.theme);
-        }
-        return;
-      }
+      // Theme sync is handled by useTheme's own BroadcastChannel.
 
       if (message.type === "collections") {
         void refreshCollections().catch((error) => notify(errorMessage(error), "error"));
@@ -1533,13 +1489,7 @@ function App() {
     return () => window.removeEventListener("pbj_unauthorized", handleUnauthorized);
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem(PINNED_COLLECTIONS_KEY, JSON.stringify(pinnedCollectionNames));
-  }, [pinnedCollectionNames]);
 
-  useEffect(() => {
-    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(hiddenColumnsByCollection));
-  }, [hiddenColumnsByCollection]);
 
   // Older versions keyed both the collection and fields by their mutable names,
   // and stored only columns manually hidden by the user. Migrate each still-known
@@ -1579,23 +1529,6 @@ function App() {
   }, [selectedName]);
 
   useEffect(() => {
-    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
-    const applyTheme = () => {
-      const nextResolved = resolveThemeMode(themeMode);
-      setResolvedTheme(nextResolved);
-      document.documentElement.dataset.theme = nextResolved;
-      document.documentElement.dataset.themeMode = themeMode;
-    };
-
-    applyTheme();
-    if (themeMode === "auto" && media) {
-      media.addEventListener("change", applyTheme);
-      return () => media.removeEventListener("change", applyTheme);
-    }
-    return undefined;
-  }, [themeMode]);
-
-  useEffect(() => {
     const root = document.documentElement;
     let themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (!themeColor) {
@@ -1626,10 +1559,9 @@ function App() {
   }, [hideControls]);
 
   useEffect(() => {
-    setSelectedRecordIds([]);
-    lastSelectedId.current = null;
+    clearRecordSelection();
     setRecordsNeedRefresh(false);
-  }, [query.filter, query.perPage, query.sort, selectedName]);
+  }, [query.filter, query.perPage, query.sort, selectedName, clearRecordSelection]);
 
   useEffect(() => {
     const generation = ++recordsLoadGenerationRef.current;
@@ -2490,88 +2422,21 @@ function App() {
     }
   }
 
-  function togglePinnedCollection(collection: CollectionSchema) {
-    setPinnedCollectionNames((current) => {
-      if (current.includes(collection.name)) return current.filter((name) => name !== collection.name);
-      return [collection.name, ...current];
-    });
-  }
+  // togglePinnedCollection is now provided by useCollections.
 
-  function toggleRecordSelection(id: string, extendRange = false) {
-    // Shift+Click applies the new state across the whole span since the last click (PB v0.39.8).
-    if (extendRange && lastSelectedId.current && lastSelectedId.current !== id) {
-      const ids = records.map((record) => record.id);
-      const from = ids.indexOf(lastSelectedId.current);
-      const to = ids.indexOf(id);
-      if (from !== -1 && to !== -1) {
-        const span = ids.slice(Math.min(from, to), Math.max(from, to) + 1);
-        setSelectedRecordIds((current) => {
-          const selecting = !current.includes(id);
-          const next = new Set(current);
-          for (const item of span) {
-            if (selecting) next.add(item);
-            else next.delete(item);
-          }
-          return [...next];
-        });
-        lastSelectedId.current = id;
-        return;
-      }
-    }
-    lastSelectedId.current = id;
-    setSelectedRecordIds((current) => {
-      if (current.includes(id)) return current.filter((item) => item !== id);
-      return [...current, id];
-    });
-  }
+  // toggleRecordSelection, clearRecordSelection, and toggleCurrentPageSelection
+  // are now provided by useRecordSelection. Wrap them to bind `records` so
+  // call sites keep the same signature as before.
+  const toggleRecordSelectionFn = useCallback(
+    (id: string, extendRange = false) => toggleRecordSelection(id, records, extendRange),
+    [toggleRecordSelection, records]
+  );
+  const toggleCurrentPageSelectionFn = useCallback(
+    (checked: boolean, anchorId?: string) => toggleCurrentPageSelection(records, checked, anchorId),
+    [toggleCurrentPageSelection, records]
+  );
 
-  function clearRecordSelection() {
-    setSelectedRecordIds([]);
-    lastSelectedId.current = null;
-  }
-
-  function toggleCurrentPageSelection(checked: boolean, anchorId?: string) {
-    if (!checked) {
-      clearRecordSelection();
-      return;
-    }
-    const ids = records.map((record) => record.id);
-    setSelectedRecordIds(ids);
-    // Ctrl/Cmd+A has an active row, while the header checkbox deliberately
-    // leaves no range anchor behind for a subsequent Shift action.
-    lastSelectedId.current = anchorId && ids.includes(anchorId) ? anchorId : null;
-  }
-
-  function toggleColumn(column: string) {
-    if (!selected) return;
-    setHiddenColumnsByCollection((current) => {
-      const storeKey = collectionPreferenceStoreKey(selected);
-      const key = columnPreferenceKey(selected, column);
-      const source = hiddenColumnPreferencesFor(selected, current);
-      const existing = new Set(hiddenColumnPreferenceSnapshot(selected, source).slice(1));
-      if (existing.has(key)) {
-        existing.delete(key);
-      } else {
-        existing.add(key);
-      }
-      const next = { ...current };
-      // Keep the marker even when every column is visible; removing it would
-      // reapply schema defaults and make a hidden field impossible to reveal.
-      next[storeKey] = [HIDDEN_COLUMNS_SNAPSHOT_MARKER, ...existing];
-      if (storeKey !== selected.name) delete next[selected.name];
-      return next;
-    });
-  }
-
-  function resetColumns() {
-    if (!selected) return;
-    setHiddenColumnsByCollection((current) => {
-      const next = { ...current };
-      delete next[collectionPreferenceStoreKey(selected)];
-      delete next[selected.name];
-      return next;
-    });
-  }
+  // toggleColumn and resetColumns are now provided by useColumnPreferences.
 
   async function openFile(record: RecordItem, filename: string) {
     if (!selected) return;
@@ -2998,11 +2863,7 @@ function App() {
         </nav>
         <div className="header-tools">
           <LanguageSelector />
-          <ThemeSelector mode={themeMode} resolvedTheme={resolvedTheme} onChange={(nextMode) => {
-            setThemeMode(nextMode);
-            localStorage.setItem(THEME_KEY, nextMode);
-            broadcastSync("theme", nextMode);
-          }} />
+          <ThemeSelector mode={themeMode} resolvedTheme={resolvedTheme} onChange={setThemeMode} />
           {authenticated && (
             <AccountMenu
               email={typeof authRecord?.email === "string" ? authRecord.email : ""}
@@ -3281,8 +3142,8 @@ function App() {
                     onDeleteSelected={deleteSelectedRecords}
                     onToggleColumn={toggleColumn}
                     onResetColumns={resetColumns}
-                    onToggleSelected={toggleRecordSelection}
-                    onToggleAll={toggleCurrentPageSelection}
+                    onToggleSelected={toggleRecordSelectionFn}
+                    onToggleAll={toggleCurrentPageSelectionFn}
                     onClearSelection={clearRecordSelection}
                     onOpenFile={openFile}
                   />
@@ -3417,14 +3278,8 @@ function App() {
             <div
               key={item.id}
               className={`toast ${item.kind}`}
-              onMouseEnter={() => {
-                const timer = toastTimersRef.current.get(item.id);
-                if (timer) window.clearTimeout(timer);
-              }}
-              onMouseLeave={() => {
-                const timer = window.setTimeout(() => dismissToast(item.id), 3200);
-                toastTimersRef.current.set(item.id, timer);
-              }}
+              onMouseEnter={() => pauseToast(item.id)}
+              onMouseLeave={() => resumeToast(item.id)}
             >
               <span>{item.message}</span>
               <button
@@ -10138,11 +9993,9 @@ function recordRequestBody(payload: Record<string, unknown>, files: Record<strin
   return form;
 }
 
-function maxFiles(field: FieldSchema) {
-  const direct = field.maxSelect ?? field.maxFiles;
-  const optionValue = Number(field.options?.maxSelect ?? field.options?.maxFiles ?? 1);
-  return Math.max(1, Number(direct ?? optionValue ?? 1));
-}
+// maxFiles is now provided by domain/fields.ts as fieldMultiplicity.
+// Keep the name as an alias for backward compatibility within App.tsx.
+const maxFiles = fieldMultiplicity;
 
 function mergeRecordItems(existing: RecordItem[], additions: RecordItem[]) {
   const next = [...existing];
@@ -10421,25 +10274,9 @@ function waitForRealtimeClient(realtime: EventSource, timeoutMessage: string, ti
   });
 }
 
-function formatValue(value: unknown) {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
-}
-
-function formatDate(value: string) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
-}
+// formatValue and formatDate are now in utils/date.ts; keep local aliases.
+const formatValue = sharedFormatValue;
+const formatDate = sharedFormatDate;
 
 /**
  * Extracts PocketBase's per-field validation errors ({ data: { field: { message } } })

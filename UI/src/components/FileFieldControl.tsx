@@ -16,15 +16,8 @@ import { useTranslation } from "react-i18next";
 import { useModalInteraction } from "./useModalInteraction";
 import "./FileFieldControl.css";
 
-type FileField = {
-  name: string;
-  maxFiles?: number;
-  maxSelect?: number;
-  mimeTypes?: string[];
-  thumbs?: string[];
-  protected?: boolean;
-  options?: Record<string, unknown>;
-};
+import type { FileField } from "../types/api";
+import { fieldMultiplicity } from "../domain/fields";
 
 type PreviewFile = {
   name: string;
@@ -42,12 +35,6 @@ type FileFieldControlProps = {
   onFilesChange: (files: File[]) => void;
   onRemovedChange: (names: string[]) => void;
 };
-
-function maxFiles(field: FileField) {
-  const direct = field.maxFiles ?? field.maxSelect;
-  const option = Number(field.options?.maxFiles ?? field.options?.maxSelect ?? 1);
-  return Math.max(1, Number(direct ?? option ?? 1));
-}
 
 function fileNames(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -115,7 +102,7 @@ export function FileFieldControl({
     () => allExisting.filter((name) => !removed.includes(name)),
     [allExisting, removed]
   );
-  const limit = maxFiles(field);
+  const limit = fieldMultiplicity(field);
   const available = Math.max(0, limit - visibleExisting.length - files.length);
   const [localUrls, setLocalUrls] = useState<string[]>([]);
 

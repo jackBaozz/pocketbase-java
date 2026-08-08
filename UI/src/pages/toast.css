@@ -1,0 +1,52 @@
+.toast-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  max-width: min(440px, calc(100vw - 40px));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: var(--borderRadius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  color: var(--surfaceTxtColor);
+  font-size: 13px;
+  font-weight: 800;
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast > span {
+  flex: 1 1 auto;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+.toast.ok {
+  background: var(--surfaceSuccessColor);
+}
+
+.toast.error {
+  background: var(--surfaceDangerColor);
+  color: var(--dangerColor);
+}
+
