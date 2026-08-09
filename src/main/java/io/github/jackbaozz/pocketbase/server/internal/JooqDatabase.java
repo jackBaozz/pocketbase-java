@@ -77,16 +77,19 @@ public final class JooqDatabase implements AutoCloseable {
         } catch (java.io.IOException e) {
           throw new ApiException(500, "Failed to prepare SQLite storage.");
         }
-        config.setJdbcUrl("jdbc:sqlite:" + sqliteFile);
+        config.setJdbcUrl("jdbc:sqlite:" + sqliteFile + "?busy_timeout=10000");
         // SQLite tuning (per-connection via HikariCP init SQL):
         // • WAL journal mode — allows concurrent readers during a write.
-        // • busy_timeout 5000ms — wait instead of erroring on lock contention.
+        // • busy_timeout 10000ms — wait instead of erroring on lock contention. Also set via
+        // the JDBC URL above so it applies from the moment sqlite-jdbc opens the connection,
+        // which is earlier than the init SQL and helps on CI runners where lock contention
+        // surfaces during connection setup.
         // • synchronous NORMAL — WAL + NORMAL is crash-safe and much faster than FULL.
         // • foreign_keys ON — enforce referential integrity.
         // • temp_store MEMORY — avoid temp tables hitting disk.
         config.setConnectionInitSql(
             "PRAGMA journal_mode = WAL;"
-                + "PRAGMA busy_timeout = 5000;"
+                + "PRAGMA busy_timeout = 10000;"
                 + "PRAGMA synchronous = NORMAL;"
                 + "PRAGMA foreign_keys = ON;"
                 + "PRAGMA temp_store = MEMORY;"
