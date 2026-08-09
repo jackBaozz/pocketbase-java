@@ -191,6 +191,15 @@ public final class JooqDatabase implements AutoCloseable {
     return engine;
   }
 
+  /**
+   * Whether the current thread is already running inside a {@link #transactional} block. Callers
+   * that retry DDL use this to avoid retrying from within a reentrant (import) transaction, where
+   * a failed statement cannot be rolled back independently of the outer batch.
+   */
+  public boolean isInTransaction() {
+    return transactionConnection.get() != null;
+  }
+
   private void validateExternalConnection() {
     try (Connection connection = dataSource.getConnection()) {
       DSLContext context = dsl(connection);

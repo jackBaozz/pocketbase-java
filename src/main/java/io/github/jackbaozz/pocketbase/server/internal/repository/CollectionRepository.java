@@ -43,9 +43,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.jooq.Condition;
 import org.jooq.DSLContext;
@@ -57,6 +59,13 @@ import org.jooq.impl.SQLDataType;
 public class CollectionRepository extends BaseRepository {
   private static final int MAX_VIEW_QUERY_LENGTH = 5000;
   private static final int MAX_VIEW_ROWS = 10;
+
+  // DDL (CREATE/ALTER/DROP TABLE) on SQLite can transiently fail with a "database is locked"
+  // error under the lock contention that surfaces on CI runners, even with busy_timeout set.
+  // Retry the top-level collection DDL calls a few times so a momentary lock does not surface as
+  // a 400 to the client. See withDdlRetry for the exact guard conditions.
+  private static final int DDL_MAX_ATTEMPTS = 3;
+  private static final long DDL_RETRY_BACKOFF_MS = 50L;
   private final ThreadLocal<Map<String, CollectionSchema>> importRuleCollections =
       new ThreadLocal<>();
 
@@ -129,7 +138,8 @@ public class CollectionRepository extends BaseRepository {
   }
 
   public CollectionSchema createCollection(JsonNode body) {
-    return database.transactional(() -> createCollectionInternal(body));
+    return withDdlRetry(
+        "create collection", () -> database.transactional(() -> createCollectionInternal(body)));
   }
 
   private CollectionSchema createCollectionInternal(JsonNode body) {
@@ -302,7 +312,9 @@ public class CollectionRepository extends BaseRepository {
   }
 
   public CollectionSchema updateCollection(String collection, JsonNode body) {
-    return database.transactional(() -> updateCollectionInternal(collection, body));
+    return withDdlRetry(
+        "update collection",
+        () -> database.transactional(() -> updateCollectionInternal(collection, body)));
   }
 
   private CollectionSchema updateCollectionInternal(String collection, JsonNode body) {
@@ -491,6 +503,15 @@ public class CollectionRepository extends BaseRepository {
   }
 
   public void deleteCollection(String collection) {
+    withDdlRetry(
+        "delete collection",
+        () -> {
+          deleteCollectionOnce(collection);
+          return null;
+        });
+  }
+
+  private void deleteCollectionOnce(String collection) {
     Connection conn = null;
     try {
       conn = database.connection();
@@ -562,6 +583,57 @@ public class CollectionRepository extends BaseRepository {
       SecuritySupport.logInternalFailure("truncate collection", e);
       throw new ApiException(400, "Failed to truncate collection.");
     }
+  }
+
+  /**
+   * Runs a top-level collection DDL call, retrying transient SQLite lock failures. Retries only
+   * apply when all of the following hold: the engine is SQLite (MySQL commits DDL implicitly, so a
+   * rollback cannot undo it and retrying would collide with an already-created table), the call is
+   * not already inside a transaction (the import flow re-enters these methods from within an outer
+   * transactional block, where a partial failure cannot be rolled back independently), and the
+   * failure looks like a transient lock. Business errors (ApiException, validation failures) are
+   * never retried.
+   */
+  private <T> T withDdlRetry(String operation, Supplier<T> action) {
+    if (database.engine() != JooqDatabase.Engine.SQLITE || database.isInTransaction()) {
+      return action.get();
+    }
+    RuntimeException last = null;
+    for (int attempt = 1; attempt <= DDL_MAX_ATTEMPTS; attempt++) {
+      try {
+        return action.get();
+      } catch (RuntimeException e) {
+        last = e;
+        if (!isTransientSqliteLock(e) || attempt == DDL_MAX_ATTEMPTS) {
+          throw e;
+        }
+        try {
+          Thread.sleep(DDL_RETRY_BACKOFF_MS * attempt);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          throw e;
+        }
+      }
+    }
+    throw last;
+  }
+
+  private static boolean isTransientSqliteLock(Throwable t) {
+    Throwable current = t;
+    while (current != null) {
+      String message = current.getMessage();
+      if (message != null) {
+        String low = message.toLowerCase(Locale.ROOT);
+        if (low.contains("database is locked")
+            || low.contains("sqlite_busy")
+            || low.contains("sqlite_locked")
+            || low.contains("is locked")) {
+          return true;
+        }
+      }
+      current = current.getCause();
+    }
+    return false;
   }
 
   private void deleteAuthSupportRecords(DSLContext dsl, String collectionId) {
