@@ -64,7 +64,7 @@ public class CollectionRepository extends BaseRepository {
   // error under the lock contention that surfaces on CI runners, even with busy_timeout set.
   // Retry the top-level collection DDL calls a few times so a momentary lock does not surface as
   // a 400 to the client. See withDdlRetry for the exact guard conditions.
-  private static final int DDL_MAX_ATTEMPTS = 3;
+  private static final int DDL_MAX_ATTEMPTS = 5;
   private static final long DDL_RETRY_BACKOFF_MS = 50L;
   private final ThreadLocal<Map<String, CollectionSchema>> importRuleCollections =
       new ThreadLocal<>();
@@ -607,6 +607,18 @@ public class CollectionRepository extends BaseRepository {
         if (!isTransientSqliteLock(e) || attempt == DDL_MAX_ATTEMPTS) {
           throw e;
         }
+        // Diagnostic: confirm on CI whether the retry path actually fires and what the underlying
+        // exception looks like. Only the leading snippet of the message is logged (lock errors are
+        // not sensitive; SQL text is not).
+        String snippet = truncateForLog(e.getMessage());
+        System.err.printf(
+            Locale.ROOT,
+            "[pocketbase-java] ddl retry operation=%s attempt=%d/%d type=%s msg=%s%n",
+            operation,
+            attempt,
+            DDL_MAX_ATTEMPTS,
+            e.getClass().getSimpleName(),
+            snippet);
         try {
           Thread.sleep(DDL_RETRY_BACKOFF_MS * attempt);
         } catch (InterruptedException ie) {
@@ -634,6 +646,14 @@ public class CollectionRepository extends BaseRepository {
       current = current.getCause();
     }
     return false;
+  }
+
+  private static String truncateForLog(String message) {
+    if (message == null) {
+      return "";
+    }
+    String oneLine = message.replaceAll("\\s+", " ").trim();
+    return oneLine.length() > 160 ? oneLine.substring(0, 160) + "..." : oneLine;
   }
 
   private void deleteAuthSupportRecords(DSLContext dsl, String collectionId) {
