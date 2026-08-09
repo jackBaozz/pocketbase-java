@@ -35,7 +35,7 @@ help:
 	@echo "构建："
 	@echo "  make build                      等同 make build dev，并额外生成 bin/$(APP_NAME)"
 	@echo "  make build [dev|test|production] 前端构建 + 后端打包 + 生成 bin/$(APP_NAME)-<mode>"
-	@echo "  make web-build                  仅构建前端（cd UI && npm run build）"
+	@echo "  make web-build                  仅构建前端（cd ui && npm run build）"
 	@echo ""
 	@echo "开发（热重载，无需打包）："
 	@echo "  make serve                      并行：mvn exec 后端 + vite 前端"
@@ -74,11 +74,11 @@ build: web-build
 	fi
 
 web-build:
-	@cd UI && npm run build
+	@cd ui && npm run build
 
 # 并行热开发：后端（mvn exec，改代码后重编译快）+ 前端（vite，/api 代理到后端）
 serve:
-	@cd UI && npm exec concurrently -- \
+	@cd ui && npm exec concurrently -- \
 		--kill-others \
 		--names server,web \
 		--prefix-colors blue,magenta \
@@ -92,7 +92,7 @@ dev-server:
 		-Dexec.args="--port $(PORT)"
 
 dev-ui:
-	@cd UI && npm run dev
+	@cd ui && npm run dev
 
 # 单元测试（test 作为运行模式名被占用，单元测试改用 check）
 check:

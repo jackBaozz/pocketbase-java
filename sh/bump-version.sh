@@ -8,8 +8,8 @@
 #
 # Files updated:
 #   pom.xml                                                       — Maven <revision> property
-#   UI/package.json, UI/package-lock.json                         — npm package metadata
-#   UI/src/App.tsx                                                — footer "PocketBase v…"
+#   ui/package.json, ui/package-lock.json                         — npm package metadata
+#   ui/src/App.tsx                                                — footer "PocketBase v…"
 #   src/main/java/.../client/PocketBaseClient.java                — SDK User-Agent
 #   README.md, README_zh.md                                       — runnable JAR examples
 #
@@ -73,9 +73,9 @@ read_maven_revision() {
 
 for version_file in \
   pom.xml \
-  UI/package.json \
-  UI/package-lock.json \
-  UI/src/App.tsx \
+  ui/package.json \
+  ui/package-lock.json \
+  ui/src/App.tsx \
   src/main/java/io/github/jackbaozz/pocketbase/client/PocketBaseClient.java \
   README.md \
   README_zh.md; do
@@ -121,41 +121,41 @@ echo "  ✓  pom.xml — Maven <revision>"
 package_matches="$(perl -0ne '
   my $matches = () = /\A\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"private"\s*:\s*(?:true|false)\s*,\s*"version"\s*:\s*"[^"]+"/g;
   print $matches;
-' UI/package.json)"
-require_exact_count "UI/package.json" "root package version" "$package_matches" 1
+' ui/package.json)"
+require_exact_count "ui/package.json" "root package version" "$package_matches" 1
 NEW_VERSION="$NEW_VERSION" perl -0pi -e '
   my $new = $ENV{NEW_VERSION};
   s{\A(\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"private"\s*:\s*(?:true|false)\s*,\s*"version"\s*:\s*")[^"]+(")}{$1 . $new . $2}e;
-' UI/package.json
-echo "  ✓  UI/package.json — npm package version"
+' ui/package.json
+echo "  ✓  ui/package.json — npm package version"
 
 lock_root_matches="$(perl -0ne '
   my $matches = () = /\A\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"version"\s*:\s*"[^"]+"/g;
   print $matches;
-' UI/package-lock.json)"
+' ui/package-lock.json)"
 lock_package_matches="$(perl -0ne '
   my $matches = () = /"packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"version"\s*:\s*"[^"]+"/g;
   print $matches;
-' UI/package-lock.json)"
-require_exact_count "UI/package-lock.json" "root lockfile version" "$lock_root_matches" 1
-require_exact_count "UI/package-lock.json" "root package lockfile version" "$lock_package_matches" 1
+' ui/package-lock.json)"
+require_exact_count "ui/package-lock.json" "root lockfile version" "$lock_root_matches" 1
+require_exact_count "ui/package-lock.json" "root package lockfile version" "$lock_package_matches" 1
 NEW_VERSION="$NEW_VERSION" perl -0pi -e '
   my $new = $ENV{NEW_VERSION};
   s{\A(\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"version"\s*:\s*")[^"]+(")}{$1 . $new . $2}e;
   s{("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"pocketbase-java-admin-ui"\s*,\s*"version"\s*:\s*")[^"]+(")}{$1 . $new . $2}e;
-' UI/package-lock.json
-echo "  ✓  UI/package-lock.json — npm lockfile metadata (2 occurrences)"
+' ui/package-lock.json
+echo "  ✓  ui/package-lock.json — npm lockfile metadata (2 occurrences)"
 
 # 3. Admin UI footer version(s).
 footer_matches="$(perl -0ne '
   my $matches = () = /PocketBase v[0-9]+(?:\.[0-9]+){2}(?:[.-][A-Za-z0-9._-]+)?/g;
   print $matches;
-' UI/src/App.tsx)"
-require_at_least_one "UI/src/App.tsx" "footer version" "$footer_matches"
+' ui/src/App.tsx)"
+require_at_least_one "ui/src/App.tsx" "footer version" "$footer_matches"
 NEW_VERSION="$NEW_VERSION" perl -0pi -e '
   s{PocketBase v[0-9]+(?:\.[0-9]+){2}(?:[.-][A-Za-z0-9._-]+)?}{"PocketBase v" . $ENV{NEW_VERSION}}ge;
-' UI/src/App.tsx
-echo "  ✓  UI/src/App.tsx — $footer_matches footer version occurrence(s)"
+' ui/src/App.tsx
+echo "  ✓  ui/src/App.tsx — $footer_matches footer version occurrence(s)"
 
 # 4. Java SDK User-Agent.
 user_agent_matches="$(perl -0ne '
@@ -188,5 +188,5 @@ echo ""
 echo "Done. Version metadata synchronized to $NEW_VERSION."
 echo ""
 echo "Next steps:"
-echo "  cd UI && npm run build   # rebuild Admin UI with new version in footer"
+echo "  cd ui && npm run build   # rebuild Admin UI with new version in footer"
 echo "  mvn clean package         # rebuild JAR with new version"

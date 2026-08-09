@@ -50,11 +50,11 @@ config/application-*.properties
 !config/application-*.properties.example
 
 # ==================== Frontend ====================
-# Repo path is UI/ (case-sensitive on Linux CI).
-UI/node_modules/
-UI/.vite/
-UI/dist/
-UI/*.tsbuildinfo
+# Repo path is ui/ (case-sensitive on Linux CI).
+ui/node_modules/
+ui/.vite/
+ui/dist/
+ui/*.tsbuildinfo
 
 # ==================== Test dependencies ====================
 src/test/resources/js-sdk-smoke/node_modules/

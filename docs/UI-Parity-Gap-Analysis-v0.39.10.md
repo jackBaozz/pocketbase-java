@@ -20,7 +20,7 @@
 
 ### 本地核验边界
 
-- Admin UI：`UI/src/App.tsx`、`UI/src/styles.css`、当前日志 API 调用和状态管理。
+- Admin UI：`ui/src/App.tsx`、`ui/src/styles.css`、当前日志 API 调用和状态管理。
 - HTTP 契约：上游本次 diff 未变更 REST 路由、请求参数、响应结构或官方 JS/Dart SDK；本项目既有 `/api/logs`、`/api/logs/stats` 契约不需要升级。
 - Go 专属实现：只判断其是否映射到本项目的公开行为；不把 `*filesystem.File`、Cobra 或 `modernc.org/sqlite` 的内部实现直接翻译成 Java。
 
@@ -73,11 +73,11 @@
 
 | 已有能力 | 本地证据 | 判定 |
 | --- | --- | --- |
-| 同一筛选条件下并行读取列表和统计 | `UI/src/App.tsx:1728-1755` 通过 `Promise.all` 请求 `/api/logs` 和 `/api/logs/stats` | 主数据链路已对齐 |
-| 旧请求不会覆盖新路由 | `UI/src/App.tsx:1701-1767` 使用 `AbortController`、load generation 与 cache scope | 优于单纯的无取消加载 |
-| 图表能力 | `UI/src/App.tsx:7155-7390` 已有阶梯面积图、窗口平移、范围筛选、双击重置、悬浮提示和键盘选择 | 历史 v0.39.9 能力已覆盖 |
-| 空状态 | `UI/src/App.tsx:7307-7309` 在 `stats` 尚未回来时立即渲染 “No log activity” | **与 v0.39.10 加载语义不一致** |
-| 容器布局 | `UI/src/styles.css:1755-1771` 固定保留 180px 的蓝色图表条 | **缺少 `pending`/空列表折叠状态** |
+| 同一筛选条件下并行读取列表和统计 | `ui/src/App.tsx:1728-1755` 通过 `Promise.all` 请求 `/api/logs` 和 `/api/logs/stats` | 主数据链路已对齐 |
+| 旧请求不会覆盖新路由 | `ui/src/App.tsx:1701-1767` 使用 `AbortController`、load generation 与 cache scope | 优于单纯的无取消加载 |
+| 图表能力 | `ui/src/App.tsx:7155-7390` 已有阶梯面积图、窗口平移、范围筛选、双击重置、悬浮提示和键盘选择 | 历史 v0.39.9 能力已覆盖 |
+| 空状态 | `ui/src/App.tsx:7307-7309` 在 `stats` 尚未回来时立即渲染 “No log activity” | **与 v0.39.10 加载语义不一致** |
+| 容器布局 | `ui/src/styles.css:1755-1771` 固定保留 180px 的蓝色图表条 | **缺少 `pending`/空列表折叠状态** |
 
 当前 `props.loading` 是应用级 loading 信号，并不区分“日志列表正在加载”“统计正在加载”和“首屏是否已准备”。因此慢网络、切换筛选条件或进入没有日志的环境时，管理员会先看到空图提示/固定蓝色区，随后再发生内容替换；这正是官方本次要规避的视觉抖动。
 

@@ -60,7 +60,7 @@ jobs:
           node-version: '24'
       - name: Build UI
         run: |
-          cd UI
+          cd ui
           npm ci
           npm run build
           git diff --exit-code -- ../src/main/resources/pocketbase-admin

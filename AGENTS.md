@@ -24,18 +24,18 @@
 
 - **差异基线文档**：`docs/UI-Parity-Gap-Analysis-v0.39.9.md` 记录了本项目 Admin UI 与官方 v0.39.9 的逐模块交互差异分析及完整修复记录。**所有可落地的差异项已全部修复**，剩余仅为架构性重构和文档明确排除的 Java 实现边界。补充新 UI 功能前可参考该文档了解已覆盖的范围。
 - **已修复的关键语义**：API 规则的空字符串 `""`（所有人可访问）与 `null`（仅超管）是两种不同状态，必须在加载与提交时严格保持区分——不可用 `?? ""` 或 "空则转 null" 之类的写法抹平，那会静默破坏用户的集合权限配置。UI 上以锁定/解锁交互体现这一区分。
-- **字段控件的唯一实现**在 `UI/src/components/RecordFieldControl.tsx`；`App.tsx` 内曾存在一份从未被引用的同名副本，已删除，请勿再在 `App.tsx` 里重复定义组件。
-- **CSS 变量**必须使用 `UI/src/styles.css` 中实际定义的名称（如 `--surfaceColor`、`--surfaceTxtHintColor`、`--surfaceAlt1~4Color`），不要照搬官方 Svelte 版的变量名（`--baseColor`、`--txtHintColor` 等在本项目不存在，会静默失效）。
-- **新增文案**一律使用 `t("key", "English default")` 形式，并同步补齐 `UI/src/i18n/locales/` 下全部 9 个语言文件（9 个文件的 key 集合必须完全一致）。
-- **UI 改动后必须重新构建**（`cd UI && npm run build`，产物直接写入 `src/main/resources/pocketbase-admin/`），否则 Playwright E2E 测试与本地启动的服务加载的仍是旧资源。
-- **可复用组件**均在 `UI/src/components/` 下且自带同名 CSS 文件（通过 `import "./X.css"` 引入，不要往 `styles.css` 里加组件样式）：`CodeEditor`（语法高亮 + 补全，零第三方依赖，用于规则/SQL/JSON）、`ApiPreview`（API 文档侧栏）、`IndexManager`（索引管理）、`RelationPicker`（关联记录选择器）、`ConfirmDialog`（Promise 式确认框，替代 `window.confirm`）。新增确认交互一律走 `ConfirmDialog`，危险操作可用 `requireText` 要求手输名称。
+- **字段控件的唯一实现**在 `ui/src/components/RecordFieldControl.tsx`；`App.tsx` 内曾存在一份从未被引用的同名副本，已删除，请勿再在 `App.tsx` 里重复定义组件。
+- **CSS 变量**必须使用 `ui/src/styles.css` 中实际定义的名称（如 `--surfaceColor`、`--surfaceTxtHintColor`、`--surfaceAlt1~4Color`），不要照搬官方 Svelte 版的变量名（`--baseColor`、`--txtHintColor` 等在本项目不存在，会静默失效）。
+- **新增文案**一律使用 `t("key", "English default")` 形式，并同步补齐 `ui/src/i18n/locales/` 下全部 9 个语言文件（9 个文件的 key 集合必须完全一致）。
+- **UI 改动后必须重新构建**（`cd ui && npm run build`，产物直接写入 `src/main/resources/pocketbase-admin/`），否则 Playwright E2E 测试与本地启动的服务加载的仍是旧资源。
+- **可复用组件**均在 `ui/src/components/` 下且自带同名 CSS 文件（通过 `import "./X.css"` 引入，不要往 `styles.css` 里加组件样式）：`CodeEditor`（语法高亮 + 补全，零第三方依赖，用于规则/SQL/JSON）、`ApiPreview`（API 文档侧栏）、`IndexManager`（索引管理）、`RelationPicker`（关联记录选择器）、`ConfirmDialog`（Promise 式确认框，替代 `window.confirm`）。新增确认交互一律走 `ConfirmDialog`，危险操作可用 `requireText` 要求手输名称。
 - **设置保存不要信任 PATCH 响应**：服务端在存储阶段才做规范化（限流规则去重与优先级排序、`******` 密钥脱敏），响应回显的是提交值，保存后需重新拉取 `/api/settings`。
 - **右侧抽屉（Drawer）进出动画（强制）**：
   - 凡从视口**右侧滑入**的面板（当前：`ApiPreview`、`LogDetailsDrawer`、集合编辑器 `Modal variant="drawer"`，以及后续新增的同类 UI）**必须同时具备出现与消失动画**，禁止只做进入、关闭时瞬间卸载。
   - **出现**：面板 `translateX(100%) → 0`（`drawer-slide-in`），遮罩淡入（`drawer-fade-in`）。
   - **消失**：面板 `0 → translateX(100%)`（`drawer-slide-out`），遮罩淡出（`drawer-fade-out`）；**动画结束后**再调用父级 `onClose` / 卸载。
-  - 关键帧统一写在 `UI/src/styles.css`，名称固定为 `drawer-slide-in` / `drawer-slide-out` / `drawer-fade-in` / `drawer-fade-out`；组件 CSS 复用这些名称，不要再各自发明一套 keyframes（退出完成依赖 `animationName === "drawer-slide-out"`）。
-  - 逻辑统一用 `UI/src/components/useDrawerTransition.ts`：`requestClose` → `exiting` + `is-exiting` class → `onPanelAnimationEnd` / 超时兜底 → `onClose`。父组件须在关闭动画完成前保持挂载（条件渲染的布尔值由子组件退出后再清）。
+  - 关键帧统一写在 `ui/src/styles.css`，名称固定为 `drawer-slide-in` / `drawer-slide-out` / `drawer-fade-in` / `drawer-fade-out`；组件 CSS 复用这些名称，不要再各自发明一套 keyframes（退出完成依赖 `animationName === "drawer-slide-out"`）。
+  - 逻辑统一用 `ui/src/components/useDrawerTransition.ts`：`requestClose` → `exiting` + `is-exiting` class → `onPanelAnimationEnd` / 超时兜底 → `onClose`。父组件须在关闭动画完成前保持挂载（条件渲染的布尔值由子组件退出后再清）。
   - 关闭入口（×、遮罩点击、Esc、页脚关闭按钮）一律走 `requestClose`，退出过程中禁用交互（`useModalInteraction({ active: !exiting })`、按钮 `disabled={exiting}`）。
 
 ## 🛠️ 构建与编译 (Build Commands)

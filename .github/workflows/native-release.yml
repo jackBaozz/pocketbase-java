@@ -78,7 +78,7 @@ jobs:
       - name: Build Admin UI
         shell: bash
         run: |
-          cd UI
+          cd ui
           npm ci
           npm run build
 
