@@ -43,7 +43,7 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 | 类别 | 要求 |
 | --- | --- |
 | JDK | 17+ |
-| Maven | 3.6+ |
+| Maven | 3.9+ |
 | Node.js / npm | 20.19+ / 10+ （仅在需要修改或重新构建 Admin UI 时需要） |
 | GraalVM | GraalVM JDK 17+（CI 在 JDK 25 上构建 native 镜像；仅在构建 native 二进制时需要） |
 

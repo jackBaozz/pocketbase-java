@@ -66,7 +66,7 @@
         <native.maven.plugin.version>0.10.6</native.maven.plugin.version>
         <spotless.version>2.44.5</spotless.version>
         <enforcer.java.version>[17,)</enforcer.java.version>
-        <enforcer.maven.version>[3.6,)</enforcer.maven.version>
+        <enforcer.maven.version>[3.9,)</enforcer.maven.version>
         <main.class>io.github.jackbaozz.pocketbase.server.PocketBaseServer</main.class>
     </properties>
 

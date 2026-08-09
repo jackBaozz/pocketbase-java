@@ -27,8 +27,7 @@ class RegistrationAndAuthValidationTest {
   @Test
   @DisplayName("密码校验仅执行字段配置")
   void passwordValidationUsesOnlyFieldConfiguration() {
-    for (String password :
-        List.of("secret456", "Pass!1234", "this-password-is-longer-than-sixteen")) {
+    for (String password : List.of("secret456", "Pass!1234", "this-password-is-longer-than-sixteen")) {
       assertTrue(
           errorsFor(passwordField, password).isEmpty(),
           "未配置约束时不应拒绝密码: " + password);
@@ -62,8 +61,7 @@ class RegistrationAndAuthValidationTest {
     col.fields = java.util.List.of(
         new FieldSchema("id_1", "id", "text", true, false, false),
         new FieldSchema("email_1", "email", "email", true, true, false),
-        new FieldSchema("username_1", "username", "text", true, false, false)
-    );
+        new FieldSchema("username_1", "username", "text", true, false, false));
     AuthCollectionFields.normalize(col);
 
     assertNotNull(col.indexes);

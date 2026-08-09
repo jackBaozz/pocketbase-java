@@ -43,7 +43,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 | Category | Requirement |
 | --- | --- |
 | JDK | 17+ |
-| Maven | 3.6+ |
+| Maven | 3.9+ |
 | Node.js / npm | 20.19+ / 10+ (only required if modifying/rebuilding the Admin UI) |
 | GraalVM | GraalVM JDK 17+ (CI builds native images on JDK 25; only required if building native binaries) |
 
