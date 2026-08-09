@@ -4564,7 +4564,7 @@ function RecordsView(props: RecordsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.3.3</span>
+            <span>PocketBase v0.3.4</span>
           </a>
         </div>
       </footer>
@@ -7581,7 +7581,7 @@ function LogsView(props: LogsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.3.3</span>
+            <span>PocketBase v0.3.4</span>
           </a>
         </div>
       </footer>

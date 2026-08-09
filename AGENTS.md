@@ -11,7 +11,7 @@
 ## 🚀 最新进展与计划 (2026-07-04)
 
 - **Phase 2, Phase 3 & Phase 4 兼容性里程碑全部顺利完成**：
-  - **存储层重构 & 关系数据库支持**：引入了统一的 `StorageEngine` SPI，在默认支持零依赖本地 JSONL 文件存储（通过 `JsonFileStore` 兼容旧 `.json` 数组）的基础上，成功实现了 SQLite (`SqliteStorageEngine`)、MySQL (`MysqlStorageEngine`) 和 PostgreSQL (`PostgresStorageEngine`) 关系型数据库底层，并使用 jOOQ 实现方言适配与 Schema 自动迁移。
+  - **存储层重构 & 关系数据库支持**：引入了统一的 `StorageEngine` SPI，默认使用 SQLite（`<data-dir>/pocketbase.db`），同时保留零依赖本地 JSONL 文件存储作为显式兼容模式（通过 `JsonFileStore` 兼容旧 `.json` 数组）；此外已实现 MySQL (`MysqlStorageEngine`) 和 PostgreSQL (`PostgresStorageEngine`) 关系型数据库底层，并使用 jOOQ 实现方言适配与 Schema 自动迁移。
   - **对象存储与备份 S3 支持**：实现统一的 `FileStorageProvider` SPI，全面集成 AWS S3 及兼容的 S3 备份存储，并在备份 ZIP 生成阶段采用了磁盘临时流式写入以规避 OutOfMemory 错误。
   - **邮件分发 (SMTP)**：完成了基于 SSL/TLS 加密及模板替换的 SMTP 邮件递送引擎，并提供开发测试下的 outbox 日志预览。
   - **认证流程闭环**：支持 OTP (`_otps` 表持久化)、MFA 二次验证以及完全的 OAuth2 Provider 授权交换流。
@@ -42,4 +42,3 @@
 
 - **普通打包**：`mvn clean package`
 - **Native 编译 (GraalVM)**：运行 `sh/build-native.sh`。该脚本会自动寻找 `mise` 中的 `25-graalvm`，并使用 GraalVM Native Image 进行编译，跳过单元测试（可在命令行传入其他参数覆盖）。
-

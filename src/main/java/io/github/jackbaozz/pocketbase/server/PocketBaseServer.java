@@ -17,7 +17,7 @@ public final class PocketBaseServer {
       return;
     }
 
-    printBanner();
+    printBanner(config.applicationName());
 
     LocalPocketBase server = LocalPocketBase.start(config);
     Runtime.getRuntime().addShutdownHook(new Thread(server::close, "pocketbase-java-shutdown"));
@@ -27,7 +27,7 @@ public final class PocketBaseServer {
     new CountDownLatch(1).await();
   }
 
-  private static void printBanner() {
+  private static void printBanner(String applicationName) {
     System.out.println();
     System.out.println(
         "                   _        _   _                          _                  ");
@@ -42,7 +42,11 @@ public final class PocketBaseServer {
     System.out.println(
         " |_|                                                    |__/                  ");
     System.out.println();
-    System.out.println(" :: PocketBase Java ::");
+    String displayName =
+        applicationName == null || applicationName.isBlank()
+            ? "PocketBase Java"
+            : applicationName.trim();
+    System.out.println(" :: " + displayName + " ::");
     System.out.println();
   }
 }

@@ -26,7 +26,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 - **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.39.10**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
 - **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
 - **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. Features 9-language i18n, an API documentation sidebar, a schema/index editor, a relation picker, a code editor with syntax highlighting and autocompletion, and a `hideControls` safe-lock mode. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
-- **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. Run with zero-dependency default local file storage (using JSON Lines `.jsonl` for records and `.json` for metadata) or opt into relational database storage (SQLite, MySQL, or PostgreSQL) via the JVM `-Dstorage` flag or native-runtime `PB_STORAGE` environment variable, powered by jOOQ and HikariCP.
+- **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. SQLite is the default local engine and stores data in `<server.data-dir>/pocketbase.db`; legacy JSON Lines (`.jsonl` plus `.json` metadata) remains available explicitly with `storage.type=jsonl`. MySQL and PostgreSQL are also supported through `application.properties`, the JVM `-Dstorage` flag, or native-runtime `PB_STORAGE` environment variable, powered by jOOQ and HikariCP.
 - **File Management & S3 Support**: Supports local or AWS S3-compatible file storage providers (`FileStorageProvider` SPI). Handles multipart uploads, size/MIME constraints, Protected File Tokens, and automatic image thumbnail generation.
 - **Backup & Restore**: Supports creating, uploading, downloading, deleting, and restoring zip backups under local storage or remote S3 backup paths, complete with transaction safety and automatic cleanups.
 - **Mail Delivery (SMTP)**: Integrates SMTP client delivery supporting SSL/TLS, custom templates with variable substitutions, and a dry-run/local outbox logger for developer testing.
@@ -61,7 +61,13 @@ mvn -gs settings.xml -s settings.xml test
 Compile the project and start the server:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.3.3-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.3.4-all.jar start --http 127.0.0.1:8090 --dir pb_data
+```
+
+The `start` command is optional when it is the only operation:
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar
 ```
 
 Once started, open:
@@ -72,8 +78,72 @@ You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.3.2-all.jar serve
+java -jar target/pocketbase-java-0.3.4-all.jar start
 ```
+
+### Configuration file
+
+The server supports an optional UTF-8 `application.properties` file. Copy
+`config/application.properties.example` to `config/application.properties`; the file is
+loaded automatically from the `config/` directory (with a root-level file kept as a
+convenience fallback). Use `--config <path>` or `PB_CONFIG_FILE` to select another file.
+
+```properties
+app.name=My PocketBase App
+server.host=127.0.0.1
+server.port=8090
+server.data-dir=pb_data
+storage.type=sqlite
+```
+
+Then start the server normally:
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar start
+```
+
+For SQLite, the database file is created automatically at
+`<server.data-dir>/pocketbase.db`; no separate SQLite service is required.
+For MySQL or PostgreSQL, additionally set `database.url`, `database.user`, and
+`database.password`. Command-line options take precedence over JVM properties,
+which take precedence over environment variables and the properties file.
+Changing the storage engine does not automatically migrate existing JSONL data. Back up the
+JSONL directory and complete an explicit export/import before switching an existing deployment;
+the checked-out local `pb_data` directory has already been migrated to SQLite and retains its
+original JSONL files for rollback.
+
+### Runtime profiles
+
+Without adding Spring Boot, the server supports Spring Boot-style profile file names. The base
+file is loaded first and `application-<profile>.properties` then overrides it:
+
+```text
+config/application.properties
+config/application-dev.properties
+config/application-test.properties
+config/application-production.properties
+```
+
+Copy the tracked templates before editing an environment-specific file:
+
+```bash
+cp config/application-dev.properties.example config/application-dev.properties
+cp config/application-test.properties.example config/application-test.properties
+cp config/application-production.properties.example config/application-production.properties
+```
+
+Select a profile at runtime with one of the following (highest priority first):
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar start --profile dev
+java -Dapp.profile=dev -jar target/pocketbase-java-0.3.4-all.jar start
+PB_PROFILE=dev java -jar target/pocketbase-java-0.3.4-all.jar start
+```
+
+You may also set `app.profile=dev` in the base properties file. Maven profiles are build-time
+only; `mvn -Pdev package` does not select a profile when the resulting JAR or native binary runs.
+Use the runtime options above for both packaging modes. Profile names are limited to letters,
+numbers, `_`, and `-` so they cannot escape the configuration directory.
 
 ### 2. Embed Programmatically in Java
 
@@ -143,7 +213,7 @@ You can compile the project to a single VM-free native executable using GraalVM:
 
 ```bash
 mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
-./target/pocketbase-java serve --http 127.0.0.1:8090 --dir pb_data
+./target/pocketbase-java start --http 127.0.0.1:8090 --dir pb_data
 ```
 
 ---

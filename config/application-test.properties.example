@@ -1,0 +1,5 @@
+# Test/staging profile template. Activate with app.profile=test, --profile test, PB_PROFILE=test.
+app.name=pocketbase-java-test
+server.port=8090
+server.data-dir=pb_data-test
+storage.type=sqlite

@@ -7,7 +7,9 @@ import io.github.jackbaozz.pocketbase.server.internal.JsonFileStore;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
 import io.github.jackbaozz.pocketbase.server.internal.RelationalStorageEngine;
 import io.github.jackbaozz.pocketbase.server.internal.StorageEngine;
+import io.github.jackbaozz.pocketbase.server.internal.ExternalDatabaseSupport;
 import java.io.IOException;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +35,12 @@ public final class LocalPocketBase implements AutoCloseable {
     if (storageType == null || storageType.isBlank()) {
       storageType = System.getenv("PB_STORAGE");
     }
+    if (storageType == null || storageType.isBlank()) {
+      storageType = config.storageType();
+    }
+    if (storageType == null || storageType.isBlank()) {
+      storageType = "sqlite";
+    }
     if ("sqlite".equalsIgnoreCase(storageType)
         || "mysql".equalsIgnoreCase(storageType)
         || "mariadb".equalsIgnoreCase(storageType)
@@ -43,14 +51,21 @@ public final class LocalPocketBase implements AutoCloseable {
               config.dataDir(),
               config.bootstrapSuperuserEmail(),
               config.bootstrapSuperuserPassword(),
-              JooqDatabase.Engine.fromStorageType(storageType));
-    } else {
+              JooqDatabase.Engine.fromStorageType(storageType),
+              new ExternalDatabaseSupport.ConnectionDefaults(
+                  config.databaseUrl(), config.databaseUser(), config.databasePassword()));
+    } else if ("json".equalsIgnoreCase(storageType)
+        || "jsonl".equalsIgnoreCase(storageType)
+        || "file".equalsIgnoreCase(storageType)) {
       store =
           JsonFileStore.open(
               config.dataDir(),
               config.bootstrapSuperuserEmail(),
               config.bootstrapSuperuserPassword());
+    } else {
+      throw new IllegalArgumentException("Unsupported storage engine: " + storageType);
     }
+    applyConfiguredApplicationName(store, config.applicationName());
     RealtimeHub realtimeHub = new RealtimeHub(store.mapper());
     store.realtimeHub(realtimeHub);
     HttpServer server = HttpServer.create(config.bindAddress(), 0);
@@ -59,6 +74,21 @@ public final class LocalPocketBase implements AutoCloseable {
     server.createContext("/", new HttpApi(store, realtimeHub));
     server.start();
     return new LocalPocketBase(config, server, store, executor);
+  }
+
+  private static void applyConfiguredApplicationName(StorageEngine store, String applicationName) {
+    if (applicationName == null || applicationName.isBlank()) {
+      return;
+    }
+    Map<String, Object> settings = store.getSettings(Map.of());
+    Object metaValue = settings.get("meta");
+    if (metaValue instanceof Map<?, ?> meta
+        && applicationName.equals(String.valueOf(meta.get("appName")))) {
+      return;
+    }
+    var body = store.mapper().createObjectNode();
+    body.putObject("meta").put("appName", applicationName.trim());
+    store.updateSettings(body, Map.of());
   }
 
   public int port() {

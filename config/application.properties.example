@@ -1,0 +1,26 @@
+# Copy this file to config/application.properties and adjust the values for your environment.
+# The local application.properties file is ignored because it may contain credentials.
+
+# Application identity. This value is also written to the Admin UI meta.appName setting at startup.
+app.name=pocketbase-java
+
+# Optional runtime profile. When set, config/application-<profile>.properties overrides this file.
+# app.profile=dev
+
+# HTTP listener and runtime data directory.
+server.host=127.0.0.1
+server.port=8090
+server.data-dir=pb_data
+
+# Storage engine: sqlite (default), jsonl (legacy file mode), mysql, or postgresql.
+storage.type=sqlite
+
+# Only required for MySQL/PostgreSQL. SQLite stores its database at
+# <server.data-dir>/pocketbase.db and does not need a JDBC URL.
+# database.url=jdbc:mysql://127.0.0.1:3306/pocketbase
+# database.user=pocketbase
+# database.password=change-me
+
+# Optional bootstrap credentials for the first superuser.
+# superuser.email=admin@example.com
+# superuser.password=change-me

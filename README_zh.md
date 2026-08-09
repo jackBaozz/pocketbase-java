@@ -26,7 +26,7 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 - **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.10**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
 - **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
 - **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能。支持 9 种语言国际化、API 文档侧栏、Schema/索引编辑器、关联记录选择器、带语法高亮和自动补全的代码编辑器，以及 `hideControls` 安全锁定模式。前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
-- **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用零依赖的本地 JSONL 格式存储记录，并且可以通过 `-Dstorage=sqlite` (或 `mysql`/`postgresql`) 一键启用基于 jOOQ 与 HikariCP 的关系型数据库存储引擎，支持自动 schema 迁移与 DDL 事务。
+- **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用 SQLite，将数据保存到 `<server.data-dir>/pocketbase.db`；旧版 JSONL（`.jsonl` 记录文件和 `.json` 元数据）仍可通过 `storage.type=jsonl` 显式启用。MySQL 与 PostgreSQL 也可通过 `application.properties`、`-Dstorage` 或 native 运行时的 `PB_STORAGE` 配置，底层使用 jOOQ 与 HikariCP。
 - **文件管理与 S3 支持**: 提供 `FileStorageProvider` SPI，支持本地文件系统及 AWS S3 或兼容的对象存储服务，支持多媒体缩略图自动生成、MIME 类型/大小校验和 Protected File Token 安全控制。
 - **备份与还原**: 支持在本地或 S3 远端创建、上传、下载、删除和恢复 Zip 格式的数据备份，具备事务级安全性与自动过期清理。
 - **邮件服务 (SMTP)**: 整合了支持 SSL/TLS 安全通道的 SMTP 客户端发送，支持模板渲染与变量替换，并提供开发测试用的本地 outbox 邮件输出日志。
@@ -61,7 +61,13 @@ mvn -gs settings.xml -s settings.xml test
 编译打包项目并启动服务：
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.3.3-all.jar serve --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.3.4-all.jar start --http 127.0.0.1:8090 --dir pb_data
+```
+
+当前只有启动这一种命令，因此 `start` 也可以省略：
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar
 ```
 
 启动后可打开：
@@ -72,8 +78,71 @@ java -jar target/pocketbase-java-0.3.3-all.jar serve --http 127.0.0.1:8090 --dir
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.3.2-all.jar serve
+java -jar target/pocketbase-java-0.3.4-all.jar start
 ```
+
+### 配置文件
+
+服务支持可选的 UTF-8 `application.properties` 配置文件。可以将
+`config/application.properties.example` 复制为 `config/application.properties` 后按需修改；
+服务会优先读取 `config/` 目录下的文件，根目录文件作为兼容性备用方式。
+还可以通过 `--config <路径>` 或 `PB_CONFIG_FILE` 指定其他配置文件。
+
+```properties
+app.name=我的 PocketBase 应用
+server.host=127.0.0.1
+server.port=8090
+server.data-dir=pb_data
+storage.type=sqlite
+```
+
+然后正常启动即可：
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar start
+```
+
+SQLite 数据库会自动创建在 `<server.data-dir>/pocketbase.db`，不需要单独启动
+SQLite 服务。使用 MySQL 或 PostgreSQL 时，还需要配置 `database.url`、
+`database.user` 和 `database.password`。命令行参数优先级最高，其次是 JVM
+系统属性，再其次是环境变量和 properties 文件。
+
+切换存储引擎不会自动把已有 JSONL 数据迁移到 SQLite。已有部署应先备份 JSONL 目录，
+再通过明确的导出/导入流程完成迁移；当前检出的本地 `pb_data` 已完成 SQLite 迁移，
+原始 JSONL 文件仍保留，可用于回滚。
+
+### 运行环境 Profile
+
+不引入 Spring Boot 的前提下，服务支持与 Spring Boot 相同的 profile 文件命名方式。
+先加载基础文件，再由 `application-<profile>.properties` 覆盖：
+
+```text
+config/application.properties
+config/application-dev.properties
+config/application-test.properties
+config/application-production.properties
+```
+
+可先复制项目内的模板，再编辑环境配置文件：
+
+```bash
+cp config/application-dev.properties.example config/application-dev.properties
+cp config/application-test.properties.example config/application-test.properties
+cp config/application-production.properties.example config/application-production.properties
+```
+
+可以在运行时选择 profile，优先级从高到低如下：
+
+```bash
+java -jar target/pocketbase-java-0.3.4-all.jar start --profile dev
+java -Dapp.profile=dev -jar target/pocketbase-java-0.3.4-all.jar start
+PB_PROFILE=dev java -jar target/pocketbase-java-0.3.4-all.jar start
+```
+
+也可以在基础配置中设置 `app.profile=dev`。Maven Profile 仅在构建期生效，
+`mvn -Pdev package` 不会让打出的 JAR 或 native 二进制在运行时自动选择 dev；
+两种发布方式都应使用上面的运行时参数。profile 名称仅允许字母、数字、`_` 和 `-`，
+避免路径越界。
 
 ### 2. 作为 Java 库嵌入使用 (Embedded Server inside Java)
 
@@ -143,7 +212,7 @@ client.collection("posts").create(Map.of(
 
 ```bash
 mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
-./target/pocketbase-java serve --http 127.0.0.1:8090 --dir pb_data
+./target/pocketbase-java start --http 127.0.0.1:8090 --dir pb_data
 ```
 
 ---

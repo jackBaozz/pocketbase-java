@@ -1,0 +1,9 @@
+# Development-only overrides for config/application.properties.
+# Activate with app.profile=dev, --profile dev, PB_PROFILE=dev, or -Dapp.profile=dev.
+
+app.name=pocketbase-java-dev
+server.port=8090
+
+# Example: use a separate SQLite data directory during development.
+server.data-dir=pb_data-dev
+storage.type=sqlite

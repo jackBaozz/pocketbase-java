@@ -9,12 +9,21 @@ public final class ExternalDatabaseSupport {
   }
 
   public static ResolvedConfig resolve(String storage) {
-    return resolve(storage, System::getProperty, System::getenv);
+    return resolve(storage, System::getProperty, System::getenv, ConnectionDefaults.empty());
   }
 
   static ResolvedConfig resolve(
       String storage, Function<String, String> propertyReader, Function<String, String> envReader) {
+    return resolve(storage, propertyReader, envReader, ConnectionDefaults.empty());
+  }
+
+  static ResolvedConfig resolve(
+      String storage,
+      Function<String, String> propertyReader,
+      Function<String, String> envReader,
+      ConnectionDefaults defaults) {
     String prefix = normalizeStorage(storage);
+    ConnectionDefaults safeDefaults = defaults == null ? ConnectionDefaults.empty() : defaults;
     String envPrefix =
         switch (prefix) {
           case "mysql", "mariadb" -> "MYSQL";
@@ -37,7 +46,8 @@ public final class ExternalDatabaseSupport {
                     envReader.apply("PB_" + envPrefix + "_URL")),
                 new Candidate(
                     "environment PB_" + envPrefix + "_TEST_URL",
-                    envReader.apply("PB_" + envPrefix + "_TEST_URL"))));
+                    envReader.apply("PB_" + envPrefix + "_TEST_URL")),
+                new Candidate("properties database.url", safeDefaults.url())));
     if (url == null) {
       return null;
     }
@@ -54,7 +64,8 @@ public final class ExternalDatabaseSupport {
                     envReader.apply("PB_" + envPrefix + "_USER")),
                 new Candidate(
                     "environment PB_" + envPrefix + "_TEST_USER",
-                    envReader.apply("PB_" + envPrefix + "_TEST_USER"))));
+                    envReader.apply("PB_" + envPrefix + "_TEST_USER")),
+                new Candidate("properties database.user", safeDefaults.user())));
     Value password =
         firstValue(
             List.of(
@@ -69,7 +80,8 @@ public final class ExternalDatabaseSupport {
                     envReader.apply("PB_" + envPrefix + "_PASSWORD")),
                 new Candidate(
                     "environment PB_" + envPrefix + "_TEST_PASSWORD",
-                    envReader.apply("PB_" + envPrefix + "_TEST_PASSWORD"))));
+                    envReader.apply("PB_" + envPrefix + "_TEST_PASSWORD")),
+                new Candidate("properties database.password", safeDefaults.password())));
 
     return new ResolvedConfig(
         prefix,
@@ -128,6 +140,12 @@ public final class ExternalDatabaseSupport {
         System.setProperty(storage + ".password", password);
         System.setProperty("db.password", password);
       }
+    }
+  }
+
+  public record ConnectionDefaults(String url, String user, String password) {
+    public static ConnectionDefaults empty() {
+      return new ConnectionDefaults(null, null, null);
     }
   }
 }

@@ -5,6 +5,9 @@ target/
 *.war
 *.ear
 
+# Build outputs from `make build` (generated launcher scripts).
+bin/
+
 # ==================== IDE ====================
 .idea/
 *.iml
@@ -30,6 +33,7 @@ identifier.db
 # Only the shared schema scaffold is kept in git (optional).
 pb_data/*
 !pb_data/pb_schema.json
+pb_data-*/
 # App signing secret — must never be committed (also covered by pb_data/*).
 pb_data/pb_secret
 
@@ -37,6 +41,13 @@ pb_data/pb_secret
 .env
 .env.*
 !.env.example
+
+# Local server configuration may contain database credentials.
+/application.properties
+config/application.properties
+config/application-*.properties
+!config/application.properties.example
+!config/application-*.properties.example
 
 # ==================== Frontend ====================
 # Repo path is UI/ (case-sensitive on Linux CI).

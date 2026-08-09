@@ -1,0 +1,13 @@
+# Production-only overrides for config/application.properties.
+# Activate with app.profile=production, --profile production, PB_PROFILE=production, or -Dapp.profile=production.
+
+# Use the production network binding only after configuring access controls.
+server.host=0.0.0.0
+server.port=8090
+server.data-dir=pb_data-production
+
+# Configure MySQL/PostgreSQL credentials in this local ignored file or environment variables.
+# storage.type=postgresql
+# database.url=jdbc:postgresql://db.example.com:5432/pocketbase
+# database.user=pocketbase
+# database.password=change-me

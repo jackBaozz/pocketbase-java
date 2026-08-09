@@ -59,6 +59,11 @@ public final class JooqDatabase implements AutoCloseable {
   }
 
   public static JooqDatabase open(Engine engine, Path dataDir) {
+    return open(engine, dataDir, ExternalDatabaseSupport.ConnectionDefaults.empty());
+  }
+
+  public static JooqDatabase open(
+      Engine engine, Path dataDir, ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
     HikariConfig config = new HikariConfig();
     config.setPoolName("PocketBaseJooq-" + engine.name().toLowerCase(Locale.ROOT));
 
@@ -86,7 +91,8 @@ public final class JooqDatabase implements AutoCloseable {
         config.setIdleTimeout(600_000);
         config.setMaxLifetime(1_800_000);
         config.setLeakDetectionThreshold(60_000);
-        configureExternal(config, "mysql", "com.mysql.cj.jdbc.Driver");
+        configureExternal(
+            config, "mysql", "com.mysql.cj.jdbc.Driver", connectionDefaults);
         // MySQL connection tuning:
         //   • utf8mb4 — full Unicode including 4-byte (emoji, CJK extensions).
         //   • innodb_lock_wait_timeout 5s — fail fast on row lock contention.
@@ -111,7 +117,8 @@ public final class JooqDatabase implements AutoCloseable {
         config.setIdleTimeout(600_000);
         config.setMaxLifetime(1_800_000);
         config.setLeakDetectionThreshold(60_000);
-        configureExternal(config, "postgres", "org.postgresql.Driver");
+        configureExternal(
+            config, "postgres", "org.postgresql.Driver", connectionDefaults);
         // PostgreSQL connection tuning:
         //   • lock_timeout 5s — fail fast on lock contention instead of hanging.
         //   • idle_in_transaction_session_timeout 60s — kill leaked transactions.
@@ -138,8 +145,13 @@ public final class JooqDatabase implements AutoCloseable {
   }
 
   private static void configureExternal(
-      HikariConfig config, String prefix, String driverClassName) {
-    ExternalDatabaseSupport.ResolvedConfig resolved = ExternalDatabaseSupport.resolve(prefix);
+      HikariConfig config,
+      String prefix,
+      String driverClassName,
+      ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
+    ExternalDatabaseSupport.ResolvedConfig resolved =
+        ExternalDatabaseSupport.resolve(
+            prefix, System::getProperty, System::getenv, connectionDefaults);
     if (resolved == null) {
       throw new ApiException(400, ExternalDatabaseSupport.missingUrlMessage(prefix));
     }

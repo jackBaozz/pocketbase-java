@@ -56,7 +56,11 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
   private final AsyncJobRunner cronRunner = new AsyncJobRunner("pocketbase-java-cron-relational");
 
   private RelationalStorageEngine(
-      Path dataDir, ObjectMapper mapper, TokenService tokenService, JooqDatabase.Engine engine) {
+      Path dataDir,
+      ObjectMapper mapper,
+      TokenService tokenService,
+      JooqDatabase.Engine engine,
+      ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
     this.mapper = mapper;
     this.dataDir = dataDir;
 
@@ -66,7 +70,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       throw new RuntimeException("failed to create data dir", e);
     }
 
-    this.database = JooqDatabase.open(engine, dataDir);
+    this.database = JooqDatabase.open(engine, dataDir, connectionDefaults);
 
     this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
     this.collectionRepository = new CollectionRepository(database, mapper);
@@ -94,13 +98,31 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       String bootstrapEmail,
       String bootstrapPassword,
       JooqDatabase.Engine databaseEngine) {
+    return open(
+        dataDir,
+        bootstrapEmail,
+        bootstrapPassword,
+        databaseEngine,
+        ExternalDatabaseSupport.ConnectionDefaults.empty());
+  }
+
+  public static RelationalStorageEngine open(
+      Path dataDir,
+      String bootstrapEmail,
+      String bootstrapPassword,
+      JooqDatabase.Engine databaseEngine,
+      ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
     ObjectMapper mapper = RuntimeJson.create();
     try {
       Files.createDirectories(dataDir);
       String secret = readOrCreateSecret(dataDir.resolve("pb_secret"));
       RelationalStorageEngine engine =
           new RelationalStorageEngine(
-              dataDir, mapper, new TokenService(mapper, secret), databaseEngine);
+              dataDir,
+              mapper,
+              new TokenService(mapper, secret),
+              databaseEngine,
+              connectionDefaults);
       if (bootstrapEmail != null
           && !bootstrapEmail.isBlank()
           && bootstrapPassword != null
