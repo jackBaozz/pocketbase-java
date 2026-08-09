@@ -8585,6 +8585,24 @@ class LocalPocketBaseServerTest {
         "validation_invalid_value",
         "Passwords do not match.");
 
+    // A too-short password is rejected with 400 before any DB write runs. Because the
+    // validation now happens before token consumption, the same resetToken stays valid and
+    // is reused by the successful reset below.
+    HttpResponse<String> tooShort =
+        rawRequest(
+            "POST",
+            "/api/collections/auth_lifecycle_users/confirm-password-reset",
+            null,
+            Map.of("token", resetToken, "password", "short", "passwordConfirm", "short"));
+    assertEquals(400, tooShort.statusCode());
+    assertFieldError(
+        tooShort,
+        400,
+        "Password must be at least 8 characters.",
+        "password",
+        "validation_invalid_value",
+        "Password must be at least 8 characters.");
+
     HttpResponse<String> reset =
         rawRequest(
             "POST",

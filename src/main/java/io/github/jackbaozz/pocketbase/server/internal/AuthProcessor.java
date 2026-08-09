@@ -142,20 +142,11 @@ public final class AuthProcessor {
       TokenService tokenService,
       String collection,
       JsonNode body) {
+    // Validate request-body-only fields first. These checks touch no database state, so a
+    // malformed payload (mismatched or too-short password) fails fast with 400 before any
+    // token verification or record/token write runs. This keeps a transient DB failure
+    // (which surfaces as 500) from masking an input-validation error that should be 400.
     String token = requireText(body, "token");
-    Map<String, Object> claims =
-        verifyActionToken(
-            tokenService, token, "passwordReset", requireAuthCollection(ctx, collection));
-
-    String recordId = String.valueOf(claims.get("sub"));
-    CollectionSchema colSchema = ctx.getCollection(collection);
-    Map<String, Object> record = ctx.getRecord(colSchema, recordId);
-    if (record == null
-        || !SecuritySupport.constantTimeEquals(
-            String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
-      throw invalidOrExpiredToken();
-    }
-
     String password = requireText(body, "password");
     String passwordConfirm = requireText(body, "passwordConfirm");
     if (!password.equals(passwordConfirm)) {
@@ -169,6 +160,19 @@ public final class AuthProcessor {
           400,
           "Password must be at least 8 characters.",
           ApiErrors.invalidField("password", "Password must be at least 8 characters."));
+    }
+
+    Map<String, Object> claims =
+        verifyActionToken(
+            tokenService, token, "passwordReset", requireAuthCollection(ctx, collection));
+
+    String recordId = String.valueOf(claims.get("sub"));
+    CollectionSchema colSchema = ctx.getCollection(collection);
+    Map<String, Object> record = ctx.getRecord(colSchema, recordId);
+    if (record == null
+        || !SecuritySupport.constantTimeEquals(
+            String.valueOf(record.get("tokenKey")), String.valueOf(claims.get("tokenKey")))) {
+      throw invalidOrExpiredToken();
     }
 
     String passwordField = passwordField(colSchema);
