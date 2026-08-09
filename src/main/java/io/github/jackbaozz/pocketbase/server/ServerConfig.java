@@ -89,6 +89,11 @@ public record ServerConfig(
     if (dataDir == null) {
       dataDir = Path.of("pb_data");
     }
+    encryptionEnv = blankToNull(encryptionEnv);
+    if (encryptionEnv != null) {
+      throw new IllegalArgumentException(
+          "Encryption at rest is not supported by this storage implementation; remove PB_ENCRYPTION_KEY or security.encryption-key.");
+    }
     applicationName = blankToNull(applicationName);
     storageType = blankToNull(storageType);
     databaseUrl = blankToNull(databaseUrl);
@@ -297,7 +302,7 @@ public record ServerConfig(
           PB_DATA_DIR               data directory, default pb_data
           PB_SUPERUSER_EMAIL        optional first superuser email
           PB_SUPERUSER_PASSWORD     optional first superuser password
-          PB_ENCRYPTION_KEY         optional encryption key
+          PB_ENCRYPTION_KEY         unsupported until storage encryption is implemented
           PB_STORAGE                optional storage engine (sqlite, mysql, postgresql)
           PB_PROFILE                optional profile name
         """;
@@ -352,7 +357,8 @@ public record ServerConfig(
 
   private static void loadResourceProperties(Properties properties, String resourceName) {
     InputStream stream = ServerConfig.class.getResourceAsStream(resourceName);
-    if (stream == null) return;
+    if (stream == null)
+      return;
     try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
       properties.load(reader);
     } catch (IOException e) {
@@ -361,7 +367,8 @@ public record ServerConfig(
   }
 
   private static void loadFileProperties(Properties properties, Path path) {
-    if (path == null || !Files.isRegularFile(path)) return;
+    if (path == null || !Files.isRegularFile(path))
+      return;
     try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
       properties.load(reader);
     } catch (IOException e) {
@@ -372,7 +379,8 @@ public record ServerConfig(
   private static Path profileFile(Path baseFile, String profile) {
     if (baseFile == null) {
       Path configProfile = Path.of("config", "application-" + profile + ".properties");
-      if (Files.isRegularFile(configProfile)) return configProfile;
+      if (Files.isRegularFile(configProfile))
+        return configProfile;
       Path workingDirectoryProfile = Path.of("application-" + profile + ".properties");
       return Files.isRegularFile(workingDirectoryProfile) ? workingDirectoryProfile : configProfile;
     }
@@ -430,7 +438,8 @@ public record ServerConfig(
 
   private static String normalizeProfile(String value) {
     String profile = blankToNull(value);
-    if (profile == null) return null;
+    if (profile == null)
+      return null;
     if (!profile.matches("[A-Za-z0-9][A-Za-z0-9_-]*")) {
       throw new IllegalArgumentException("invalid profile: " + profile);
     }

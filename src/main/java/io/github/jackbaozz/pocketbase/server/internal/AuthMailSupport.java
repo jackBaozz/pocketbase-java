@@ -4,9 +4,24 @@ import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class AuthMailSupport {
   private static final Pattern HTML_TAG = Pattern.compile("<[^>]+>");
+  private static final AtomicInteger MAIL_THREAD_ID = new AtomicInteger();
+  private static final ThreadPoolExecutor MAIL_EXECUTOR =
+      new ThreadPoolExecutor(
+          2,
+          8,
+          60L,
+          TimeUnit.SECONDS,
+          new ArrayBlockingQueue<>(256),
+          new MailThreadFactory(),
+          new ThreadPoolExecutor.AbortPolicy());
 
   private AuthMailSupport() {
   }
@@ -24,22 +39,33 @@ public final class AuthMailSupport {
 
     SmtpMailer.Settings smtpSettings = smtpSettings(smtp);
     SmtpMailer.Message message = message(collection, record, request, settings);
-    String requestId = text(request.get("id"));
-    Thread sender =
-        new Thread(
-            () -> {
-              try {
-                SmtpMailer.send(smtpSettings, message);
-              } catch (RuntimeException e) {
-                if (onFailure != null) {
-                  onFailure.run();
-                }
+    try {
+      MAIL_EXECUTOR.execute(
+          () -> {
+            try {
+              SmtpMailer.send(smtpSettings, message);
+            } catch (RuntimeException e) {
+              if (onFailure != null) {
+                onFailure.run();
               }
-            },
-            "pocketbase-java-auth-mail-" + (requestId.isBlank() ? IdGenerator.id() : requestId));
-    sender.setDaemon(true);
-    sender.start();
-    return true;
+            }
+          });
+      return true;
+    } catch (java.util.concurrent.RejectedExecutionException e) {
+      // Let the caller persist the request in the development outbox instead of creating an
+      // unbounded number of threads when SMTP is slow or unavailable.
+      return false;
+    }
+  }
+
+  private static final class MailThreadFactory implements ThreadFactory {
+    @Override
+    public Thread newThread(Runnable task) {
+      Thread thread =
+          new Thread(task, "pocketbase-java-auth-mail-" + MAIL_THREAD_ID.incrementAndGet());
+      thread.setDaemon(true);
+      return thread;
+    }
   }
 
   static SmtpMailer.Message message(

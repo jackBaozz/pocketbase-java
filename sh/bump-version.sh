@@ -3,7 +3,7 @@
 # bump-version.sh — Synchronize the project version across all version metadata.
 #
 # Usage:
-#   ./sh/bump-version.sh 0.3.4
+#   ./sh/bump-version.sh 0.3.5
 #   ./sh/bump-version.sh v0.4.0     # 'v' prefix is stripped automatically
 #
 # Files updated:
@@ -19,7 +19,7 @@ set -euo pipefail
 
 if [ $# -ne 1 ]; then
   echo "Usage: ./sh/bump-version.sh <version>"
-  echo "  e.g. ./sh/bump-version.sh 0.3.4"
+  echo "  e.g. ./sh/bump-version.sh 0.3.5"
   echo "       ./sh/bump-version.sh v0.4.0"
   exit 1
 fi
@@ -29,7 +29,7 @@ RAW_VERSION="$1"
 NEW_VERSION="${RAW_VERSION#v}"
 
 if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
-  echo "Error: '$NEW_VERSION' does not look like a semver string (e.g. 0.3.4)"
+  echo "Error: '$NEW_VERSION' does not look like a semver string (e.g. 0.3.5)"
   exit 1
 fi
 

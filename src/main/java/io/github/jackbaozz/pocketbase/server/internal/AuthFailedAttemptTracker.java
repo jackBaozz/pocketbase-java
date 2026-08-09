@@ -1,6 +1,7 @@
 package io.github.jackbaozz.pocketbase.server.internal;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -8,18 +9,20 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Tracks failed authentication attempts <strong>per identity (account) only</strong>.
  *
- * <p>Locking one account never blocks a different account, even from the same IP. The {@code
+ * <p>
+ * Locking one account never blocks a different account, even from the same IP. The {@code
  * remoteIp} parameter is accepted for call-site compatibility and is ignored.
  *
- * <p>Cycle rules (from first failure in the cycle for that identity):
+ * <p>
+ * Cycle rules (from first failure in the cycle for that identity):
  * <ul>
- *   <li>Within a 10-minute window starting at the first failure, count failures.
- *   <li>If failures reach 10 inside that window, lock that identity for 10 minutes from the 10th
- *       failure.
- *   <li>The 10th failure itself returns 429 (locked), not a generic auth error.
- *   <li>When the window expires without locking, the next failure starts a new cycle.
- *   <li>When the lock expires, the next failure starts a new cycle.
- *   <li>A successful login clears the counter for that identity only.
+ * <li>Within a 10-minute window starting at the first failure, count failures.
+ * <li>If failures reach 10 inside that window, lock that identity for 10 minutes from the 10th
+ * failure.
+ * <li>The 10th failure itself returns 429 (locked), not a generic auth error.
+ * <li>When the window expires without locking, the next failure starts a new cycle.
+ * <li>When the lock expires, the next failure starts a new cycle.
+ * <li>A successful login clears the counter for that identity only.
  * </ul>
  */
 public class AuthFailedAttemptTracker {
@@ -27,6 +30,9 @@ public class AuthFailedAttemptTracker {
   static final int MAX_FAILED_ATTEMPTS = 10;
   static final long WINDOW_DURATION_MS = 10 * 60 * 1000L; // 10 minutes
   static final long LOCK_DURATION_MS = 10 * 60 * 1000L; // 10 minutes
+  private static final int MAX_TRACKED_IDENTITIES = 100_000;
+  private static final int MAX_IDENTITY_LENGTH = 512;
+  private static final long PRUNE_INTERVAL_MS = 30_000L;
 
   private static final String LOCK_MESSAGE =
       "Too many failed login attempts. Please try again after 10 minutes.";
@@ -36,6 +42,7 @@ public class AuthFailedAttemptTracker {
 
   /** Optional fixed clock for unit tests (epoch millis). 0 means use wall clock. */
   private static final AtomicLong CLOCK_OVERRIDE_MS = new AtomicLong(0L);
+  private static final AtomicLong LAST_PRUNE_MS = new AtomicLong(0L);
 
   public static class AttemptState {
     private final int count;
@@ -65,7 +72,7 @@ public class AuthFailedAttemptTracker {
 
   /**
    * @param remoteIp ignored — counters are per identity only so one locked account cannot block
-   *     others on the same IP
+   *          others on the same IP
    */
   public static void checkLock(String identity, String remoteIp) {
     if (isLocked(identity, remoteIp)) {
@@ -84,8 +91,7 @@ public class AuthFailedAttemptTracker {
     if (isLocked(identity, remoteIp)) {
       throw lockedException(identity);
     }
-    throw new ApiException(
-        400, "Failed to authenticate.", Map.of("failedAttempts", getFailureCount(identity, remoteIp)));
+    throw new ApiException(400, "Failed to authenticate.");
   }
 
   /**
@@ -97,13 +103,15 @@ public class AuthFailedAttemptTracker {
       return;
     }
     long now = nowMs();
+    prune(now);
     ATTEMPTS.compute(key, (k, existing) -> nextFailureState(existing, now));
   }
 
   /**
    * Computes the next attempt state after one failure at {@code now}.
    *
-   * <p>Package-visible for unit tests.
+   * <p>
+   * Package-visible for unit tests.
    */
   static AttemptState nextFailureState(AttemptState existing, long now) {
     if (existing == null) {
@@ -150,25 +158,28 @@ public class AuthFailedAttemptTracker {
     if (key == null) {
       return false;
     }
+    prune(now);
     AttemptState state = ATTEMPTS.get(key);
     return state != null && state.lockedUntil > now;
   }
 
   private static ApiException lockedException(String identity) {
-    return new ApiException(
-        429, LOCK_MESSAGE, Map.of("failedAttempts", getFailureCount(identity, null)));
+    return new ApiException(429, LOCK_MESSAGE);
   }
 
   /**
    * Returns the effective failure count for this identity only.
    *
-   * <p>Expired windows and expired locks report {@code 0}. While locked, the pre-lock count is
+   * <p>
+   * Expired windows and expired locks report {@code 0}. While locked, the pre-lock count is
    * still returned.
    *
    * @param remoteIp ignored
    */
   public static int getFailureCount(String identity, String remoteIp) {
-    return effectiveCount(identityKey(identity), nowMs());
+    long now = nowMs();
+    prune(now);
+    return effectiveCount(identityKey(identity), now);
   }
 
   private static int effectiveCount(String key, long now) {
@@ -197,6 +208,7 @@ public class AuthFailedAttemptTracker {
   public static void resetAll() {
     ATTEMPTS.clear();
     clearClockOverride();
+    LAST_PRUNE_MS.set(0L);
   }
 
   /** Package-visible for unit tests. */
@@ -220,6 +232,41 @@ public class AuthFailedAttemptTracker {
   }
 
   private static String identityKey(String identity) {
-    return (identity == null || identity.isBlank()) ? null : "id:" + identity.trim().toLowerCase();
+    if (identity == null || identity.isBlank()) {
+      return null;
+    }
+    String normalized = identity.trim().toLowerCase(Locale.ROOT);
+    return normalized.length() > MAX_IDENTITY_LENGTH ? null : "id:" + normalized;
+  }
+
+  private static void prune(long now) {
+    synchronized (ATTEMPTS) {
+      int size = ATTEMPTS.size();
+      boolean overLimit = size > MAX_TRACKED_IDENTITIES;
+      long last = LAST_PRUNE_MS.get();
+      if (!overLimit && now >= last && now - last < PRUNE_INTERVAL_MS) {
+        return;
+      }
+      LAST_PRUNE_MS.set(now);
+
+      ATTEMPTS.entrySet()
+          .removeIf(
+              entry -> {
+                AttemptState state = entry.getValue();
+                return state != null
+                    && state.lockedUntil <= now
+                    && now - state.windowStart >= WINDOW_DURATION_MS;
+              });
+      int overflow = ATTEMPTS.size() - MAX_TRACKED_IDENTITIES;
+      if (overflow <= 0) {
+        return;
+      }
+      ATTEMPTS.entrySet().stream()
+          .sorted(
+              (left, right) -> Long.compare(left.getValue().windowStart, right.getValue().windowStart))
+          .limit(overflow)
+          .map(Map.Entry::getKey)
+          .forEach(ATTEMPTS::remove);
+    }
   }
 }

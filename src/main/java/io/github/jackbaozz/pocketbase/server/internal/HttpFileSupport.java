@@ -20,6 +20,9 @@ public final class HttpFileSupport {
   public static void serve(
       HttpExchange exchange, Path file, String contentType, boolean download, String filename)
       throws IOException {
+    if (Files.isSymbolicLink(file)) {
+      throw new IOException("runtime file must not be a symbolic link");
+    }
     long size = Files.size(file);
     long lastModified = Files.getLastModifiedTime(file).toMillis();
     String etag = "\"" + Long.toHexString(lastModified) + "-" + Long.toHexString(size) + "\"";

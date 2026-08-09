@@ -11,7 +11,7 @@ class HttpBodyLimitTest {
 
   @Test
   void collectionBodyLimitIncludesOfficialFieldAllowances() {
-    assertEquals(true, HttpApi.unlimitedBodyRoute("/api/backups/upload", "POST"));
+    assertEquals(false, HttpApi.unlimitedBodyRoute("/api/backups/upload", "POST"));
     assertEquals(false, HttpApi.unlimitedBodyRoute("/api/backups", "POST"));
     assertEquals(false, HttpApi.unlimitedBodyRoute("/api/backups/upload", "GET"));
 

@@ -270,18 +270,16 @@ public final class OAuth2Support {
       HttpResponse<String> response =
           client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        throw new ApiException(
-            400,
-            "Failed to fetch OAuth2 token.",
-            ApiErrors.invalidField("provider", response.body()));
+        throw providerFailure(
+            "fetch OAuth2 token", response.statusCode(),
+            new IOException("OAuth2 provider returned HTTP " + response.statusCode()));
       }
       return mapper.readValue(response.body(), MAP_TYPE);
     } catch (IOException | InterruptedException e) {
       if (e instanceof InterruptedException) {
         Thread.currentThread().interrupt();
       }
-      throw new ApiException(
-          400, "Failed to fetch OAuth2 token.", ApiErrors.invalidField("provider", e.getMessage()));
+      throw providerFailure("fetch OAuth2 token", -1, e);
     }
   }
 
@@ -318,19 +316,27 @@ public final class OAuth2Support {
       HttpResponse<String> response =
           client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        throw new ApiException(
-            400,
-            "Failed to fetch OAuth2 user.",
-            ApiErrors.invalidField("provider", response.body()));
+        throw providerFailure(
+            "fetch OAuth2 user", response.statusCode(),
+            new IOException("OAuth2 provider returned HTTP " + response.statusCode()));
       }
       return mapper.readValue(response.body(), MAP_TYPE);
     } catch (IOException | InterruptedException e) {
       if (e instanceof InterruptedException) {
         Thread.currentThread().interrupt();
       }
-      throw new ApiException(
-          400, "Failed to fetch OAuth2 user.", ApiErrors.invalidField("provider", e.getMessage()));
+      throw providerFailure("fetch OAuth2 user", -1, e);
     }
+  }
+
+  private static ApiException providerFailure(String operation, int status, Throwable failure) {
+    String detail =
+        status > 0 ? operation + " provider response (HTTP " + status + ")" : operation;
+    SecuritySupport.logInternalFailure("oauth2 " + detail, failure);
+    return new ApiException(
+        400,
+        "Failed to " + operation + ".",
+        ApiErrors.invalidField("provider", "OAuth2 provider request failed."));
   }
 
   private static Map<String, Object> parseJwtClaims(ObjectMapper mapper, String jwt) {

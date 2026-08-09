@@ -11,8 +11,11 @@ import io.github.jackbaozz.pocketbase.server.internal.ExternalDatabaseSupport;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Programmatic handle for the embedded PocketBase-like runtime. */
 public final class LocalPocketBase implements AutoCloseable {
@@ -69,7 +72,7 @@ public final class LocalPocketBase implements AutoCloseable {
     RealtimeHub realtimeHub = new RealtimeHub(store.mapper());
     store.realtimeHub(realtimeHub);
     HttpServer server = HttpServer.create(config.bindAddress(), 0);
-    ExecutorService executor = Executors.newCachedThreadPool();
+    ExecutorService executor = createHttpExecutor();
     server.setExecutor(executor);
     server.createContext("/", new HttpApi(store, realtimeHub));
     server.start();
@@ -89,6 +92,39 @@ public final class LocalPocketBase implements AutoCloseable {
     var body = store.mapper().createObjectNode();
     body.putObject("meta").put("appName", applicationName.trim());
     store.updateSettings(body, Map.of());
+  }
+
+  private static ExecutorService createHttpExecutor() {
+    int maxThreads = configuredPositiveInt("PB_HTTP_MAX_THREADS", 256, 8, 1024);
+    return new ThreadPoolExecutor(
+        Math.min(16, maxThreads),
+        maxThreads,
+        60L,
+        TimeUnit.SECONDS,
+        new ArrayBlockingQueue<>(1024),
+        new HttpThreadFactory(),
+        new ThreadPoolExecutor.AbortPolicy());
+  }
+
+  private static int configuredPositiveInt(String name, int fallback, int min, int max) {
+    String value = System.getProperty(name);
+    if (value == null || value.isBlank()) {
+      value = System.getenv(name);
+    }
+    try {
+      return Math.max(min, Math.min(max, Integer.parseInt(value)));
+    } catch (RuntimeException ignored) {
+      return fallback;
+    }
+  }
+
+  private static final class HttpThreadFactory implements ThreadFactory {
+    private final AtomicInteger id = new AtomicInteger();
+
+    @Override
+    public Thread newThread(Runnable task) {
+      return new Thread(task, "pocketbase-java-http-" + id.incrementAndGet());
+    }
   }
 
   public int port() {

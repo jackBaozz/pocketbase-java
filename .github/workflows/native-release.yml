@@ -23,18 +23,42 @@ jobs:
         include:
           - name: windows-amd64
             os: windows-latest
+            binary: pocketbase-java.exe
             asset_suffix: windows-amd64
+            asset_extension: .exe
+          - name: linux-amd64
+            os: ubuntu-latest
+            binary: pocketbase-java
+            asset_suffix: linux-amd64
+            asset_extension: ''
+          - name: macos-arm64
+            os: macos-latest
+            binary: pocketbase-java
+            asset_suffix: macos-arm64
+            asset_extension: ''
     steps:
       - uses: actions/checkout@v5
 
       - name: Resolve Version
         id: version
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          VERSION="${{ github.event.inputs.release_tag || github.ref_name }}"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            VERSION="$REF_NAME"
+          else
+            VERSION="$RELEASE_TAG"
+          fi
           VERSION="${VERSION#v}"
           if [ -z "$VERSION" ]; then
-            VERSION=$(grep -m1 -oP '<version>\K[^<]+' pom.xml | head -n1)
+            VERSION=$(sed -nE 's|.*<revision>[[:space:]]*([^<[:space:]]+)[[:space:]]*</revision>.*|\1|p' pom.xml | head -n1)
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "Unable to resolve the project version" >&2
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
@@ -60,19 +84,28 @@ jobs:
 
       - name: Build Native Image
         shell: bash
-        run: mvn -gs settings.xml -s settings.xml -Pnative clean package -DskipTests
+        run: mvn -B -gs settings.xml -s settings.xml -Pnative clean package -DskipTests
 
       - name: Stage Binary
         shell: bash
         run: |
+          BINARY="target/${{ matrix.binary }}"
+          ASSET="pocketbase-java-${{ matrix.asset_suffix }}-v${{ steps.version.outputs.version }}${{ matrix.asset_extension }}"
+          if [ ! -f "$BINARY" ]; then
+            echo "Native binary not found: $BINARY" >&2
+            exit 1
+          fi
           mkdir -p dist
-          cp target/pocketbase-java.exe dist/pocketbase-java-${{ matrix.asset_suffix }}-v${{ steps.version.outputs.version }}.exe
+          cp "$BINARY" "dist/$ASSET"
+          chmod +x "dist/$ASSET" 2>/dev/null || true
+          ls -lh "dist/$ASSET"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: pocketbase-java-${{ matrix.asset_suffix }}-v${{ steps.version.outputs.version }}
           path: dist/pocketbase-java-*
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release

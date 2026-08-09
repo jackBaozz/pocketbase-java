@@ -9,8 +9,10 @@ import io.github.jackbaozz.pocketbase.server.internal.AppleClientSecretGenerator
 import io.github.jackbaozz.pocketbase.server.internal.HttpRateLimiter;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
+import io.github.jackbaozz.pocketbase.server.internal.FilePermissionSupport;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.S3Probe;
+import io.github.jackbaozz.pocketbase.server.internal.SecuritySupport;
 import io.github.jackbaozz.pocketbase.server.internal.SmtpMailer;
 import io.github.jackbaozz.pocketbase.server.internal.Unsafe;
 import java.nio.charset.StandardCharsets;
@@ -79,7 +81,8 @@ public class SettingsRepository extends BaseRepository {
     } catch (ApiException e) {
       throw e;
     } catch (Exception e) {
-      throw new ApiException(400, "Failed to update settings.", e);
+      SecuritySupport.logInternalFailure("update settings", e);
+      throw new ApiException(400, "Failed to update settings.");
     }
   }
 
@@ -174,10 +177,12 @@ public class SettingsRepository extends BaseRepository {
       request.put("html", content.html());
       request.put("created", Instant.now().toString());
       authRequests.add(request);
+      FilePermissionSupport.secureDirectory(dataDir);
       Files.writeString(
           authRequestsFile,
           mapper.writerWithDefaultPrettyPrinter().writeValueAsString(authRequests),
           StandardCharsets.UTF_8);
+      FilePermissionSupport.secureFile(authRequestsFile);
     } catch (java.io.IOException e) {
       // ignore
     }

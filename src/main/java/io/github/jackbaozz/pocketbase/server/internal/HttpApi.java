@@ -26,6 +26,7 @@ import java.util.Optional;
 /** HTTP surface that mirrors the most common PocketBase API and serves the admin UI. */
 public final class HttpApi implements HttpHandler {
   private static final long DEFAULT_MAX_BODY_SIZE = 32L << 20;
+  private static final long MAX_BACKUP_UPLOAD_SIZE = 256L << 20;
   private static final String BODY_LIMIT_ATTRIBUTE = "pocketbase.bodyLimit";
   private static final String SETTINGS_ATTRIBUTE = "pocketbase.settings";
   private static final int REALTIME_CLIENT_ID_MAX_LENGTH = 255;
@@ -177,11 +178,15 @@ public final class HttpApi implements HttpHandler {
       sendJson(exchange, e.status(), errorBody(e.status(), e.getMessage(), e.data()));
     } catch (IllegalArgumentException e) {
       status = 400;
-      sendJson(exchange, 400, errorBody(400, e.getMessage(), Map.of()));
+      SecuritySupport.logInternalFailure("invalid HTTP request " + method + " " + path, e);
+      sendJson(exchange, 400, errorBody(400, "Invalid request.", Map.of()));
     } catch (Exception e) {
       status = 500;
+      String errorId = SecuritySupport.logInternalFailure("http " + method + " " + path, e);
       sendJson(
-          exchange, 500, errorBody(500, "Internal server error.", Map.of("error", e.getMessage())));
+          exchange,
+          500,
+          errorBody(500, "Internal server error. Reference: " + errorId, Map.of("errorId", errorId)));
     } finally {
       long elapsedMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
       int logStatus = status == 0 ? 200 : status;
@@ -197,7 +202,7 @@ public final class HttpApi implements HttpHandler {
               status,
               elapsedMs,
               principal(exchange).orElse(null),
-              requestHeaders(exchange),
+              activityHeaders(exchange),
               remoteAddress(exchange));
         } catch (RuntimeException ignored) {
           // Activity logging must never change the API response.
@@ -280,8 +285,8 @@ public final class HttpApi implements HttpHandler {
   }
 
   private long requestBodyLimit(String path, String method) {
-    if (unlimitedBodyRoute(path, method)) {
-      return Long.MAX_VALUE;
+    if ("POST".equals(method) && "/api/backups/upload".equals(path)) {
+      return MAX_BACKUP_UPLOAD_SIZE;
     }
     if (!"POST".equals(method) && !"PATCH".equals(method)) {
       return DEFAULT_MAX_BODY_SIZE;
@@ -302,7 +307,7 @@ public final class HttpApi implements HttpHandler {
   }
 
   static boolean unlimitedBodyRoute(String path, String method) {
-    return "POST".equals(method) && "/api/backups/upload".equals(path);
+    return false;
   }
 
   static long collectionBodyLimit(Map<String, Object> collection) {
@@ -1335,11 +1340,14 @@ public final class HttpApi implements HttpHandler {
     Path file =
         store.filePath(
             collection, recordId, filename, request, filePrincipal(exchange).orElse(null));
-    if (file == null || !Files.exists(file) || !Files.isRegularFile(file)) {
+    if (file == null
+        || Files.isSymbolicLink(file)
+        || !Files.exists(file)
+        || !Files.isRegularFile(file)) {
       throw new ApiException(404, "The requested resource wasn't found.");
     }
     ServedFile served = servedFile(file, collection, recordId, filename, query.get("thumb"));
-    // Record files are supplied by users.  Never allow the browser to infer an active
+    // Record files are supplied by users. Never allow the browser to infer an active
     // document type (for example an HTML payload named as an image), and sandbox any
     // document that a browser still chooses to render inline.
     exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
@@ -1386,7 +1394,10 @@ public final class HttpApi implements HttpHandler {
       throw new ApiException(404, "Backup not found.");
     }
     Path backup = store.backupFile(segments.get(2));
-    if (backup == null || !Files.exists(backup) || !Files.isRegularFile(backup)) {
+    if (backup == null
+        || Files.isSymbolicLink(backup)
+        || !Files.exists(backup)
+        || !Files.isRegularFile(backup)) {
       throw new ApiException(404, "Backup not found.");
     }
     String filename = backup.getFileName().toString();
@@ -1490,6 +1501,13 @@ public final class HttpApi implements HttpHandler {
         .getResponseHeaders()
         .set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
     exchange.getResponseHeaders().set("Cache-Control", "no-store");
+    exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+    exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
+    exchange.getResponseHeaders().set("Content-Security-Policy", "frame-ancestors 'none'");
+    exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
+    exchange
+        .getResponseHeaders()
+        .set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), usb=()");
   }
 
   private boolean shouldLogActivity(String path, String method, int status) {
@@ -1506,11 +1524,50 @@ public final class HttpApi implements HttpHandler {
     URI uri = exchange.getRequestURI();
     String rawPath =
         uri.getRawPath() == null || uri.getRawPath().isBlank() ? "/" : uri.getRawPath();
-    String rawQuery = uri.getRawQuery();
+    String rawQuery = redactQuery(uri.getRawQuery());
     return rawQuery == null || rawQuery.isBlank() ? rawPath : rawPath + "?" + rawQuery;
   }
 
+  private String redactQuery(String rawQuery) {
+    if (rawQuery == null || rawQuery.isBlank()) {
+      return rawQuery;
+    }
+    StringBuilder redacted = new StringBuilder(rawQuery.length());
+    String[] pairs = rawQuery.split("&", -1);
+    for (int i = 0; i < pairs.length; i++) {
+      if (i > 0) {
+        redacted.append('&');
+      }
+      String pair = pairs[i];
+      int equals = pair.indexOf('=');
+      String encodedKey = equals < 0 ? pair : pair.substring(0, equals);
+      String decodedKey;
+      try {
+        decodedKey = URLDecoder.decode(encodedKey, StandardCharsets.UTF_8);
+      } catch (IllegalArgumentException ignored) {
+        decodedKey = encodedKey;
+      }
+      redacted.append(encodedKey);
+      if (equals >= 0) {
+        redacted.append('=');
+        redacted.append(
+            SecuritySupport.isSensitiveQueryKey(decodedKey)
+                ? "[REDACTED]"
+                : pair.substring(equals + 1));
+      }
+    }
+    return redacted.toString();
+  }
+
   private Map<String, String> requestHeaders(HttpExchange exchange) {
+    return collectHeaders(exchange, false);
+  }
+
+  private Map<String, String> activityHeaders(HttpExchange exchange) {
+    return collectHeaders(exchange, true);
+  }
+
+  private Map<String, String> collectHeaders(HttpExchange exchange, boolean redactSensitive) {
     Map<String, String> headers = new LinkedHashMap<>();
     exchange
         .getRequestHeaders()
@@ -1520,10 +1577,39 @@ public final class HttpApi implements HttpHandler {
                 return;
               }
               String value = values.get(0);
+              if (redactSensitive && SecuritySupport.isSensitiveHeader(key)) {
+                value = "[REDACTED]";
+              } else if (redactSensitive && "referer".equalsIgnoreCase(key)) {
+                value = redactUrl(value);
+              }
               headers.put(key, value);
               headers.put(key.toLowerCase(Locale.ROOT), value);
             });
     return headers;
+  }
+
+  private String redactUrl(String value) {
+    if (value == null || value.isBlank()) {
+      return value;
+    }
+    try {
+      URI uri = URI.create(value);
+      // A referrer may contain reset tokens in either its path or query and may even include
+      // user-info credentials. Keep only the origin so activity logs cannot become a credential
+      // sink while retaining enough context for diagnostics.
+      String scheme = uri.getScheme();
+      String authority = uri.getRawAuthority();
+      if (scheme == null || scheme.isBlank() || authority == null || authority.isBlank()) {
+        return "[REDACTED]";
+      }
+      int userInfoSeparator = authority.lastIndexOf('@');
+      if (userInfoSeparator >= 0) {
+        authority = authority.substring(userInfoSeparator + 1);
+      }
+      return scheme + "://" + authority;
+    } catch (IllegalArgumentException e) {
+      return "[REDACTED]";
+    }
   }
 
   private String remoteAddress(HttpExchange exchange) {

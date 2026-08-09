@@ -6,6 +6,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.Optional;
@@ -20,6 +21,13 @@ final class ThumbnailGenerator {
   private static final byte[] PNG_SIGNATURE = new byte[] {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
   private static final Pattern THUMB_PATTERN = Pattern.compile("^(\\d+)x(\\d+)([tbf]?)$");
   private static final int MAX_DIMENSION = 8192;
+  // Keep attacker-controlled decode allocations bounded. A compressed PNG can represent a
+  // much larger bitmap than its upload size, so checking only the multipart body limit is not
+  // sufficient here.
+  private static final int MAX_SOURCE_DIMENSION = 8192;
+  private static final long MAX_SOURCE_PIXELS = 16L * 1024 * 1024;
+  private static final long MAX_PNG_RAW_BYTES = 64L * 1024 * 1024;
+  private static final long MAX_THUMBNAIL_PIXELS = 16L * 1024 * 1024;
 
   private ThumbnailGenerator() {
   }
@@ -33,6 +41,9 @@ final class ThumbnailGenerator {
 
     Path cacheDir = source.getParent().resolve("thumbs_" + safeName(filename));
     Path target = cacheDir.resolve(thumb.raw() + "_" + stripExtension(safeName(filename)) + ".png");
+    if (Files.isSymbolicLink(cacheDir) || Files.isSymbolicLink(target)) {
+      throw new IOException("thumbnail cache must not contain symbolic links");
+    }
     if (Files.exists(target)
         && Files.getLastModifiedTime(target).compareTo(Files.getLastModifiedTime(source)) >= 0) {
       return Optional.of(new GeneratedThumbnail(target, "image/png"));
@@ -47,8 +58,10 @@ final class ThumbnailGenerator {
       return Optional.empty();
     }
 
-    Files.createDirectories(cacheDir);
-    Files.write(target, writePng(thumbnail));
+    FilePermissionSupport.secureDirectory(cacheDir);
+    FilePermissionSupport.createPrivateFile(target);
+    Files.write(target, writePng(thumbnail), StandardOpenOption.TRUNCATE_EXISTING);
+    FilePermissionSupport.secureFile(target);
     return Optional.of(new GeneratedThumbnail(target, "image/png"));
   }
 
@@ -69,12 +82,18 @@ final class ThumbnailGenerator {
       int length = intAt(bytes, offset);
       String type = new String(bytes, offset + 4, 4, java.nio.charset.StandardCharsets.US_ASCII);
       int dataOffset = offset + 8;
+      if (length < 0) {
+        return null;
+      }
       int next = dataOffset + length + 4;
-      if (length < 0 || next > bytes.length) {
+      if (next < dataOffset || next > bytes.length) {
         return null;
       }
       switch (type) {
         case "IHDR" -> {
+          if (length < 13) {
+            return null;
+          }
           width = intAt(bytes, dataOffset);
           height = intAt(bytes, dataOffset + 4);
           bitDepth = bytes[dataOffset + 8] & 0xFF;
@@ -93,18 +112,29 @@ final class ThumbnailGenerator {
       offset = next;
     }
 
+    long sourcePixels = (long) width * height;
     if (width <= 0
         || height <= 0
+        || width > MAX_SOURCE_DIMENSION
+        || height > MAX_SOURCE_DIMENSION
+        || sourcePixels > MAX_SOURCE_PIXELS
         || bitDepth != 8
         || interlace != 0
         || (colorType != 2 && colorType != 6)) {
       return null;
     }
     int channels = colorType == 6 ? 4 : 3;
-    byte[] inflated = inflate(idat.toByteArray());
-    int rowBytes = width * channels;
-    int expected = height * (rowBytes + 1);
-    if (inflated.length < expected) {
+    long rowBytesLong = (long) width * channels;
+    long expectedLong = (long) height * (rowBytesLong + 1);
+    if (rowBytesLong > Integer.MAX_VALUE
+        || expectedLong <= 0
+        || expectedLong > MAX_PNG_RAW_BYTES) {
+      return null;
+    }
+    int rowBytes = (int) rowBytesLong;
+    int expected = (int) expectedLong;
+    byte[] inflated = inflate(idat.toByteArray(), expected);
+    if (inflated == null || inflated.length != expected) {
       return null;
     }
 
@@ -176,7 +206,8 @@ final class ThumbnailGenerator {
     if (targetWidth <= 0
         || targetHeight <= 0
         || targetWidth > MAX_DIMENSION
-        || targetHeight > MAX_DIMENSION) {
+        || targetHeight > MAX_DIMENSION
+        || (long) targetWidth * targetHeight > MAX_THUMBNAIL_PIXELS) {
       return null;
     }
 
@@ -274,9 +305,23 @@ final class ThumbnailGenerator {
     }
   }
 
-  private static byte[] inflate(byte[] bytes) throws IOException {
+  private static byte[] inflate(byte[] bytes, int expectedBytes) throws IOException {
     try (InflaterInputStream input = new InflaterInputStream(new ByteArrayInputStream(bytes))) {
-      return input.readAllBytes();
+      ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(expectedBytes, 1 << 20));
+      byte[] buffer = new byte[8192];
+      int total = 0;
+      int read;
+      while ((read = input.read(buffer)) >= 0) {
+        if (read == 0) {
+          continue;
+        }
+        if (read > expectedBytes - total) {
+          return null;
+        }
+        output.write(buffer, 0, read);
+        total += read;
+      }
+      return output.toByteArray();
     }
   }
 

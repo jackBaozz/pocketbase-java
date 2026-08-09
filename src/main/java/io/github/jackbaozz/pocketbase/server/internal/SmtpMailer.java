@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 
 public final class SmtpMailer {
@@ -24,7 +26,10 @@ public final class SmtpMailer {
     try (Session session = Session.open(settings)) {
       session.expect(220);
       List<String> ehlo = session.ehlo();
-      if (settings.tls() && !settings.directTls() && supports(ehlo, "STARTTLS")) {
+      if (settings.tls() && !settings.directTls()) {
+        if (!supports(ehlo, "STARTTLS")) {
+          throw new IOException("SMTP server does not advertise STARTTLS");
+        }
         session.command("STARTTLS", 220);
         session.startTls();
         session.ehlo();
@@ -38,12 +43,14 @@ public final class SmtpMailer {
       session.writeData(message.raw());
       session.expect(250);
       session.command("QUIT", 221, 250);
+    } catch (ApiException e) {
+      throw e;
     } catch (Exception e) {
-      String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+      SecuritySupport.logInternalFailure("smtp delivery", e);
       throw new ApiException(
           400,
-          "Failed to send the test email. Raw error: \n" + detail,
-          ApiErrors.invalidField("smtp", detail));
+          "Failed to send the test email.",
+          ApiErrors.invalidField("smtp", "SMTP delivery failed."));
     }
   }
 
@@ -131,12 +138,14 @@ public final class SmtpMailer {
 
   private static final class Session implements AutoCloseable {
     private final String localName;
+    private final String peerHost;
     private Socket socket;
     private BufferedReader reader;
     private BufferedWriter writer;
 
-    private Session(Socket socket, String localName) throws IOException {
+    private Session(Socket socket, String localName, String peerHost) throws IOException {
       this.localName = localName == null || localName.isBlank() ? "" : localName.trim();
+      this.peerHost = peerHost == null ? "" : peerHost.trim();
       this.socket = socket;
       this.reader =
           new BufferedReader(
@@ -147,14 +156,14 @@ public final class SmtpMailer {
     }
 
     static Session open(Settings settings) throws IOException {
-      Socket socket =
-          settings.directTls() ? SSLSocketFactory.getDefault().createSocket() : new Socket();
+      Socket socket = new Socket();
       socket.connect(new InetSocketAddress(settings.host(), settings.port()), 10_000);
       socket.setSoTimeout(15_000);
       if (settings.directTls()) {
-        ((javax.net.ssl.SSLSocket) socket).startHandshake();
+        socket = tlsSocket(socket, settings.host(), settings.port());
+        socket.setSoTimeout(15_000);
       }
-      return new Session(socket, settings.localName());
+      return new Session(socket, settings.localName(), settings.host());
     }
 
     List<String> ehlo() throws IOException {
@@ -169,15 +178,22 @@ public final class SmtpMailer {
 
     void startTls() throws IOException {
       SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
-      Socket tls =
-          factory.createSocket(
-              socket, socket.getInetAddress().getHostAddress(), socket.getPort(), true);
-      ((javax.net.ssl.SSLSocket) tls).startHandshake();
+      Socket tls = tlsSocket(socket, peerHost, socket.getPort());
       this.socket = tls;
       this.reader =
           new BufferedReader(new InputStreamReader(tls.getInputStream(), StandardCharsets.UTF_8));
       this.writer =
           new BufferedWriter(new OutputStreamWriter(tls.getOutputStream(), StandardCharsets.UTF_8));
+    }
+
+    private static Socket tlsSocket(Socket plain, String peerHost, int port) throws IOException {
+      SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+      SSLSocket tls = (SSLSocket) factory.createSocket(plain, peerHost, port, true);
+      SSLParameters parameters = tls.getSSLParameters();
+      parameters.setEndpointIdentificationAlgorithm("HTTPS");
+      tls.setSSLParameters(parameters);
+      tls.startHandshake();
+      return tls;
     }
 
     void authenticate(Settings settings) throws IOException {

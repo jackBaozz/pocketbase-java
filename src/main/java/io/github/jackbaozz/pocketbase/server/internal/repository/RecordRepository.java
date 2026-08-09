@@ -11,6 +11,7 @@ import io.github.jackbaozz.pocketbase.server.internal.AuthRecordMutationSupport;
 import io.github.jackbaozz.pocketbase.server.internal.AuthSystemCollections;
 import io.github.jackbaozz.pocketbase.server.internal.FieldTypeMapping;
 import io.github.jackbaozz.pocketbase.server.internal.FieldValidator;
+import io.github.jackbaozz.pocketbase.server.internal.FilePermissionSupport;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
@@ -20,6 +21,7 @@ import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
 import io.github.jackbaozz.pocketbase.server.internal.RuleEvaluator;
 import io.github.jackbaozz.pocketbase.server.internal.RuleRequestContext;
+import io.github.jackbaozz.pocketbase.server.internal.SecuritySupport;
 import io.github.jackbaozz.pocketbase.server.internal.SearchFieldValidationSupport;
 import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
 import io.github.jackbaozz.pocketbase.server.internal.UploadedFile;
@@ -352,7 +354,8 @@ public class RecordRepository extends BaseRepository {
           .execute();
     } catch (DataAccessException e) {
       handleSqlConstraintException(e, "Failed to create record.");
-      throw new ApiException(400, "Failed to create record: " + e.getMessage());
+      SecuritySupport.logInternalFailure("create record", e);
+      throw new ApiException(400, "Failed to create record.");
     }
     writeFileChanges(colSchema, Map.of("id", id), fileChanges);
     publishRealtime(colSchema, "create", getRawRecord(colSchema, id));
@@ -498,7 +501,8 @@ public class RecordRepository extends BaseRepository {
           .execute();
     } catch (DataAccessException e) {
       handleSqlConstraintException(e, "Failed to update record.");
-      throw new ApiException(400, "Failed to update record: " + e.getMessage());
+      SecuritySupport.logInternalFailure("update record", e);
+      throw new ApiException(400, "Failed to update record.");
     }
     if (passwordChanged || emailChanged) {
       deleteAuthSecurityState(colSchema.id, id);
@@ -584,7 +588,8 @@ public class RecordRepository extends BaseRepository {
     try {
       database.dsl().deleteFrom(qt(tableName(schema))).where(qfs("id").eq(id)).execute();
     } catch (DataAccessException e) {
-      throw new ApiException(400, "Failed to delete record: " + e.getMessage());
+      SecuritySupport.logInternalFailure("delete record", e);
+      throw new ApiException(400, "Failed to delete record.");
     }
     if ("auth".equals(schema.type)) {
       deleteAuthRecordDependents(schema.id, id);
@@ -626,7 +631,8 @@ public class RecordRepository extends BaseRepository {
         deleteAuthSecurityState(colSchema.id, recordId);
       }
     } catch (DataAccessException e) {
-      throw new ApiException(400, "Failed to update record: " + e.getMessage());
+      SecuritySupport.logInternalFailure("update record fields", e);
+      throw new ApiException(400, "Failed to update record.");
     }
   }
 
@@ -767,10 +773,21 @@ public class RecordRepository extends BaseRepository {
       return;
     }
     String recordId = String.valueOf(record.get("id"));
-    Path recordDir = storageDir.resolve(collection.id).resolve(recordId).normalize();
+    Path collectionDir = storageDir.resolve(collection.id).normalize();
+    Path recordDir = collectionDir.resolve(recordId).normalize();
     List<Path> written = new ArrayList<>();
     try {
-      Files.createDirectories(recordDir);
+      if (!collectionDir.startsWith(storageDir)
+          || Files.isSymbolicLink(storageDir)
+          || Files.isSymbolicLink(collectionDir)) {
+        throw new ApiException(
+            400,
+            "Invalid upload filename.",
+            ApiErrors.invalidField("file", "Invalid upload filename."));
+      }
+      FilePermissionSupport.secureDirectory(storageDir);
+      FilePermissionSupport.secureDirectory(collectionDir);
+      FilePermissionSupport.secureDirectory(recordDir);
       for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
         Path target = recordDir.resolve(entry.getKey()).normalize();
         if (!target.startsWith(recordDir)) {
@@ -780,6 +797,7 @@ public class RecordRepository extends BaseRepository {
               ApiErrors.invalidField("file", "Invalid upload filename."));
         }
         Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
+        FilePermissionSupport.secureFile(target);
         written.add(target);
       }
       if (!written.isEmpty()) {

@@ -10,6 +10,7 @@ import io.github.jackbaozz.pocketbase.server.internal.RuleRequestContext;
 import io.github.jackbaozz.pocketbase.server.internal.TokenService;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import io.github.jackbaozz.pocketbase.server.model.FieldSchema;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -70,7 +71,14 @@ public class FileRepository extends BaseRepository {
     Path recordDir =
         dataDir.resolve("storage").resolve(lookup.collection().id).resolve(recordId).normalize();
     Path file = recordDir.resolve(filename).normalize();
-    return file.startsWith(recordDir) ? file : null;
+    if (!file.startsWith(recordDir)
+        || Files.isSymbolicLink(dataDir.resolve("storage"))
+        || Files.isSymbolicLink(dataDir.resolve("storage").resolve(lookup.collection().id))
+        || Files.isSymbolicLink(recordDir)
+        || Files.isSymbolicLink(file)) {
+      return null;
+    }
+    return file;
   }
 
   public boolean fileThumbAllowed(

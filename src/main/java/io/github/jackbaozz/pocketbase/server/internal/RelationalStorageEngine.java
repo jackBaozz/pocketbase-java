@@ -114,7 +114,8 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
     ObjectMapper mapper = RuntimeJson.create();
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
+      FilePermissionSupport.secureTree(dataDir);
       String secret = readOrCreateSecret(dataDir.resolve("pb_secret"));
       RelationalStorageEngine engine =
           new RelationalStorageEngine(
@@ -133,6 +134,8 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
                 .put("email", bootstrapEmail)
                 .put("password", bootstrapPassword));
       }
+      FilePermissionSupport.secureTree(dataDir);
+      FilePermissionSupport.secureSqliteFiles(dataDir);
       return engine;
     } catch (IOException e) {
       throw new RuntimeException("failed to open relational engine", e);
@@ -141,12 +144,19 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
   private static String readOrCreateSecret(Path path) throws IOException {
     if (Files.exists(path)) {
-      return Files.readString(path, StandardCharsets.UTF_8).trim();
+      FilePermissionSupport.secureFile(path);
+      String existing = Files.readString(path, StandardCharsets.UTF_8).trim();
+      if (existing.length() < 32) {
+        throw new IOException("runtime token secret is too short");
+      }
+      return existing;
     }
     byte[] bytes = new byte[32];
     new SecureRandom().nextBytes(bytes);
     String secret = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    FilePermissionSupport.createPrivateFile(path);
     Files.writeString(path, secret, StandardCharsets.UTF_8);
+    FilePermissionSupport.secureFile(path);
     return secret;
   }
 
@@ -652,6 +662,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       createCollectionsTable(dsl);
       ensureCollectionMetadataColumns(dsl);
       createSuperusersTable(dsl);
+      createBootstrapGuardTable(dsl);
       createLogsTable(dsl);
       createMfasTable(dsl);
       createExternalAuthsTable(dsl);
@@ -827,6 +838,13 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         .constraints(
             DSL.constraint(DSL.name("pk__superusers")).primaryKey(DSL.name("id")),
             DSL.constraint(DSL.name("uk__superusers_email")).unique(DSL.name("email")))
+        .execute();
+  }
+
+  private void createBootstrapGuardTable(DSLContext dsl) {
+    dsl.createTableIfNotExists(DSL.name("_pb_bootstrap_guard"))
+        .column(DSL.name("id"), SQLDataType.VARCHAR(64).nullable(false))
+        .constraints(DSL.constraint(DSL.name("pk__pb_bootstrap_guard")).primaryKey(DSL.name("id")))
         .execute();
   }
 
@@ -1318,10 +1336,12 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
     try {
       result = executeSql(query);
     } catch (RuntimeException e) {
-      String message =
-          "Failed to execute query. Raw error:\n"
-              + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-      throw new ApiException(400, message, ApiErrors.invalidField("query", message));
+      SecuritySupport.logInternalFailure("execute relational SQL", e);
+      String message = "Failed to execute query.";
+      throw new ApiException(
+          400,
+          message,
+          ApiErrors.invalidField("query", "The SQL statement could not be executed."));
     }
 
     Map<String, Object> response = new LinkedHashMap<>();
@@ -1474,7 +1494,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
         var queries = database.dsl().parser().parse(sql);
         return database.dsl().execute(queries.queries()[0]);
       } catch (Exception e) {
-        throw new IllegalArgumentException("Invalid SQL statement: " + e.getMessage(), e);
+        throw new IllegalArgumentException("Invalid SQL statement.", e);
       }
     }
     throw new IllegalArgumentException("Unsupported SQL statement.");
@@ -1496,7 +1516,7 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       // the parser field below when building the response columns.
       result = database.dsl().fetch(query.toString());
     } catch (Exception e) {
-      throw new IllegalArgumentException("Invalid SQL SELECT statement: " + e.getMessage(), e);
+      throw new IllegalArgumentException("Invalid SQL SELECT statement.", e);
     }
     List<Map<String, Object>> columns = new ArrayList<>();
     for (int index = 0; index < result.fields().length; index++) {

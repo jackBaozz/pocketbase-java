@@ -6,8 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiErrors;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.BackupOperationGuard;
+import io.github.jackbaozz.pocketbase.server.internal.FilePermissionSupport;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
+import io.github.jackbaozz.pocketbase.server.internal.SecuritySupport;
 import io.github.jackbaozz.pocketbase.server.internal.Unsafe;
 import io.github.jackbaozz.pocketbase.server.spi.FileStorageProvider;
 import io.github.jackbaozz.pocketbase.server.spi.StorageProviderFactory;
@@ -48,6 +50,9 @@ import java.util.zip.ZipOutputStream;
 public class BackupRepository extends BaseRepository {
 
   private static final String SNAPSHOT_ENTRY = "relational-backup.json";
+  private static final int MAX_BACKUP_ENTRIES = 10_000;
+  private static final long MAX_BACKUP_UNCOMPRESSED_BYTES = 512L << 20;
+  private static final long MAX_SNAPSHOT_BYTES = 64L << 20;
 
   private final Path dataDir;
   private final BackupOperationGuard backupOperations = new BackupOperationGuard();
@@ -64,11 +69,12 @@ public class BackupRepository extends BaseRepository {
     }
     try {
       Path backupsDir = dataDir.resolve("backups");
-      Files.createDirectories(backupsDir);
+      FilePermissionSupport.secureDirectory(dataDir);
+      FilePermissionSupport.secureDirectory(backupsDir);
       List<Map<String, Object>> items = new ArrayList<>();
       try (var stream = Files.list(backupsDir)) {
         stream
-            .filter(p -> p.toString().endsWith(".zip"))
+            .filter(p -> !Files.isSymbolicLink(p) && p.toString().endsWith(".zip"))
             .forEach(
                 p -> {
                   try {
@@ -152,11 +158,14 @@ public class BackupRepository extends BaseRepository {
         if (s3.get().stat(name).isPresent()) {
           throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
         }
+        FilePermissionSupport.secureDirectory(dataDir);
         Path tempFile = Files.createTempFile(dataDir, ".create-backup-", ".zip");
         try {
+          FilePermissionSupport.secureFile(tempFile);
           try (OutputStream output = Files.newOutputStream(tempFile)) {
             writeBackupZip(output);
           }
+          FilePermissionSupport.secureFile(tempFile);
           long size = Files.size(tempFile);
           try (InputStream input = Files.newInputStream(tempFile)) {
             s3.get().put(name, input, size, "application/zip");
@@ -169,7 +178,8 @@ public class BackupRepository extends BaseRepository {
       }
 
       Path backupsDir = dataDir.resolve("backups");
-      Files.createDirectories(backupsDir);
+      FilePermissionSupport.secureDirectory(dataDir);
+      FilePermissionSupport.secureDirectory(backupsDir);
       Path backupFile = backupsDir.resolve(name);
       if (Files.exists(backupFile)) {
         throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
@@ -179,6 +189,7 @@ public class BackupRepository extends BaseRepository {
       try {
         writeBackupZip(temporary);
         publishBackup(temporary, backupFile);
+        FilePermissionSupport.secureFile(backupFile);
         temporary = null;
       } finally {
         deleteTemporaryBackup(temporary);
@@ -189,7 +200,7 @@ public class BackupRepository extends BaseRepository {
     } catch (ApiException e) {
       throw e;
     } catch (IOException e) {
-      throw new ApiException(400, "Failed to create backup: " + e.getMessage());
+      throw internalFailure(400, "Failed to create backup.", "create backup", e);
     }
   }
 
@@ -211,7 +222,8 @@ public class BackupRepository extends BaseRepository {
       }
 
       Path backupsDir = dataDir.resolve("backups");
-      Files.createDirectories(backupsDir);
+      FilePermissionSupport.secureDirectory(dataDir);
+      FilePermissionSupport.secureDirectory(backupsDir);
 
       String name = sanitizedBackupName(filename);
 
@@ -220,14 +232,16 @@ public class BackupRepository extends BaseRepository {
         throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("file"));
       }
       temporary = Files.createTempFile(backupsDir, ".upload-backup-", ".tmp");
+      FilePermissionSupport.secureFile(temporary);
       Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING);
       publishBackup(temporary, targetBackupFile);
+      FilePermissionSupport.secureFile(targetBackupFile);
       temporary = null;
       return backupItem(name, bytes.length, Files.getLastModifiedTime(targetBackupFile).toMillis());
     } catch (ApiException e) {
       throw e;
     } catch (IOException e) {
-      throw new ApiException(400, "Failed to upload backup: " + e.getMessage());
+      throw internalFailure(400, "Failed to upload backup.", "upload backup", e);
     } finally {
       deleteTemporaryBackup(temporary);
     }
@@ -262,7 +276,9 @@ public class BackupRepository extends BaseRepository {
       return cachedS3BackupFile(s3.get(), key);
     }
     Path backup = dataDir.resolve("backups").resolve(key);
-    return Files.exists(backup) && Files.isRegularFile(backup) ? backup : null;
+    return !Files.isSymbolicLink(backup) && Files.exists(backup) && Files.isRegularFile(backup)
+        ? backup
+        : null;
   }
 
   private Path backupFileRequired(String key) {
@@ -360,21 +376,25 @@ public class BackupRepository extends BaseRepository {
       return null;
     }
     try (InputStream stream = input.get()) {
+      FilePermissionSupport.secureDirectory(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir.resolve("backups"));
       Path cacheDir = dataDir.resolve("backups").resolve(".s3-cache");
-      Files.createDirectories(cacheDir);
+      FilePermissionSupport.secureDirectory(cacheDir);
       Path cached = cacheDir.resolve(key).normalize();
       if (!cached.startsWith(cacheDir.normalize())) {
         throw invalidBackupArchive();
       }
       Files.copy(stream, cached, StandardCopyOption.REPLACE_EXISTING);
+      FilePermissionSupport.secureFile(cached);
       return cached;
     } catch (IOException e) {
-      throw new ApiException(400, "Failed to download backup: " + e.getMessage());
+      throw internalFailure(400, "Failed to download backup.", "download backup", e);
     }
   }
 
   private void deleteCachedS3Backup(String key) {
     try {
+      FilePermissionSupport.secureDirectory(dataDir.resolve("backups").resolve(".s3-cache"));
       Files.deleteIfExists(
           dataDir.resolve("backups").resolve(".s3-cache").resolve(key).normalize());
     } catch (IOException ignored) {
@@ -402,7 +422,8 @@ public class BackupRepository extends BaseRepository {
     } catch (ApiException e) {
       throw e;
     } catch (Exception e) {
-      throw new ApiException(400, "Failed to initialize S3 backup storage: " + e.getMessage());
+      throw internalFailure(
+          400, "Failed to initialize S3 backup storage.", "initialize S3 backup storage", e);
     }
   }
 
@@ -463,7 +484,7 @@ public class BackupRepository extends BaseRepository {
       snapshot.put("tables", tables);
       return snapshot;
     } catch (SQLException e) {
-      throw new ApiException(400, "Failed to create backup snapshot: " + e.getMessage());
+      throw internalFailure(400, "Failed to create backup snapshot.", "create backup snapshot", e);
     } finally {
       if (conn != null) {
         try {
@@ -491,6 +512,9 @@ public class BackupRepository extends BaseRepository {
         Map<String, Object> object = new LinkedHashMap<>();
         object.put("type", rs.getString("type"));
         object.put("name", rs.getString("name"));
+        if ("_pb_bootstrap_guard".equals(object.get("name"))) {
+          continue;
+        }
         object.put("tblName", rs.getString("tbl_name"));
         object.put("sql", rs.getString("sql"));
         objects.add(object);
@@ -543,6 +567,9 @@ public class BackupRepository extends BaseRepository {
     Collections.sort(views);
 
     for (String table : tables) {
+      if ("_pb_bootstrap_guard".equals(table)) {
+        continue;
+      }
       objects.add(
           databaseObject(
               "table", table, table, createJdbcTableSql(metadata, catalog, schema, table)));
@@ -948,11 +975,13 @@ public class BackupRepository extends BaseRepository {
   private Map<String, Object> readSnapshot(Path backup) {
     try (InputStream input = Files.newInputStream(backup);
         ZipInputStream zip = new ZipInputStream(input)) {
+      ZipBudget budget = new ZipBudget();
       ZipEntry entry;
       while ((entry = zip.getNextEntry()) != null) {
+        budget.begin(entry);
         if (SNAPSHOT_ENTRY.equals(entry.getName())) {
           ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-          zip.transferTo(bytes);
+          drainEntry(zip, budget, bytes, MAX_SNAPSHOT_BYTES);
           Map<String, Object> snapshot =
               mapper.readValue(new ByteArrayInputStream(bytes.toByteArray()), new TypeReference<Map<String, Object>>() {
               });
@@ -961,6 +990,7 @@ public class BackupRepository extends BaseRepository {
           }
           return snapshot;
         }
+        drainEntry(zip, budget, OutputStream.nullOutputStream(), MAX_BACKUP_UNCOMPRESSED_BYTES);
         zip.closeEntry();
       }
     } catch (ApiException e) {
@@ -1024,7 +1054,7 @@ public class BackupRepository extends BaseRepository {
       if (e instanceof ApiException apiException) {
         throw apiException;
       }
-      throw new ApiException(400, "Failed to restore backup: " + e.getMessage());
+      throw internalFailure(400, "Failed to restore backup.", "restore backup", e);
     } finally {
       if (conn != null) {
         try {
@@ -1056,6 +1086,9 @@ public class BackupRepository extends BaseRepository {
     for (Map<String, Object> object : current) {
       if ("table".equals(object.get("type"))) {
         String name = String.valueOf(object.get("name"));
+        if ("_pb_bootstrap_guard".equals(name)) {
+          continue;
+        }
         validateSqlIdentifier(name);
         stmt.execute("DROP TABLE IF EXISTS " + database.quoteIdentifier(name));
       }
@@ -1144,7 +1177,7 @@ public class BackupRepository extends BaseRepository {
     }
     try (Stream<Path> paths = Files.walk(storage)) {
       for (Path path : paths.filter(Files::isRegularFile).collect(Collectors.toList())) {
-        if (!Files.exists(path)) {
+        if (!Files.exists(path) || Files.isSymbolicLink(path)) {
           continue;
         }
         String entryName = dataDir.relativize(path).toString().replace('\\', '/');
@@ -1164,12 +1197,15 @@ public class BackupRepository extends BaseRepository {
     Path storage = dataDir.resolve("storage");
     Path staging = null;
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       staging = Files.createTempDirectory(dataDir, ".restore-storage-");
+      FilePermissionSupport.secureDirectory(staging);
       try (InputStream input = Files.newInputStream(backup);
           ZipInputStream zip = new ZipInputStream(input)) {
+        ZipBudget budget = new ZipBudget();
         ZipEntry entry;
         while ((entry = zip.getNextEntry()) != null) {
+          budget.begin(entry);
           String name = entry.getName();
           if (name != null && name.startsWith("storage/")) {
             Path out = safeStorageTarget(staging, name.substring("storage/".length()));
@@ -1177,17 +1213,23 @@ public class BackupRepository extends BaseRepository {
               Files.createDirectories(out);
             } else {
               Files.createDirectories(out.getParent());
-              Files.copy(zip, out);
+              try (OutputStream output = Files.newOutputStream(out)) {
+                drainEntry(zip, budget, output, MAX_BACKUP_UNCOMPRESSED_BYTES);
+              }
             }
+          } else {
+            drainEntry(zip, budget, OutputStream.nullOutputStream(), MAX_BACKUP_UNCOMPRESSED_BYTES);
           }
           zip.closeEntry();
         }
       }
       deleteRecursively(storage);
       Files.move(staging, storage, StandardCopyOption.REPLACE_EXISTING);
+      FilePermissionSupport.secureTree(storage);
       staging = null;
     } catch (IOException e) {
-      throw new ApiException(400, "Failed to restore backup storage: " + e.getMessage());
+      throw internalFailure(
+          400, "Failed to restore backup storage.", "restore backup storage", e);
     } finally {
       deleteRecursively(staging);
     }
@@ -1197,12 +1239,15 @@ public class BackupRepository extends BaseRepository {
     Path storage = dataDir.resolve("storage");
     try (InputStream input = Files.newInputStream(backup);
         ZipInputStream zip = new ZipInputStream(input)) {
+      ZipBudget budget = new ZipBudget();
       ZipEntry entry;
       while ((entry = zip.getNextEntry()) != null) {
+        budget.begin(entry);
         String name = entry.getName();
         if (name != null && name.startsWith("storage/")) {
           safeStorageTarget(storage, name.substring("storage/".length()));
         }
+        drainEntry(zip, budget, OutputStream.nullOutputStream(), MAX_BACKUP_UNCOMPRESSED_BYTES);
         zip.closeEntry();
       }
     } catch (ApiException e) {
@@ -1226,6 +1271,46 @@ public class BackupRepository extends BaseRepository {
     return out;
   }
 
+  private void drainEntry(InputStream input, ZipBudget budget, OutputStream output, long outputLimit)
+      throws IOException {
+    byte[] buffer = new byte[8192];
+    long written = 0L;
+    int read;
+    while ((read = input.read(buffer)) >= 0) {
+      if (read == 0) {
+        continue;
+      }
+      budget.add(read);
+      written += read;
+      if (written > outputLimit) {
+        throw invalidBackupArchive();
+      }
+      output.write(buffer, 0, read);
+    }
+  }
+
+  private static final class ZipBudget {
+    private int entries;
+    private long bytes;
+
+    private void begin(ZipEntry entry) {
+      if (++entries > MAX_BACKUP_ENTRIES) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+      long declaredSize = entry.getSize();
+      if (declaredSize > MAX_BACKUP_UNCOMPRESSED_BYTES) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+    }
+
+    private void add(long count) {
+      if (count < 0 || bytes > MAX_BACKUP_UNCOMPRESSED_BYTES - count) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+      bytes += count;
+    }
+  }
+
   private ApiException invalidBackupArchive() {
     return new ApiException(
         400, "Invalid backup archive.", ApiErrors.invalidField("file", "Invalid backup archive."));
@@ -1240,7 +1325,12 @@ public class BackupRepository extends BaseRepository {
         Files.deleteIfExists(item);
       }
     } catch (IOException e) {
-      throw new ApiException(400, "Failed to clear storage files: " + e.getMessage());
+      throw internalFailure(400, "Failed to clear storage files.", "clear storage files", e);
     }
+  }
+
+  private ApiException internalFailure(int status, String message, String operation, Throwable e) {
+    SecuritySupport.logInternalFailure(operation, e);
+    return new ApiException(status, message);
   }
 }

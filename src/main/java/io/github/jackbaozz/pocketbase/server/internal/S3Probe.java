@@ -38,7 +38,7 @@ public final class S3Probe {
       throw invalidError("filesystem", "Must be either storage or backups.");
     }
     if (!truthy(config.get("enabled"))) {
-      throw rawError("S3 " + target + " filesystem is not enabled");
+      throw invalidError("filesystem", "S3 " + target + " filesystem is not enabled.");
     }
 
     S3Config s3 = S3Config.from(config);
@@ -57,14 +57,14 @@ public final class S3Probe {
       send("DELETE", s3, key, "", new byte[0]);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-      throw rawError("interrupted while testing S3 filesystem");
+      throw invalidError("filesystem", "S3 test was interrupted.");
     } catch (Exception e) {
       try {
         send("DELETE", s3, key, "", new byte[0]);
       } catch (Exception ignored) {
         // best-effort cleanup
       }
-      throw rawError(e.getMessage());
+      throw rawError(e);
     }
   }
 
@@ -248,12 +248,12 @@ public final class S3Probe {
         400, "Failed to test the S3 filesystem.", ApiErrors.requiredField(field));
   }
 
-  private static ApiException rawError(String message) {
-    String detail = message == null || message.isBlank() ? "Unknown S3 error." : message;
+  private static ApiException rawError(Throwable failure) {
+    SecuritySupport.logInternalFailure("s3 probe", failure);
     return new ApiException(
         400,
-        "Failed to test the S3 filesystem. Raw error: \n" + detail,
-        ApiErrors.invalidField("filesystem", detail));
+        "Failed to test the S3 filesystem.",
+        ApiErrors.invalidField("filesystem", "S3 filesystem test failed."));
   }
 
   private record S3Config(
@@ -297,7 +297,7 @@ public final class S3Probe {
       String scheme = endpointUri.getScheme() == null ? "https" : endpointUri.getScheme();
       String endpointHost = endpointUri.getHost();
       if (endpointHost == null || endpointHost.isBlank()) {
-        throw rawError("invalid S3 endpoint");
+        throw invalidError("endpoint", "Invalid S3 endpoint.");
       }
 
       String host = endpointHost;

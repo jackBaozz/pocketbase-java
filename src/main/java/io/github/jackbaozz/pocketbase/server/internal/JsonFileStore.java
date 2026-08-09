@@ -64,6 +64,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
   private static final int MAX_ACTIVITY_LOGS = 10_000;
   private static final int SQL_MAX_QUERY_LENGTH = 5000;
   private static final int SQL_MAX_ROWS = 1000;
+  private static final int MAX_BACKUP_ENTRIES = 10_000;
+  private static final long MAX_BACKUP_UNCOMPRESSED_BYTES = 512L << 20;
   private static final int OTP_MAX_FAILED_ATTEMPTS = 5;
   private static final Duration OTP_ATTEMPT_WINDOW = Duration.ofMinutes(3);
   private static final String REDACTED_SECRET = "******";
@@ -130,10 +132,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
   public static JsonFileStore open(Path dataDir, String bootstrapEmail, String bootstrapPassword)
       throws IOException {
     ObjectMapper mapper = RuntimeJson.create();
-    Files.createDirectories(dataDir);
-    Files.createDirectories(dataDir.resolve("records"));
-    Files.createDirectories(dataDir.resolve("storage"));
-    Files.createDirectories(dataDir.resolve("backups"));
+    FilePermissionSupport.secureDirectory(dataDir);
+    FilePermissionSupport.secureDirectory(dataDir.resolve("records"));
+    FilePermissionSupport.secureDirectory(dataDir.resolve("storage"));
+    FilePermissionSupport.secureDirectory(dataDir.resolve("backups"));
+    FilePermissionSupport.secureTree(dataDir);
     String secret = readOrCreateSecret(dataDir.resolve("pb_secret"));
     JsonFileStore store = new JsonFileStore(dataDir, mapper, new TokenService(mapper, secret));
     store.load();
@@ -148,6 +151,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       body.put("verified", true);
       store.createSuperuser(body);
     }
+    FilePermissionSupport.secureTree(dataDir);
     return store;
   }
 
@@ -491,10 +495,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     try {
       result = executeSql(query);
     } catch (RuntimeException e) {
-      String message =
-          "Failed to execute query. Raw error:\n"
-              + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-      throw new ApiException(400, message, ApiErrors.invalidField("query", message));
+      SecuritySupport.logInternalFailure("execute JSONL SQL", e);
+      String message = "Failed to execute query.";
+      throw new ApiException(
+          400,
+          message,
+          ApiErrors.invalidField("query", "The SQL statement could not be executed."));
     }
 
     return orderedMap(
@@ -529,10 +535,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     try {
       return previewViewQuery(query, 10);
     } catch (RuntimeException e) {
-      String message =
-          "Invalid view query. Raw error: \n"
-              + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-      throw new ApiException(400, message, Map.of());
+      SecuritySupport.logInternalFailure("validate JSONL view query", e);
+      throw new ApiException(400, "Invalid view query.", Map.of());
     }
   }
 
@@ -1959,10 +1963,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       saveAll();
       cleanupRemovedCollectionData(nextIds);
     } catch (RuntimeException e) {
+      SecuritySupport.logInternalFailure("import JSONL collections", e);
       throw new ApiException(
           400,
           "Failed to import collections.",
-          fieldError("collections", "validation_invalid_value", "Raw error:n" + e.getMessage()));
+          fieldError(
+              "collections",
+              "validation_invalid_value",
+              "The collections could not be imported."));
     }
 
     return Map.of("collections", newOrUpdated, "deletedCollections", deleted);
@@ -2421,7 +2429,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       try (Stream<Path> paths = Files.list(backupsDir)) {
         return paths
             .filter(
-                path -> Files.isRegularFile(path) && path.getFileName().toString().endsWith(".zip"))
+                path -> !Files.isSymbolicLink(path)
+                    && Files.isRegularFile(path)
+                    && path.getFileName().toString().endsWith(".zip"))
             .map(this::backupInfo)
             .sorted(
                 (left, right) -> String.valueOf(right.get("modified"))
@@ -2454,6 +2464,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
               zipDirectory(dataDir, zip);
             }
             publishBackup(temporary, backup);
+            FilePermissionSupport.secureFile(backup);
             temporary = null;
             return backupInfo(backup);
           } catch (IOException e) {
@@ -2479,6 +2490,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       temporary = Files.createTempFile(backupsDir, ".upload-backup-", ".tmp");
       Files.write(temporary, bytes, StandardOpenOption.TRUNCATE_EXISTING);
       publishBackup(temporary, backup);
+      FilePermissionSupport.secureFile(backup);
       temporary = null;
       return backupInfo(backup);
     } catch (IOException e) {
@@ -2490,7 +2502,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   public synchronized Path backupFile(String key) {
     Path backup = backupPath(key);
-    return Files.exists(backup) && Files.isRegularFile(backup) ? backup : null;
+    return !Files.isSymbolicLink(backup) && Files.exists(backup) && Files.isRegularFile(backup)
+        ? backup
+        : null;
   }
 
   public synchronized void deleteBackup(String key) {
@@ -2532,11 +2546,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             copyDirectory(temp, dataDir);
             if (!currentSecret.isBlank()) {
               Files.writeString(secretFile, currentSecret, StandardCharsets.UTF_8);
+              FilePermissionSupport.secureFile(secretFile);
             }
-            Files.createDirectories(recordsDir);
-            Files.createDirectories(storageDir);
-            Files.createDirectories(backupsDir);
+            FilePermissionSupport.secureDirectory(recordsDir);
+            FilePermissionSupport.secureDirectory(storageDir);
+            FilePermissionSupport.secureDirectory(backupsDir);
             load();
+            FilePermissionSupport.secureTree(dataDir);
             return Map.of("restored", safeKey);
           } catch (IOException e) {
             throw new IllegalStateException("failed to restore backup", e);
@@ -3058,9 +3074,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     if (fields.stream().allMatch(this::protectedFileField)) {
       requireProtectedFileAccess(collection, record, request, principal);
     }
-    Path file = storageDir.resolve(collection.id).resolve(recordId).resolve(filename).normalize();
-    Path recordDir = storageDir.resolve(collection.id).resolve(recordId).normalize();
-    if (!file.startsWith(recordDir)) {
+    Path collectionDir = storageDir.resolve(collection.id).normalize();
+    Path recordDir = collectionDir.resolve(recordId).normalize();
+    Path file = recordDir.resolve(filename).normalize();
+    if (!file.startsWith(recordDir)
+        || Files.isSymbolicLink(storageDir)
+        || Files.isSymbolicLink(collectionDir)
+        || Files.isSymbolicLink(recordDir)
+        || Files.isSymbolicLink(file)) {
       return null;
     }
     return file;
@@ -4234,9 +4255,21 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       return;
     }
     String recordId = String.valueOf(record.get("id"));
-    Path recordDir = storageDir.resolve(collection.id).resolve(recordId);
+    Path collectionDir = storageDir.resolve(collection.id).normalize();
+    Path recordDir = collectionDir.resolve(recordId).normalize();
     try {
-      Files.createDirectories(recordDir);
+      if (!collectionDir.startsWith(storageDir.normalize())
+          || Files.isSymbolicLink(storageDir)
+          || Files.isSymbolicLink(collectionDir)
+          || Files.isSymbolicLink(recordDir)) {
+        throw new ApiException(
+            400,
+            "Invalid upload filename.",
+            ApiErrors.invalidField("file", "Invalid upload filename."));
+      }
+      FilePermissionSupport.secureDirectory(storageDir);
+      FilePermissionSupport.secureDirectory(collectionDir);
+      FilePermissionSupport.secureDirectory(recordDir);
       for (Map.Entry<String, UploadedFile> entry : changes.writes().entrySet()) {
         Path target = recordDir.resolve(entry.getKey()).normalize();
         if (!target.startsWith(recordDir.normalize())) {
@@ -4246,6 +4279,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
               ApiErrors.invalidField("file", "Invalid upload filename."));
         }
         Files.write(target, entry.getValue().bytes(), StandardOpenOption.CREATE_NEW);
+        FilePermissionSupport.secureFile(target);
       }
       for (List<String> names : changes.removals().values()) {
         for (String name : names) {
@@ -5177,7 +5211,8 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         autoBackups =
             paths
                 .filter(
-                    path -> Files.isRegularFile(path)
+                    path -> !Files.isSymbolicLink(path)
+                        && Files.isRegularFile(path)
                         && path.getFileName().toString().startsWith(AUTO_BACKUP_PREFIX))
                 .sorted(
                     (left, right) -> {
@@ -5409,15 +5444,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       }
       SchemaIdSupport.assignMissingFieldIds(collection.fields, List.of());
     } catch (RuntimeException e) {
-      String rawError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-      if (rawError.length() > 500) {
-        rawError = rawError.substring(0, 500);
-      }
+      SecuritySupport.logInternalFailure("prepare JSONL view collection", e);
       throw new ApiException(
           400,
           message,
           ApiErrors.fieldError(
-              "viewQuery", "validation_invalid_view_query", "Invalid query - " + rawError));
+              "viewQuery",
+              "validation_invalid_view_query",
+              "Invalid query."));
     }
   }
 
@@ -6239,6 +6273,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     try (Stream<Path> paths = Files.walk(root)) {
       for (Path path : paths
           .filter(Files::isRegularFile)
+          .filter(path -> !Files.isSymbolicLink(path))
           .filter(path -> !isBackupExcluded(path))
           .collect(Collectors.toList())) {
         if (!Files.exists(path)) {
@@ -6270,14 +6305,18 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
     try (InputStream input = Files.newInputStream(backup);
         ZipInputStream zip = new ZipInputStream(input)) {
+      ZipBudget budget = new ZipBudget();
       ZipEntry entry;
       while ((entry = zip.getNextEntry()) != null) {
+        budget.begin(entry);
         Path out = safeZipTarget(target, entry);
         if (entry.isDirectory()) {
           Files.createDirectories(out);
         } else {
           Files.createDirectories(out.getParent());
-          Files.copy(zip, out);
+          try (OutputStream output = Files.newOutputStream(out)) {
+            drainZipEntry(zip, budget, output);
+          }
         }
         zip.closeEntry();
       }
@@ -6285,11 +6324,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
   }
 
   private void validateZipEntries(ZipInputStream zip, Path target) throws IOException {
+    ZipBudget budget = new ZipBudget();
     ZipEntry entry;
     boolean foundEntry = false;
     while ((entry = zip.getNextEntry()) != null) {
       foundEntry = true;
+      budget.begin(entry);
       safeZipTarget(target, entry);
+      drainZipEntry(zip, budget, OutputStream.nullOutputStream());
       zip.closeEntry();
     }
     if (!foundEntry) {
@@ -6314,6 +6356,41 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       throw invalidBackupArchive();
     }
     return out;
+  }
+
+  private void drainZipEntry(InputStream input, ZipBudget budget, OutputStream output)
+      throws IOException {
+    byte[] buffer = new byte[8192];
+    int read;
+    while ((read = input.read(buffer)) >= 0) {
+      if (read == 0) {
+        continue;
+      }
+      budget.add(read);
+      output.write(buffer, 0, read);
+    }
+  }
+
+  private static final class ZipBudget {
+    private int entries;
+    private long bytes;
+
+    private void begin(ZipEntry entry) {
+      if (++entries > MAX_BACKUP_ENTRIES) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+      long declaredSize = entry.getSize();
+      if (declaredSize > MAX_BACKUP_UNCOMPRESSED_BYTES) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+    }
+
+    private void add(long count) {
+      if (count < 0 || bytes > MAX_BACKUP_UNCOMPRESSED_BYTES - count) {
+        throw new ApiException(400, "Invalid backup archive.");
+      }
+      bytes += count;
+    }
   }
 
   private ApiException invalidBackupArchive() {
@@ -6380,8 +6457,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveSettings() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(settingsFile.toFile(), settings);
+      FilePermissionSupport.secureFile(settingsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save settings", e);
     }
@@ -6389,8 +6467,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveAuthOrigins() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(authOriginsFile.toFile(), authOrigins);
+      FilePermissionSupport.secureFile(authOriginsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save auth origins", e);
     }
@@ -6398,8 +6477,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveLogs() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(logsFile.toFile(), logs);
+      FilePermissionSupport.secureFile(logsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save logs", e);
     }
@@ -6407,8 +6487,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveAuthRequests() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(authRequestsFile.toFile(), authRequests);
+      FilePermissionSupport.secureFile(authRequestsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save auth requests", e);
     }
@@ -6416,8 +6497,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveExternalAuths() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(externalAuthsFile.toFile(), externalAuths);
+      FilePermissionSupport.secureFile(externalAuthsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save external auths", e);
     }
@@ -6425,8 +6507,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveMfas() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(mfasFile.toFile(), mfas);
+      FilePermissionSupport.secureFile(mfasFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save mfas", e);
     }
@@ -6434,8 +6517,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveOtps() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       mapper.writerWithDefaultPrettyPrinter().writeValue(otpsFile.toFile(), otps);
+      FilePermissionSupport.secureFile(otpsFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save otps", e);
     }
@@ -6443,12 +6527,13 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void saveSchema() {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       Map<String, Object> root = new LinkedHashMap<>();
       root.put(
           "collections",
           collectionsByName.values().stream().map(this::collectionPersistenceMap).toList());
       mapper.writerWithDefaultPrettyPrinter().writeValue(schemaFile.toFile(), root);
+      FilePermissionSupport.secureFile(schemaFile);
     } catch (IOException e) {
       throw new IllegalStateException("failed to save schema", e);
     }
@@ -6476,13 +6561,14 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       }
     }
     try {
-      Files.createDirectories(recordsDir);
+      FilePermissionSupport.secureDirectory(recordsDir);
       try (java.io.BufferedWriter writer = Files.newBufferedWriter(recordsFile(collection))) {
         for (Map<String, Object> record : records(collection)) {
           writer.write(mapper.writeValueAsString(record));
           writer.newLine();
         }
       }
+      FilePermissionSupport.secureFile(recordsFile(collection));
     } catch (IOException e) {
       throw new IllegalStateException("failed to save records", e);
     }
@@ -6505,10 +6591,17 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private static String readOrCreateSecret(Path secretFile) throws IOException {
     if (Files.exists(secretFile)) {
-      return Files.readString(secretFile, StandardCharsets.UTF_8).trim();
+      FilePermissionSupport.secureFile(secretFile);
+      String existing = Files.readString(secretFile, StandardCharsets.UTF_8).trim();
+      if (existing.length() < 32) {
+        throw new IOException("runtime token secret is too short");
+      }
+      return existing;
     }
     String secret = IdGenerator.prefixed("secret_") + IdGenerator.prefixed("_");
+    FilePermissionSupport.createPrivateFile(secretFile);
     Files.writeString(secretFile, secret, StandardCharsets.UTF_8);
+    FilePermissionSupport.secureFile(secretFile);
     return secret;
   }
 

@@ -70,13 +70,20 @@ public final class JooqDatabase implements AutoCloseable {
     switch (engine) {
       case SQLITE -> {
         config.setMaximumPoolSize(4);
-        config.setJdbcUrl("jdbc:sqlite:" + dataDir.resolve("pocketbase.db").toAbsolutePath());
+        Path sqliteFile = dataDir.resolve("pocketbase.db").toAbsolutePath();
+        try {
+          FilePermissionSupport.secureDirectory(dataDir);
+          FilePermissionSupport.createPrivateFile(sqliteFile);
+        } catch (java.io.IOException e) {
+          throw new ApiException(500, "Failed to prepare SQLite storage.");
+        }
+        config.setJdbcUrl("jdbc:sqlite:" + sqliteFile);
         // SQLite tuning (per-connection via HikariCP init SQL):
-        //   • WAL journal mode — allows concurrent readers during a write.
-        //   • busy_timeout 5000ms — wait instead of erroring on lock contention.
-        //   • synchronous NORMAL — WAL + NORMAL is crash-safe and much faster than FULL.
-        //   • foreign_keys ON — enforce referential integrity.
-        //   • temp_store MEMORY — avoid temp tables hitting disk.
+        // • WAL journal mode — allows concurrent readers during a write.
+        // • busy_timeout 5000ms — wait instead of erroring on lock contention.
+        // • synchronous NORMAL — WAL + NORMAL is crash-safe and much faster than FULL.
+        // • foreign_keys ON — enforce referential integrity.
+        // • temp_store MEMORY — avoid temp tables hitting disk.
         config.setConnectionInitSql(
             "PRAGMA journal_mode = WAL;"
                 + "PRAGMA busy_timeout = 5000;"
@@ -94,10 +101,10 @@ public final class JooqDatabase implements AutoCloseable {
         configureExternal(
             config, "mysql", "com.mysql.cj.jdbc.Driver", connectionDefaults);
         // MySQL connection tuning:
-        //   • utf8mb4 — full Unicode including 4-byte (emoji, CJK extensions).
-        //   • innodb_lock_wait_timeout 5s — fail fast on row lock contention.
-        //   • wait_timeout 600s — idle connections reaped after 10 min.
-        //   • SELECT 1 is cheaper than the default validation query.
+        // • utf8mb4 — full Unicode including 4-byte (emoji, CJK extensions).
+        // • innodb_lock_wait_timeout 5s — fail fast on row lock contention.
+        // • wait_timeout 600s — idle connections reaped after 10 min.
+        // • SELECT 1 is cheaper than the default validation query.
         config.setConnectionTestQuery("SELECT 1");
         config.addDataSourceProperty("cachePrepStmts", "true");
         config.addDataSourceProperty("prepStmtCacheSize", "250");
@@ -120,10 +127,10 @@ public final class JooqDatabase implements AutoCloseable {
         configureExternal(
             config, "postgres", "org.postgresql.Driver", connectionDefaults);
         // PostgreSQL connection tuning:
-        //   • lock_timeout 5s — fail fast on lock contention instead of hanging.
-        //   • idle_in_transaction_session_timeout 60s — kill leaked transactions.
-        //   • statement_timeout 30s — prevent runaway queries from holding connections.
-        //   • standard_conforming_strings ON — safe SQL string escaping.
+        // • lock_timeout 5s — fail fast on lock contention instead of hanging.
+        // • idle_in_transaction_session_timeout 60s — kill leaked transactions.
+        // • statement_timeout 30s — prevent runaway queries from holding connections.
+        // • standard_conforming_strings ON — safe SQL string escaping.
         config.setConnectionTestQuery("SELECT 1");
         config.addDataSourceProperty("reWriteBatchedInserts", "true");
         config.addDataSourceProperty("preparedStatementCacheQueries", "256");
@@ -138,6 +145,14 @@ public final class JooqDatabase implements AutoCloseable {
     }
 
     JooqDatabase database = new JooqDatabase(engine, new HikariDataSource(config));
+    if (engine == Engine.SQLITE) {
+      try {
+        FilePermissionSupport.secureSqliteFiles(dataDir);
+      } catch (java.io.IOException e) {
+        database.close();
+        throw new ApiException(500, "Failed to secure SQLite storage.");
+      }
+    }
     if (engine != Engine.SQLITE) {
       database.validateExternalConnection();
     }
@@ -181,12 +196,13 @@ public final class JooqDatabase implements AutoCloseable {
         }
       }
     } catch (SQLException | RuntimeException e) {
+      SecuritySupport.logInternalFailure(
+          "initialize " + engine.name().toLowerCase(Locale.ROOT) + " storage", e);
       throw new ApiException(
           400,
           "Failed to initialize "
               + engine.name().toLowerCase(Locale.ROOT)
-              + " storage. Verify the JDBC URL, database/schema, credentials, and server settings. Raw error: "
-              + e.getMessage());
+              + " storage. Verify the JDBC URL, database/schema, credentials, and server settings.");
     }
   }
 

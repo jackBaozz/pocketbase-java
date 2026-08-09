@@ -1,5 +1,6 @@
 package io.github.jackbaozz.pocketbase.server.internal.storage;
 
+import io.github.jackbaozz.pocketbase.server.internal.FilePermissionSupport;
 import io.github.jackbaozz.pocketbase.server.spi.FileStorageProvider;
 import java.io.IOException;
 import java.io.InputStream;
@@ -15,15 +16,21 @@ public class LocalFileStorageProvider implements FileStorageProvider {
   private final Path baseDir;
 
   public LocalFileStorageProvider(Path baseDir) {
-    this.baseDir = baseDir;
+    this.baseDir = baseDir.toAbsolutePath().normalize();
+    try {
+      FilePermissionSupport.secureDirectory(this.baseDir);
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to prepare local storage.", e);
+    }
   }
 
   @Override
   public void put(String key, InputStream stream, long length, String contentType) {
     Path target = resolveKey(key);
     try {
-      Files.createDirectories(target.getParent());
+      FilePermissionSupport.secureDirectory(target.getParent());
       Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING);
+      FilePermissionSupport.secureFile(target);
     } catch (IOException e) {
       throw new RuntimeException("Failed to write file to local storage: " + key, e);
     }
@@ -53,13 +60,14 @@ public class LocalFileStorageProvider implements FileStorageProvider {
 
   @Override
   public List<String> list(String prefix) {
-    Path dir = resolveKey(prefix);
+    Path dir = prefix == null || prefix.isBlank() ? baseDir : resolveKey(prefix);
     if (!Files.exists(dir) || !Files.isDirectory(dir)) {
       return List.of();
     }
     try (var stream = Files.walk(dir)) {
       return stream
           .filter(Files::isRegularFile)
+          .filter(path -> !Files.isSymbolicLink(path))
           .map(p -> baseDir.relativize(p).toString().replace('\\', '/'))
           .collect(Collectors.toList());
     } catch (IOException e) {
@@ -96,9 +104,20 @@ public class LocalFileStorageProvider implements FileStorageProvider {
   }
 
   private Path resolveKey(String key) {
-    if (key.contains("..") || key.startsWith("/") || key.startsWith("\\")) {
-      throw new IllegalArgumentException("Invalid key for local storage: " + key);
+    if (key == null || key.isBlank() || key.contains("..") || key.startsWith("/") || key.startsWith("\\")) {
+      throw new IllegalArgumentException("Invalid key for local storage.");
     }
-    return baseDir.resolve(key);
+    Path target = baseDir.resolve(key).normalize();
+    if (!target.startsWith(baseDir)) {
+      throw new IllegalArgumentException("Invalid key for local storage.");
+    }
+    Path current = baseDir;
+    for (Path part : baseDir.relativize(target)) {
+      current = current.resolve(part);
+      if (Files.isSymbolicLink(current)) {
+        throw new IllegalArgumentException("Invalid key for local storage.");
+      }
+    }
+    return target;
   }
 }

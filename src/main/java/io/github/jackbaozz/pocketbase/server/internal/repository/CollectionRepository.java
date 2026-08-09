@@ -26,6 +26,7 @@ import io.github.jackbaozz.pocketbase.server.internal.SchemaIdSupport;
 import io.github.jackbaozz.pocketbase.server.internal.SchemaMigrationPlanner;
 import io.github.jackbaozz.pocketbase.server.internal.SearchFieldValidationSupport;
 import io.github.jackbaozz.pocketbase.server.internal.SearchQuerySupport;
+import io.github.jackbaozz.pocketbase.server.internal.SecuritySupport;
 import io.github.jackbaozz.pocketbase.server.internal.SystemCollections;
 import io.github.jackbaozz.pocketbase.server.internal.Unsafe;
 import io.github.jackbaozz.pocketbase.server.internal.ViewQuerySupport;
@@ -280,7 +281,8 @@ public class CollectionRepository extends BaseRepository {
       }
     } catch (SQLException | IOException | DataAccessException e) {
       handleSqlConstraintException(e);
-      throw new ApiException(400, "Failed to create collection: " + e.getMessage());
+      SecuritySupport.logInternalFailure("create collection", e);
+      throw new ApiException(400, "Failed to create collection.");
     } finally {
       if (conn != null) {
         try {
@@ -460,7 +462,8 @@ public class CollectionRepository extends BaseRepository {
 
     } catch (SQLException | IOException | DataAccessException e) {
       handleSqlConstraintException(e);
-      throw new ApiException(400, "Failed to update collection: " + e.getMessage());
+      SecuritySupport.logInternalFailure("update collection", e);
+      throw new ApiException(400, "Failed to update collection.");
     } finally {
       if (conn != null) {
         try {
@@ -532,7 +535,8 @@ public class CollectionRepository extends BaseRepository {
       }
 
     } catch (SQLException | DataAccessException e) {
-      throw new ApiException(400, "Failed to delete collection: " + e.getMessage());
+      SecuritySupport.logInternalFailure("delete collection", e);
+      throw new ApiException(400, "Failed to delete collection.");
     } finally {
       if (conn != null) {
         try {
@@ -555,7 +559,8 @@ public class CollectionRepository extends BaseRepository {
         deleteAuthSupportRecords(database.dsl(), schema.id);
       }
     } catch (DataAccessException e) {
-      throw new ApiException(400, "Failed to truncate collection: " + e.getMessage());
+      SecuritySupport.logInternalFailure("truncate collection", e);
+      throw new ApiException(400, "Failed to truncate collection.");
     }
   }
 
@@ -824,10 +829,8 @@ public class CollectionRepository extends BaseRepository {
     try {
       return previewViewQuery(query, MAX_VIEW_ROWS);
     } catch (RuntimeException e) {
-      String message =
-          "Invalid view query. Raw error: \n"
-              + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-      throw new ApiException(400, message, Map.of());
+      SecuritySupport.logInternalFailure("validate relational view query", e);
+      throw new ApiException(400, "Invalid view query.", Map.of());
     }
   }
 
@@ -1080,10 +1083,8 @@ public class CollectionRepository extends BaseRepository {
     try (Statement statement = conn.createStatement()) {
       statement.execute(sql);
     } catch (SQLException e) {
-      throw indexApiException(
-          message,
-          index,
-          e.getMessage() == null ? "Invalid CREATE INDEX expression." : e.getMessage());
+      SecuritySupport.logInternalFailure("create collection index", e);
+      throw indexApiException(message, index, "Invalid CREATE INDEX expression.");
     }
   }
 
@@ -1286,15 +1287,14 @@ public class CollectionRepository extends BaseRepository {
       }
       SchemaIdSupport.assignMissingFieldIds(schema.fields, List.of());
     } catch (RuntimeException e) {
-      String rawError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-      if (rawError.length() > 500) {
-        rawError = rawError.substring(0, 500);
-      }
+      SecuritySupport.logInternalFailure("prepare relational view collection", e);
       throw new ApiException(
           400,
           message,
           ApiErrors.fieldError(
-              "viewQuery", "validation_invalid_view_query", "Invalid query - " + rawError));
+              "viewQuery",
+              "validation_invalid_view_query",
+              "Invalid query."));
     }
   }
 

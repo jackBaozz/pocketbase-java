@@ -3127,7 +3127,7 @@ class LocalPocketBaseServerTest {
             Map.of("query", "insert into t values (1)"));
     assertEquals(400, writeQuery.statusCode());
     assertErrorEnvelope(
-        writeQuery, 400, "Invalid view query. Raw error: \nwrite statements are not allowed");
+        writeQuery, 400, "Invalid view query.");
 
     HttpResponse<String> multipleStatements =
         rawRequest(
@@ -3139,7 +3139,7 @@ class LocalPocketBaseServerTest {
     assertErrorEnvelope(
         multipleStatements,
         400,
-        "Invalid view query. Raw error: \nmultiple statements are not supported");
+        "Invalid view query.");
 
     HttpResponse<String> wildcard =
         rawRequest(
@@ -3151,7 +3151,7 @@ class LocalPocketBaseServerTest {
     assertErrorEnvelope(
         wildcard,
         400,
-        "Invalid view query. Raw error: \nwildcard columns (*) are not supported - manually type the collection field names you want the view query to have");
+        "Invalid view query.");
 
     HttpResponse<String> missingId =
         rawRequest(
@@ -3163,7 +3163,7 @@ class LocalPocketBaseServerTest {
     assertErrorEnvelope(
         missingId,
         400,
-        "Invalid view query. Raw error: \nmissing required id column (you can use `(ROW_NUMBER() OVER()) as id` if you don't have one)");
+        "Invalid view query.");
 
     request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "duplicate"));
     request("POST", "/api/collections/dry_run_posts/records", token, Map.of("title", "duplicate"));
@@ -3177,7 +3177,7 @@ class LocalPocketBaseServerTest {
     assertErrorEnvelope(
         duplicateIds,
         400,
-        "Invalid view query. Raw error: \nthe query could return records with non-unique ids");
+        "Invalid view query.");
 
     HttpResponse<String> missingQuery =
         rawRequest("POST", "/api/collections/meta/dry-run-view", token, Map.of("query", ""));
@@ -3236,7 +3236,7 @@ class LocalPocketBaseServerTest {
         "Failed to create collection.",
         "viewQuery",
         "validation_invalid_view_query",
-        "Invalid query - missing required id column");
+        "Invalid query.");
 
     String publishedQuery =
         "select id, title from view_sources where status = 'published' order by title";
@@ -3304,7 +3304,7 @@ class LocalPocketBaseServerTest {
         "Failed to update collection.",
         "viewQuery",
         "validation_invalid_view_query",
-        "Invalid query - wildcard columns (*) are not supported");
+        "Invalid query.");
 
     JsonNode unchanged = request("GET", "/api/collections/published_posts", token, null);
     assertEquals(draftQuery, unchanged.get("viewQuery").asText());
@@ -4029,10 +4029,10 @@ class LocalPocketBaseServerTest {
     assertFieldError(
         disabledS3,
         400,
-        "Failed to test the S3 filesystem. Raw error: \nS3 storage filesystem is not enabled",
+        "Failed to test the S3 filesystem.",
         "filesystem",
         "validation_invalid_value",
-        "S3 storage filesystem is not enabled");
+        "S3 storage filesystem is not enabled.");
 
     HttpResponse<String> missingS3Bucket =
         rawRequest(
@@ -4140,10 +4140,10 @@ class LocalPocketBaseServerTest {
       assertFieldError(
           smtpFailure,
           400,
-          "Failed to send the test email. Raw error: \nSMTP command failed: 421 test smtp down",
+          "Failed to send the test email.",
           "smtp",
           "validation_invalid_value",
-          "SMTP command failed: 421 test smtp down");
+          "SMTP delivery failed.");
     }
 
     HttpResponse<String> missingAppleClientId =
@@ -4252,6 +4252,18 @@ class LocalPocketBaseServerTest {
     assertFalse(filteredLog.get("data").has("authId"));
     assertFalse(filteredLog.get("data").has("remoteIP"));
     assertFalse(filteredLog.get("data").has("userIP"));
+
+    rawRequest(
+        "GET",
+        "/api/referrer-log",
+        token,
+        null,
+        Map.of(
+            "Referer",
+            "https://user:password@example.test/reset/secret-token?token=secret-query"));
+    JsonNode redactedReferer = waitForLogs("data.url = '/api/referrer-log'", token, 1);
+    assertEquals(
+        "https://example.test", redactedReferer.get("items").get(0).get("data").get("referer").asText());
 
     request("PATCH", "/api/settings", token, Map.of("logs", Map.of("maxDays", 0)));
     assertEquals(0, request("GET", "/api/logs", token, null).get("totalItems").asInt());
@@ -5398,10 +5410,10 @@ class LocalPocketBaseServerTest {
     assertMessageAndFieldErrorStartWith(
         rolledBack,
         400,
-        "Failed to execute query. Raw error:\n",
+        "Failed to execute query.",
         "query",
         "validation_invalid_value",
-        "Failed to execute query. Raw error:\n");
+        "The SQL statement could not be executed.");
     assertEquals(404, rawRequest("GET", "/api/collections/sql_tx", token, null).statusCode());
   }
 
@@ -8387,7 +8399,7 @@ class LocalPocketBaseServerTest {
           "Failed to fetch OAuth2 token.",
           "provider",
           "validation_invalid_value",
-          "{\"error\":\"invalid_grant\"}");
+          "OAuth2 provider request failed.");
     }
 
     try (FakeOAuth2Server oauth =
@@ -9180,12 +9192,12 @@ class LocalPocketBaseServerTest {
     HttpResponse<byte[]> disguisedResponse =
         http.send(
             HttpRequest.newBuilder(
-                    URI.create(
-                        server.baseUrl()
-                            + "/api/files/untrusted_assets/"
-                            + disguised.get("id").asText()
-                            + "/"
-                            + disguisedFilename))
+                URI.create(
+                    server.baseUrl()
+                        + "/api/files/untrusted_assets/"
+                        + disguised.get("id").asText()
+                        + "/"
+                        + disguisedFilename))
                 .GET()
                 .build(),
             HttpResponse.BodyHandlers.ofByteArray());

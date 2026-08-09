@@ -12,7 +12,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 class ServerConfigTest {
 
-  @TempDir Path tempDir;
+  @TempDir
+  Path tempDir;
 
   @Test
   void loadsApplicationPropertiesAndAllowsCommandLineOverrides() throws Exception {
@@ -20,15 +21,15 @@ class ServerConfigTest {
     Files.writeString(
         configFile,
         """
-        app.name=Configured App
-        server.host=0.0.0.0
-        server.port=9010
-        server.data-dir=config-data
-        storage.type=sqlite
-        database.url=jdbc:sqlite:configured.db
-        database.user=config-user
-        database.password=config-password
-        """);
+            app.name=Configured App
+            server.host=0.0.0.0
+            server.port=9010
+            server.data-dir=config-data
+            storage.type=sqlite
+            database.url=jdbc:sqlite:configured.db
+            database.user=config-user
+            database.password=config-password
+            """);
 
     String previousStorage = System.getProperty("storage");
     System.clearProperty("storage");
@@ -99,24 +100,34 @@ class ServerConfigTest {
   }
 
   @Test
+  void rejectsUnsupportedStorageEncryptionConfiguration() {
+    IllegalArgumentException error =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> ServerConfig.fromArgs(new String[0], Map.of("PB_ENCRYPTION_KEY", "secret")));
+
+    assertTrue(error.getMessage().contains("Encryption at rest is not supported"));
+  }
+
+  @Test
   void loadsTheProfileFileAfterBaseProperties() throws Exception {
     Path configFile = tempDir.resolve("application.properties");
     Path profileFile = tempDir.resolve("application-dev.properties");
     Files.writeString(
         configFile,
         """
-        app.profile=dev
-        app.name=Base App
-        server.port=9010
-        server.data-dir=base-data
-        """);
+            app.profile=dev
+            app.name=Base App
+            server.port=9010
+            server.data-dir=base-data
+            """);
     Files.writeString(
         profileFile,
         """
-        app.name=Development App
-        server.port=9020
-        server.data-dir=dev-data
-        """);
+            app.name=Development App
+            server.port=9020
+            server.data-dir=dev-data
+            """);
 
     ServerConfig config =
         ServerConfig.fromArgs(new String[] {"start", "--config", configFile.toString()}, Map.of());

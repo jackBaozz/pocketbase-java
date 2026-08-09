@@ -23,6 +23,9 @@ import java.util.function.BiFunction;
 /** In-memory SSE broker for PocketBase-style realtime record events. */
 public final class RealtimeHub {
   private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
+  private static final int MAX_CLIENTS = 1000;
+  private static final int MAX_CLIENTS_PER_IP = 100;
+  private static final long MAX_CONNECTION_NANOS = Duration.ofHours(2).toNanos();
 
   private final ObjectMapper mapper;
   private final Map<String, Client> clients = new ConcurrentHashMap<>();
@@ -38,7 +41,18 @@ public final class RealtimeHub {
   public void connect(HttpExchange exchange, String remoteIp) throws IOException {
     String clientId = IdGenerator.id();
     Client client = new Client(clientId, exchange.getResponseBody(), remoteIp);
-    clients.put(clientId, client);
+    synchronized (clients) {
+      if (clients.size() >= MAX_CLIENTS) {
+        throw new ApiException(503, "Realtime service is temporarily at capacity.");
+      }
+      if (!client.remoteIp.isBlank()
+          && clients.values().stream()
+              .filter(existing -> client.remoteIp.equals(existing.remoteIp))
+              .count() >= MAX_CLIENTS_PER_IP) {
+        throw new ApiException(429, "Too many realtime connections from this address.");
+      }
+      clients.put(clientId, client);
+    }
 
     exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
     exchange.getResponseHeaders().set("Cache-Control", "no-cache");
@@ -60,7 +74,9 @@ public final class RealtimeHub {
         }
       }
     } finally {
-      clients.remove(clientId);
+      synchronized (clients) {
+        clients.remove(clientId);
+      }
       client.close();
     }
   }
@@ -299,6 +315,7 @@ public final class RealtimeHub {
     private final String id;
     private final OutputStream output;
     private final String remoteIp;
+    private final long startedAtNanos = System.nanoTime();
     private final CountDownLatch closed = new CountDownLatch(1);
     private volatile Set<Subscription> subscriptions = Set.of();
     private volatile RequestPrincipal principal;
@@ -369,6 +386,9 @@ public final class RealtimeHub {
 
     boolean awaitHeartbeat() {
       try {
+        if (System.nanoTime() - startedAtNanos >= MAX_CONNECTION_NANOS) {
+          return false;
+        }
         return !closed.await(HEARTBEAT_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();

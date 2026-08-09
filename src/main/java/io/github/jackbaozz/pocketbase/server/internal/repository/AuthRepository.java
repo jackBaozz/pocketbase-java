@@ -9,6 +9,7 @@ import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.AuthMailSupport;
 import io.github.jackbaozz.pocketbase.server.internal.AuthOriginContext;
 import io.github.jackbaozz.pocketbase.server.internal.AuthProcessor;
+import io.github.jackbaozz.pocketbase.server.internal.FilePermissionSupport;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.OAuth2FieldMappingSupport;
@@ -67,38 +68,54 @@ public class AuthRepository extends BaseRepository {
     String email = body.get("email").asText();
     String password = body.get("password").asText();
 
-    if (database.dsl().fetchCount(qt("_superusers")) > 0) {
-      throw new ApiException(403, "Superuser already exists.");
-    }
+    return database.transactional(
+        () -> {
+          // A persistent single-row guard makes the first bootstrap operation atomic across
+          // SQLite, MySQL, and PostgreSQL. A count-then-insert check is racy under concurrent
+          // HTTP requests and can otherwise create two initial superusers.
+          try {
+            database
+                .dsl()
+                .insertInto(qt("_pb_bootstrap_guard"))
+                .columns(qfs("id"))
+                .values("superuser")
+                .execute();
+          } catch (org.jooq.exception.DataAccessException e) {
+            throw new ApiException(403, "Superuser already exists.");
+          }
+          if (database.dsl().fetchCount(qt("_superusers")) > 0) {
+            throw new ApiException(403, "Superuser already exists.");
+          }
 
-    String id = IdGenerator.id();
-    String passHash = PasswordHasher.hash(password);
-    String tokenKey = IdGenerator.secret();
-    String now = Instant.now().toString();
+          String id = IdGenerator.id();
+          String passHash = PasswordHasher.hash(password);
+          String tokenKey = IdGenerator.secret();
+          String now = Instant.now().toString();
 
-    database
-        .dsl()
-        .insertInto(qt("_superusers"))
-        .columns(
-            qfs("id"),
-            qfs("email"),
-            qfs("passwordHash"),
-            qfs("tokenKey"),
-            qfb("emailVisibility"),
-            qfb("verified"),
-            qfs("created"),
-            qfs("updated"))
-        .values(id, email, passHash, tokenKey, false, true, now, now)
-        .execute();
+          database
+              .dsl()
+              .insertInto(qt("_superusers"))
+              .columns(
+                  qfs("id"),
+                  qfs("email"),
+                  qfs("passwordHash"),
+                  qfs("tokenKey"),
+                  qfb("emailVisibility"),
+                  qfb("verified"),
+                  qfs("created"),
+                  qfs("updated"))
+              .values(id, email, passHash, tokenKey, false, true, now, now)
+              .execute();
 
-    Map<String, Object> record = new LinkedHashMap<>();
-    record.put("id", id);
-    record.put("email", email);
-    record.put("emailVisibility", false);
-    record.put("verified", true);
-    record.put("created", now);
-    record.put("updated", now);
-    return Map.of("record", record);
+          Map<String, Object> record = new LinkedHashMap<>();
+          record.put("id", id);
+          record.put("email", email);
+          record.put("emailVisibility", false);
+          record.put("verified", true);
+          record.put("created", now);
+          record.put("updated", now);
+          return Map.of("record", record);
+        });
   }
 
   public Map<String, Object> authWithPassword(
@@ -1458,7 +1475,7 @@ public class AuthRepository extends BaseRepository {
 
   private synchronized void appendAuthOutboxRequest(Map<String, Object> request) {
     try {
-      Files.createDirectories(dataDir);
+      FilePermissionSupport.secureDirectory(dataDir);
       Path outbox = dataDir.resolve("auth_requests.json");
       List<Map<String, Object>> requests = new ArrayList<>();
       if (Files.exists(outbox)) {
@@ -1472,6 +1489,7 @@ public class AuthRepository extends BaseRepository {
           outbox,
           mapper.writerWithDefaultPrettyPrinter().writeValueAsString(requests),
           StandardCharsets.UTF_8);
+      FilePermissionSupport.secureFile(outbox);
     } catch (Exception ignored) {
       // The database record remains authoritative if the development outbox cannot be written.
     }
