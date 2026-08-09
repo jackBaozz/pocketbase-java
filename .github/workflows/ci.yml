@@ -29,10 +29,25 @@ jobs:
       - name: Run Maven Tests
         run: |
           if [ "${{ matrix.storage }}" = "sqlite" ]; then
-            mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true
+            mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true -Dtest='!AdminUiPlaywrightTest'
           else
-            mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true -Pexternal-db-drivers
+            mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true -Pexternal-db-drivers -Dtest='!AdminUiPlaywrightTest'
           fi
+
+  admin-ui-e2e:
+    name: Admin UI Playwright E2E
+    runs-on: ubuntu-latest
+    needs: [ui-build]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '17'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Admin UI E2E
+        run: mvn -B -Dstorage=sqlite -Dtest=AdminUiPlaywrightTest test
 
   ui-build:
     name: UI Build
@@ -53,7 +68,7 @@ jobs:
   native-build-and-smoke:
     name: Native Build & Smoke
     runs-on: ubuntu-latest
-    needs: [jvm-tests, ui-build]
+    needs: [jvm-tests, ui-build, admin-ui-e2e]
     steps:
       - uses: actions/checkout@v5
       - name: Setup GraalVM

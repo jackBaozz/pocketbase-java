@@ -6,14 +6,56 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ServerConfigTest {
 
+  private static final List<String> SYSTEM_OVERRIDES =
+      List.of(
+          "config.file",
+          "server.host",
+          "server.port",
+          "server.data-dir",
+          "superuser.email",
+          "superuser.password",
+          "security.encryption-key",
+          "app.name",
+          "app.profile",
+          "storage",
+          "db.url",
+          "db.user",
+          "db.password");
+
+  private final Map<String, String> previousSystemOverrides = new LinkedHashMap<>();
+
   @TempDir
   Path tempDir;
+
+  @BeforeEach
+  void isolateSystemOverrides() {
+    previousSystemOverrides.clear();
+    for (String key : SYSTEM_OVERRIDES) {
+      String value = System.getProperty(key);
+      if (value != null) {
+        previousSystemOverrides.put(key, value);
+      }
+      System.clearProperty(key);
+    }
+  }
+
+  @AfterEach
+  void restoreSystemOverrides() {
+    for (String key : SYSTEM_OVERRIDES) {
+      System.clearProperty(key);
+    }
+    previousSystemOverrides.forEach(System::setProperty);
+  }
 
   @Test
   void loadsApplicationPropertiesAndAllowsCommandLineOverrides() throws Exception {
