@@ -12,8 +12,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
+import java.util.Locale;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,7 +23,6 @@ class AuthActionPersistenceTest {
   private final ObjectMapper mapper = new ObjectMapper();
   private final HttpClient http = HttpClient.newHttpClient();
   private LocalPocketBase server;
-  private String previousStorage;
 
   @TempDir
   Path dataDir;
@@ -31,17 +32,23 @@ class AuthActionPersistenceTest {
     if (server != null) {
       server.close();
     }
-    if (previousStorage == null) {
-      System.clearProperty("storage");
-    } else {
-      System.setProperty("storage", previousStorage);
-    }
+  }
+
+  /**
+   * These helpers inspect the local SQLite file (and the SMTP outbox JSON) directly, so the suite is
+   * SQLite-only. Follow the matrix `-Dstorage=` value instead of forcing sqlite, otherwise the
+   * mysql/postgresql CI jobs appear red for an intentionally sqlite-bound test.
+   */
+  private void assumeSqliteStorage() {
+    String storage = System.getProperty("storage", "sqlite").trim().toLowerCase(Locale.ROOT);
+    Assumptions.assumeTrue(
+        storage.isEmpty() || "sqlite".equals(storage),
+        () -> "AuthActionPersistenceTest is SQLite-file specific; current storage=" + storage);
   }
 
   @Test
   void relationalAuthActionTokensArePersistedAndConsumedOnce() throws Exception {
-    previousStorage = System.getProperty("storage");
-    System.setProperty("storage", "sqlite");
+    assumeSqliteStorage();
     server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, dataDir, null, null, null));
     bootstrapSuperuser();
     String superuser = loginSuperuser();
@@ -83,7 +90,7 @@ class AuthActionPersistenceTest {
                 "passwordConfirm", "does-not-match"));
     assertEquals(400, rejected.statusCode());
     assertEquals(
-        1, authRequestCount(token), "failed auth updates must roll back token consumption");
+        1, authRequestCount(token), "failed auth updates must not consume the one-time token");
 
     request(
         "POST",
@@ -111,8 +118,7 @@ class AuthActionPersistenceTest {
 
   @Test
   void relationalOtpRejectsAndDeletesExpiredCodes() throws Exception {
-    previousStorage = System.getProperty("storage");
-    System.setProperty("storage", "sqlite");
+    assumeSqliteStorage();
     server = LocalPocketBase.start(new ServerConfig("127.0.0.1", 0, dataDir, null, null, null));
     bootstrapSuperuser();
     String superuser = loginSuperuser();

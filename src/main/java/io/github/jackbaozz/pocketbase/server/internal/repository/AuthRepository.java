@@ -597,8 +597,11 @@ public class AuthRepository extends BaseRepository {
     String token = actionToken(body);
     database.transactional(
         () -> {
-          consumeAuthRequestToken(collection, token, "passwordReset");
+          // Validate password/token claims before consuming the one-time auth-request row.
+          // Otherwise a reused token, mismatched password, or transient DB error during DELETE
+          // can surface as 500 instead of the expected 400.
           AuthProcessor.confirmPasswordReset(storeContext, tokenService, collection, body);
+          consumeAuthRequestToken(collection, token, "passwordReset");
           return null;
         });
   }
@@ -618,8 +621,8 @@ public class AuthRepository extends BaseRepository {
     String token = actionToken(body);
     database.transactional(
         () -> {
-          consumeAuthRequestToken(collection, token, "verification");
           AuthProcessor.confirmVerification(storeContext, tokenService, collection, body);
+          consumeAuthRequestToken(collection, token, "verification");
           return null;
         });
   }
@@ -640,8 +643,8 @@ public class AuthRepository extends BaseRepository {
     String token = actionToken(body);
     database.transactional(
         () -> {
-          consumeAuthRequestToken(collection, token, "emailChange");
           AuthProcessor.confirmEmailChange(storeContext, tokenService, collection, body);
+          consumeAuthRequestToken(collection, token, "emailChange");
           return null;
         });
   }
