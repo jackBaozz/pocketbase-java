@@ -100,6 +100,7 @@ public final class JooqDatabase implements AutoCloseable {
         config.setConnectionTimeout(10_000);
         config.setIdleTimeout(600_000);
         config.setMaxLifetime(1_800_000);
+        config.setKeepaliveTime(120_000);
         config.setLeakDetectionThreshold(60_000);
         configureExternal(
             config, "mysql", "com.mysql.cj.jdbc.Driver", connectionDefaults);
@@ -126,6 +127,7 @@ public final class JooqDatabase implements AutoCloseable {
         config.setConnectionTimeout(10_000);
         config.setIdleTimeout(600_000);
         config.setMaxLifetime(1_800_000);
+        config.setKeepaliveTime(120_000);
         config.setLeakDetectionThreshold(60_000);
         configureExternal(
             config, "postgres", "org.postgresql.Driver", connectionDefaults);
