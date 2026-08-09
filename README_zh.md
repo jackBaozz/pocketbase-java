@@ -25,7 +25,7 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 - **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，核心运行时依赖极少，保持极小的体积与资源占用，且便于 Native Image 编译。
 - **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.10**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
 - **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
-- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能。支持 9 种语言国际化、API 文档侧栏、Schema/索引编辑器、关联记录选择器、带语法高亮和自动补全的代码编辑器，以及 `hideControls` 安全锁定模式。前端源码位于 `UI/`，构建产物内嵌至 Java 资源文件。
+- **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能。支持 9 种语言国际化、API 文档侧栏、Schema/索引编辑器、关联记录选择器、带语法高亮和自动补全的代码编辑器，以及 `hideControls` 安全锁定模式。前端源码位于 `ui/`，构建产物内嵌至 Java 资源文件。
 - **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用 SQLite，将数据保存到 `<server.data-dir>/pocketbase.db`；旧版 JSONL（`.jsonl` 记录文件和 `.json` 元数据）仍可通过 `storage.type=jsonl` 显式启用。MySQL 与 PostgreSQL 也可通过 `application.properties`、`-Dstorage` 或 native 运行时的 `PB_STORAGE` 配置，底层使用 jOOQ 与 HikariCP。
 - **文件管理与 S3 支持**: 提供 `FileStorageProvider` SPI，支持本地文件系统及 AWS S3 或兼容的对象存储服务，支持多媒体缩略图自动生成、MIME 类型/大小校验和 Protected File Token 安全控制。
 - **备份与还原**: 支持在本地或 S3 远端创建、上传、下载、删除和恢复 Zip 格式的数据备份，具备事务级安全性与自动过期清理。
@@ -43,9 +43,9 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 | 类别 | 要求 |
 | --- | --- |
 | JDK | 17+ |
-| Maven | 3.9+ |
+| Maven | 3.6+ |
 | Node.js / npm | 20.19+ / 10+ （仅在需要修改或重新构建 Admin UI 时需要） |
-| GraalVM | 构建 native 二进制时需要 GraalVM JDK 17+ / 21+ |
+| GraalVM | GraalVM JDK 17+（CI 在 JDK 25 上构建 native 镜像；仅在构建 native 二进制时需要） |
 
 若本机直接访问 Maven 中央仓库不稳定，可使用项目内置镜像配置：
 ```bash
@@ -58,7 +58,13 @@ mvn -gs settings.xml -s settings.xml test
 
 ### 1. 运行独立服务器 (Standalone App)
 
-编译打包项目并启动服务：
+最快的方式是通过 Makefile（先构建，再以 `dev` profile 运行）：
+
+```bash
+make build dev && make run dev
+```
+
+或者直接用 Maven 编译并以 JAR 启动：
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
 java -jar target/pocketbase-java-0.3.5-all.jar start --http 127.0.0.1:8090 --dir pb_data
@@ -219,15 +225,56 @@ mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
 
 ## 常用开发命令
 
+项目内置了一个 `Makefile`，封装了常见工作流——按 profile 运行打包后的 JAR、前后端
+构建、热重载开发、测试、格式化以及 native 编译。执行 `make help` 可查看完整列表。
+
+### 运行打包后的服务
+
 ```bash
-# 运行单元测试
-mvn -gs settings.xml -s settings.xml test
+make run                 # 以 dev profile 运行（默认）
+make run dev             #   └─ 同上
+make run test            # 以 test profile 运行
+make run production      # 以 production profile 运行
+make run dev ARGS="--port 9090"   # 透传额外的服务端参数
+```
 
-# 构建 Admin UI 并输出到 src/main/resources/pocketbase-admin/ 
-(cd UI && npm install && npm run build)
+### 构建（前端 + 后端 + 启动脚本）
 
-# 安装到本地 Maven 仓库
-mvn -gs settings.xml -s settings.xml clean install
+```bash
+make build               # 构建 dev profile，并额外生成 bin/pocketbase
+make build dev           #   └─ 生成 bin/pocketbase-dev
+make build test          # 生成 bin/pocketbase-test
+make build production    # 生成 bin/pocketbase-production
+make web-build           # 仅构建 Admin UI（cd ui && npm run build）
+```
+
+生成的 `bin/pocketbase[-<mode>]` 是 shell 启动脚本，以对应的 `--profile`
+运行 shaded JAR（`target/pocketbase-java-all.jar`）。
+
+### 热重载开发
+
+```bash
+make serve               # 并行运行后端（mvn exec）+ 前端（vite）
+make dev-server          # 仅后端
+make dev-ui              # 仅前端
+```
+
+### 测试、格式化、native
+
+```bash
+make check               # 运行单元测试（mvn test）
+make format-apply        # 用 Spotless 自动格式化
+make format-check        # 校验格式（CI 门槛）
+make build-native        # GraalVM native 镜像（sh/build-native.sh）
+```
+
+### 原始 Maven / npm（不使用 Makefile）
+
+```bash
+mvn -gs settings.xml -s settings.xml test                           # 单元测试
+(cd ui && npm install && npm run build)                             # 构建 Admin UI
+mvn -gs settings.xml -s settings.xml clean install                 # 安装到本地仓库
+mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package  # native 构建
 ```
 
 ---
@@ -237,7 +284,7 @@ mvn -gs settings.xml -s settings.xml clean install
 ```text
 pocketbase-java/
 ├── docs/                               # 技术文档
-├── UI/                                 # Admin UI 前端工程 (React + Vite)
+├── ui/                                 # Admin UI 前端工程 (React + Vite)
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/

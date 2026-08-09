@@ -25,7 +25,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 - **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The core runtime has extremely minimal dependencies, keeping the resource footprint small and native compilation trivial.
 - **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.39.10**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
 - **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
-- **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. Features 9-language i18n, an API documentation sidebar, a schema/index editor, a relation picker, a code editor with syntax highlighting and autocompletion, and a `hideControls` safe-lock mode. The frontend source is in `UI/`, and its build outputs are embedded into Java resources.
+- **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. Features 9-language i18n, an API documentation sidebar, a schema/index editor, a relation picker, a code editor with syntax highlighting and autocompletion, and a `hideControls` safe-lock mode. The frontend source is in `ui/`, and its build outputs are embedded into Java resources.
 - **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. SQLite is the default local engine and stores data in `<server.data-dir>/pocketbase.db`; legacy JSON Lines (`.jsonl` plus `.json` metadata) remains available explicitly with `storage.type=jsonl`. MySQL and PostgreSQL are also supported through `application.properties`, the JVM `-Dstorage` flag, or native-runtime `PB_STORAGE` environment variable, powered by jOOQ and HikariCP.
 - **File Management & S3 Support**: Supports local or AWS S3-compatible file storage providers (`FileStorageProvider` SPI). Handles multipart uploads, size/MIME constraints, Protected File Tokens, and automatic image thumbnail generation.
 - **Backup & Restore**: Supports creating, uploading, downloading, deleting, and restoring zip backups under local storage or remote S3 backup paths, complete with transaction safety and automatic cleanups.
@@ -43,9 +43,9 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 | Category | Requirement |
 | --- | --- |
 | JDK | 17+ |
-| Maven | 3.9+ |
+| Maven | 3.6+ |
 | Node.js / npm | 20.19+ / 10+ (only required if modifying/rebuilding the Admin UI) |
-| GraalVM | GraalVM JDK 17+ / 21+ (only required if building native binaries) |
+| GraalVM | GraalVM JDK 17+ (CI builds native images on JDK 25; only required if building native binaries) |
 
 If access to the Maven Central repository is unstable in your network, you can use the built-in configuration mirroring file:
 ```bash
@@ -58,7 +58,13 @@ mvn -gs settings.xml -s settings.xml test
 
 ### 1. Run as Standalone App
 
-Compile the project and start the server:
+The quickest way is via the Makefile (builds, then runs with the `dev` profile):
+
+```bash
+make build dev && make run dev
+```
+
+Or compile and start the server directly with Maven and the JAR:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
 java -jar target/pocketbase-java-0.3.5-all.jar start --http 127.0.0.1:8090 --dir pb_data
@@ -220,15 +226,57 @@ mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package
 
 ## Development Commands
 
+A `Makefile` wraps the common workflows — running the packaged JAR with a profile,
+building frontend + backend, hot-reload development, tests, formatting, and native
+compilation. Run `make help` for the full list.
+
+### Run the packaged server
+
 ```bash
-# Run unit tests
-mvn -gs settings.xml -s settings.xml test
+make run                 # run with the dev profile (default)
+make run dev             #   └─ same as above
+make run test            # run with the test profile
+make run production      # run with the production profile
+make run dev ARGS="--port 9090"   # pass-through extra server args
+```
 
-# Build Admin UI and copy outputs to src/main/resources/pocketbase-admin/
-(cd UI && npm install && npm run build)
+### Build (frontend + backend + launcher script)
 
-# Install to the local Maven repository
-mvn -gs settings.xml -s settings.xml clean install
+```bash
+make build               # build the dev profile and also generate bin/pocketbase
+make build dev           #   └─ generates bin/pocketbase-dev
+make build test          # generates bin/pocketbase-test
+make build production    # generates bin/pocketbase-production
+make web-build           # build the Admin UI only (cd ui && npm run build)
+```
+
+The generated `bin/pocketbase[-<mode>]` are shell launchers that run the shaded JAR
+(`target/pocketbase-java-all.jar`) with the matching `--profile`.
+
+### Hot-reload development
+
+```bash
+make serve               # run backend (mvn exec) + frontend (vite) in parallel
+make dev-server          # backend only
+make dev-ui              # frontend only
+```
+
+### Tests, formatting, native
+
+```bash
+make check               # run unit tests (mvn test)
+make format-apply        # auto-format with Spotless
+make format-check        # verify formatting (CI gate)
+make build-native        # GraalVM native image (sh/build-native.sh)
+```
+
+### Raw Maven / npm (without the Makefile)
+
+```bash
+mvn -gs settings.xml -s settings.xml test                           # unit tests
+(cd ui && npm install && npm run build)                             # build Admin UI
+mvn -gs settings.xml -s settings.xml clean install                 # install to local repo
+mvn -gs settings.xml -s settings.xml -Pnative -DskipTests package  # native build
 ```
 
 ---
@@ -238,7 +286,7 @@ mvn -gs settings.xml -s settings.xml clean install
 ```text
 pocketbase-java/
 ├── docs/                               # Documentation
-├── UI/                                 # Admin UI React + Vite codebase
+├── ui/                                 # Admin UI React + Vite codebase
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
