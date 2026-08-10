@@ -177,7 +177,6 @@ public final class SmtpMailer {
     }
 
     void startTls() throws IOException {
-      SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
       Socket tls = tlsSocket(socket, peerHost, socket.getPort());
       this.socket = tls;
       this.reader =
