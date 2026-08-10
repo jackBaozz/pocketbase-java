@@ -292,7 +292,9 @@ public class CollectionRepository extends BaseRepository {
     } catch (SQLException | IOException | DataAccessException e) {
       handleSqlConstraintException(e);
       SecuritySupport.logInternalFailure("create collection", e);
-      throw new ApiException(400, "Failed to create collection.");
+      // Preserve the database cause so withDdlRetry can recognize transient SQLite locks after
+      // the transaction rolls back. The public PocketBase-compatible error stays unchanged.
+      throw new ApiException(400, "Failed to create collection.", Map.of(), e);
     } finally {
       if (conn != null) {
         try {
@@ -475,7 +477,7 @@ public class CollectionRepository extends BaseRepository {
     } catch (SQLException | IOException | DataAccessException e) {
       handleSqlConstraintException(e);
       SecuritySupport.logInternalFailure("update collection", e);
-      throw new ApiException(400, "Failed to update collection.");
+      throw new ApiException(400, "Failed to update collection.", Map.of(), e);
     } finally {
       if (conn != null) {
         try {
@@ -557,7 +559,7 @@ public class CollectionRepository extends BaseRepository {
 
     } catch (SQLException | DataAccessException e) {
       SecuritySupport.logInternalFailure("delete collection", e);
-      throw new ApiException(400, "Failed to delete collection.");
+      throw new ApiException(400, "Failed to delete collection.", Map.of(), e);
     } finally {
       if (conn != null) {
         try {
@@ -630,7 +632,7 @@ public class CollectionRepository extends BaseRepository {
     throw last;
   }
 
-  private static boolean isTransientSqliteLock(Throwable t) {
+  static boolean isTransientSqliteLock(Throwable t) {
     Throwable current = t;
     while (current != null) {
       String message = current.getMessage();

@@ -165,7 +165,7 @@ public final class HttpRateLimiter {
 
   private void resetWhenSettingsChange(
       Map<String, Object> rateLimits, Map<String, Object> trustedProxy) {
-    String fingerprint = String.valueOf(rateLimits) + '|' + trustedProxy;
+    String fingerprint = settingsFingerprint(rateLimits, trustedProxy);
     if (Objects.equals(settingsFingerprint, fingerprint)) {
       return;
     }
@@ -175,6 +175,43 @@ public final class HttpRateLimiter {
         settingsFingerprint = fingerprint;
       }
     }
+  }
+
+  /**
+   * Produces a stable configuration fingerprint without relying on a map's iteration order.
+   * Settings are deserialized independently on every request, and HashMap's textual form can
+   * otherwise change between requests and clear a live rate-limit window unexpectedly.
+   */
+  static String settingsFingerprint(
+      Map<String, Object> rateLimits, Map<String, Object> trustedProxy) {
+    return canonicalValue(rateLimits) + '|' + canonicalValue(trustedProxy);
+  }
+
+  private static String canonicalValue(Object value) {
+    if (value == null) {
+      return "n";
+    }
+    if (value instanceof Map<?, ?> map) {
+      List<String> entries = new ArrayList<>();
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        entries.add(encode(String.valueOf(entry.getKey())) + '=' + canonicalValue(entry.getValue()));
+      }
+      entries.sort(String::compareTo);
+      return "m{" + String.join(",", entries) + '}';
+    }
+    if (value instanceof List<?> list) {
+      List<String> entries = new ArrayList<>();
+      for (Object item : list) {
+        entries.add(canonicalValue(item));
+      }
+      return "l[" + String.join(",", entries) + ']';
+    }
+    return "s" + encode(String.valueOf(value));
+  }
+
+  private static String encode(String value) {
+    String text = value == null ? "" : value;
+    return text.length() + ":" + text;
   }
 
   private void cleanupExpiredWindows() {

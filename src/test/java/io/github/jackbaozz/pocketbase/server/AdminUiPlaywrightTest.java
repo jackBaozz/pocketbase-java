@@ -8,6 +8,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitForSelectorState;
 import java.nio.file.Path;
 import java.util.Map;
@@ -115,6 +116,11 @@ public class AdminUiPlaywrightTest {
     }
     page.click("button[type='submit']");
     page.waitForSelector(".page-header", new Page.WaitForSelectorOptions().setTimeout(10000));
+    // The dashboard starts several collection/settings requests after authentication. Wait until
+    // those reads settle before the test sends DDL through the browser, otherwise SQLite schema
+    // writes can race the initial Admin UI requests on a loaded CI runner.
+    page.waitForLoadState(
+        LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(10000));
   }
 
   private void createCollectionFromBrowser(String name) {
