@@ -2,7 +2,7 @@
 
 PocketBase Java implementation. This project contains a lightweight **PocketBase Java SDK** and a low-dependency **Embedded Server**: using JDK `HttpServer` to serve PocketBase-like APIs, featuring a built-in Admin UI, JSON file persistence, and designed for GraalVM Native Image constraints.
 
-**Official PocketBase Baseline:** v0.39.10
+**Official PocketBase Baseline:** v0.39.11
 
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
@@ -23,7 +23,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 ## Key Features
 
 - **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The core runtime has extremely minimal dependencies, keeping the resource footprint small and native compilation trivial.
-- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.39.10**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
+- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.39.11**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
 - **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
 - **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. Features 9-language i18n, an API documentation sidebar, a schema/index editor, a relation picker, a code editor with syntax highlighting and autocompletion, and a `hideControls` safe-lock mode. The frontend source is in `ui/`, and its build outputs are embedded into Java resources.
 - **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. SQLite is the default local engine and stores data in `<server.data-dir>/pocketbase.db`; legacy JSON Lines (`.jsonl` plus `.json` metadata) remains available explicitly with `storage.type=jsonl`. MySQL and PostgreSQL are also supported through `application.properties`, the JVM `-Dstorage` flag, or native-runtime `PB_STORAGE` environment variable, powered by jOOQ and HikariCP.

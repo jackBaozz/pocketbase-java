@@ -372,6 +372,7 @@ export function CodeEditor({
   const suppressRef = useRef(false);
 
   const [suggest, setSuggest] = useState<SuggestState | null>(null);
+  const [tabTrapped, setTabTrapped] = useState(true);
   const [pos, setPos] = useState<DropdownPos | null>(null);
 
   const listId = useId();
@@ -715,11 +716,22 @@ export function CodeEditor({
       return;
     }
 
-    if (key === "Tab" && !singleLine) {
-      event.preventDefault();
-      indent(event.shiftKey);
+    if (key === "Escape" || key === "Esc") {
+      setTabTrapped(false);
       return;
     }
+
+    if (key === "Tab" && !singleLine) {
+      if (tabTrapped) {
+        event.preventDefault();
+        indent(event.shiftKey);
+        return;
+      }
+      setTabTrapped(true);
+      return;
+    }
+
+    setTabTrapped(true);
 
     if (key === "Enter" && singleLine) {
       event.preventDefault();

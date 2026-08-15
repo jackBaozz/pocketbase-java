@@ -639,11 +639,19 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
 
   const sample = (lang: "js" | "dart", body: string): string => `${sdkHeader(lang)}\n\n${dedent(body)}`;
 
-  const verificationHint = isAuth
+  const verificationHintJs = isAuth
     ? "\n\n" +
       code`
       // (optional) send an email verification request
-      await pb.collection('${name}').requestVerification('test@example.com');
+      await pb.collection('${name}').requestVerification(record.email);
+    `
+    : "";
+
+  const verificationHintDart = isAuth
+    ? "\n\n" +
+      code`
+      // (optional) send an email verification request
+      await pb.collection('${name}').requestVerification(record.get<String>('email'));
     `
     : "";
 
@@ -997,7 +1005,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
             // example create body
             const body = ${unwrapPlaceholders(json(submitPayload(false, true)))};
 
-            const record = await pb.collection('${name}').create(body);${verificationHint}
+            const record = await pb.collection('${name}').create(body);${verificationHintJs}
             `
           ),
           dart: sample(
@@ -1006,7 +1014,7 @@ function buildEndpoints(collection: ApiPreviewCollection, baseUrl: string, tr: T
             // example create body
             final body = <String, dynamic>${json(submitPayload(false, false))};
 
-            final record = await pb.collection('${name}').create(body: body, files: []);${verificationHint}
+            final record = await pb.collection('${name}').create(body: body, files: []);${verificationHintDart}
             `
           )
         },
