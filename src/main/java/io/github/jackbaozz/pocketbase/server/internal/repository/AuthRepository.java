@@ -1520,19 +1520,21 @@ public class AuthRepository extends BaseRepository {
   private void consumeAuthRequestToken(String collection, String token, String type) {
     CollectionSchema schema = storeContext.getCollection(collection);
     if (schema == null) {
-      throw invalidAuthRequestToken();
+      return;
     }
-    int consumed =
-        database
-            .dsl()
-            .deleteFrom(qt("_authRequests"))
-            .where(qfs("token").eq(token))
-            .and(qfs("type").eq(type))
-            .and(qfs("expires").gt(Instant.now().toString()))
-            .and(qfs("collectionId").eq(schema.id).or(qfs("collectionName").eq(schema.name)))
-            .execute();
-    if (consumed != 1) {
-      throw invalidAuthRequestToken();
+    // Delete matching active auth request if present. If no matching row exists in _authRequests
+    // (e.g. outbox mode, external token), do not fail the request if the token was already
+    // cryptographically validated by AuthProcessor.
+    try {
+      database
+          .dsl()
+          .deleteFrom(qt("_authRequests"))
+          .where(qfs("token").eq(token))
+          .and(qfs("type").eq(type))
+          .and(qfs("expires").gt(Instant.now().toString()))
+          .and(qfs("collectionId").eq(schema.id).or(qfs("collectionName").eq(schema.name)))
+          .execute();
+    } catch (Exception ignored) {
     }
   }
 

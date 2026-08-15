@@ -41,13 +41,14 @@ public final class HttpRateLimiter {
     }
 
     String key = limiterId + "|" + rule.label() + "|" + rule.audience() + "|" + clientIp;
+    long expectedDurationMillis = (long) rule.duration() * 1000L;
     Window window =
         windows.compute(
             key,
             (ignored, existing) -> {
               if (existing == null
                   || existing.maxRequests != rule.maxRequests
-                  || existing.duration != rule.duration) {
+                  || existing.durationMillis != expectedDurationMillis) {
                 return new Window(rule.maxRequests, rule.duration);
               }
               return existing;
@@ -218,8 +219,8 @@ public final class HttpRateLimiter {
     if (windows.size() < 1024) {
       return;
     }
-    long now = System.currentTimeMillis() / 1000L;
-    windows.entrySet().removeIf(entry -> entry.getValue().expired(now, 1800));
+    long nowMillis = System.currentTimeMillis();
+    windows.entrySet().removeIf(entry -> entry.getValue().expired(nowMillis, 1800_000L));
   }
 
   private static Map<String, Object> section(Map<String, Object> settings, String name) {
@@ -277,20 +278,20 @@ public final class HttpRateLimiter {
 
   private static final class Window {
     private final int maxRequests;
-    private final int duration;
+    private final long durationMillis;
     private int available;
-    private long started;
+    private long startedMillis;
 
-    private Window(int maxRequests, int duration) {
+    private Window(int maxRequests, int durationSeconds) {
       this.maxRequests = maxRequests;
-      this.duration = duration;
+      this.durationMillis = (long) durationSeconds * 1000L;
     }
 
     private synchronized boolean consume() {
-      long now = System.currentTimeMillis() / 1000L;
-      if (now - started >= duration) {
+      long now = System.currentTimeMillis();
+      if (now - startedMillis >= durationMillis) {
         available = maxRequests;
-        started = now;
+        startedMillis = now;
       }
       if (available <= 0) {
         return false;
@@ -299,8 +300,8 @@ public final class HttpRateLimiter {
       return true;
     }
 
-    private synchronized boolean expired(long now, long minimumIdle) {
-      return now - (started + duration) > minimumIdle;
+    private synchronized boolean expired(long nowMillis, long minimumIdleMillis) {
+      return nowMillis - (startedMillis + durationMillis) > minimumIdleMillis;
     }
   }
 }
