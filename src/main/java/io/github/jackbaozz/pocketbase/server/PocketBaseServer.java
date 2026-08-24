@@ -15,11 +15,22 @@ public final class PocketBaseServer {
     } catch (ServerConfig.HelpRequested ignored) {
       System.out.print(ServerConfig.usage());
       return;
+    } catch (Exception e) {
+      System.err.println("Error: " + e.getMessage());
+      System.exit(1);
+      return;
     }
 
     printBanner(config.applicationName());
 
-    LocalPocketBase server = LocalPocketBase.start(config);
+    LocalPocketBase server;
+    try {
+      server = LocalPocketBase.start(config);
+    } catch (Exception e) {
+      System.err.println("Failed to start server: " + e.getMessage());
+      System.exit(1);
+      return;
+    }
     Runtime.getRuntime().addShutdownHook(new Thread(server::close, "pocketbase-java-shutdown"));
 
     System.out.println("pocketbase-java listening on " + server.baseUrl());
