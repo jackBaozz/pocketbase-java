@@ -93,7 +93,8 @@ public final class JooqDatabase implements AutoCloseable {
                 + "PRAGMA synchronous = NORMAL;"
                 + "PRAGMA foreign_keys = ON;"
                 + "PRAGMA temp_store = MEMORY;"
-                + "PRAGMA cache_size = -65536;");
+                + "PRAGMA cache_size = -65536;"
+                + "PRAGMA defensive = ON;");
       }
       case MYSQL -> {
         config.setMaximumPoolSize(10);
