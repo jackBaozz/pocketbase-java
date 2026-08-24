@@ -307,7 +307,12 @@
     "accent_custom": "Color personalizado",
     "accent_eyedropper": "Elegir color de la pantalla",
     "accent_presets": "Preajustes",
-    "collection": "Colección de auth"
+    "collection": "Colección de auth",
+    "max_data_size": "Tamaño máximo de datos de registro (bytes)",
+    "max_data_size_help": "Establézcalo en 0 para usar el límite predeterminado de 16 KB (16384 bytes) por registro.",
+    "delete_all_logs": "Eliminar todos los registros",
+    "delete_all_logs_title": "Eliminar todos los registros",
+    "delete_all_logs_confirm": "¿Realmente desea eliminar todos los registros?"
   },
   "auth": {
     "login": "Iniciar sesión",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL ejecutado",
     "cron_triggered": "{{id}} ejecutado",
     "copied": "Copiado",
-    "otp_sent": "Se ha enviado un código de un solo uso a tu correo"
+    "otp_sent": "Se ha enviado un código de un solo uso a tu correo",
+    "logs_cleared": "Todos los registros se han eliminado con éxito."
   },
   "errors": {
     "provider_missing_auth_url": "Al proveedor {{name}} le falta la URL de autenticación",

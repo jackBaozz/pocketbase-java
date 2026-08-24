@@ -1825,6 +1825,7 @@ button.subtle.outline-button:focus-visible,
   user-select: none;
   cursor: crosshair;
   overflow: visible;
+  transform: translateZ(0);
 }
 
 .logs-chart-svg {
@@ -5182,6 +5183,34 @@ td.row-actions .icon-button:last-child {
   gap: 12px;
   padding: 16px 24px 20px;
   border-top: 1px solid var(--surfaceAlt2Color);
+}
+
+.logs-settings-foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logs-settings-btn-clear {
+  min-height: var(--btnHeight);
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--borderRadius);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  background: var(--dangerColor, #e53e3e);
+  color: #fff;
+}
+
+.logs-settings-btn-clear:hover:not(:disabled),
+.logs-settings-btn-clear:focus-visible {
+  opacity: 0.88;
+}
+
+.logs-settings-btn-clear:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .logs-settings-btn-close,

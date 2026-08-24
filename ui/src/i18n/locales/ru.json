@@ -307,7 +307,12 @@
     "accent_custom": "Свой цвет",
     "accent_eyedropper": "Взять цвет с экрана",
     "accent_presets": "Пресеты",
-    "collection": "Коллекция auth"
+    "collection": "Коллекция auth",
+    "max_data_size": "Максимальный размер данных лога (байты)",
+    "max_data_size_help": "Установите 0 для использования ограничения по умолчанию 16 КБ (16384 байт) на запись лога.",
+    "delete_all_logs": "Удалить все логи",
+    "delete_all_logs_title": "Удалить все логи",
+    "delete_all_logs_confirm": "Вы действительно хотите удалить все логи?"
   },
   "auth": {
     "login": "Войти",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL выполнен",
     "cron_triggered": "Запущено {{id}}",
     "copied": "Скопировано",
-    "otp_sent": "Одноразовый код отправлен на вашу почту"
+    "otp_sent": "Одноразовый код отправлен на вашу почту",
+    "logs_cleared": "Все логи успешно удалены."
   },
   "errors": {
     "provider_missing_auth_url": "У провайдера {{name}} не указан URL авторизации",

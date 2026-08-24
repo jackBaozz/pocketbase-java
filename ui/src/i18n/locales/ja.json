@@ -307,7 +307,12 @@
     "accent_custom": "カスタムカラー",
     "accent_eyedropper": "画面から色を取得",
     "accent_presets": "プリセット",
-    "collection": "認証コレクション"
+    "collection": "認証コレクション",
+    "max_data_size": "最大ログデータサイズ (バイト)",
+    "max_data_size_help": "0 に設定すると、ログエントリごとのデフォルトの 16KB (16384 バイト) の制限が使用されます。",
+    "delete_all_logs": "すべてのログを削除",
+    "delete_all_logs_title": "すべてのログを削除",
+    "delete_all_logs_confirm": "本当にすべてのログを削除しますか？"
   },
   "auth": {
     "login": "ログイン",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL を実行しました",
     "cron_triggered": "{{id}} を実行しました",
     "copied": "コピーしました",
-    "otp_sent": "ワンタイムコードをメールで送信しました"
+    "otp_sent": "ワンタイムコードをメールで送信しました",
+    "logs_cleared": "すべてのログを正常に削除しました。"
   },
   "errors": {
     "provider_missing_auth_url": "プロバイダー {{name}} に認証 URL が設定されていません",

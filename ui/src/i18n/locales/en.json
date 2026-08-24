@@ -307,7 +307,12 @@
     "accent_custom": "Custom color",
     "accent_eyedropper": "Pick color from screen",
     "accent_presets": "Presets",
-    "collection": "Auth collection"
+    "collection": "Auth collection",
+    "max_data_size": "Max log data size (bytes)",
+    "max_data_size_help": "Set to 0 to use the default 16KB (16384 bytes) per log entry data limit.",
+    "delete_all_logs": "Delete all logs",
+    "delete_all_logs_title": "Delete all logs",
+    "delete_all_logs_confirm": "Do you really want to delete all logs?"
   },
   "auth": {
     "login": "Login",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL executed",
     "cron_triggered": "Triggered {{id}}",
     "copied": "Copied",
-    "otp_sent": "A one-time code has been sent to your email"
+    "otp_sent": "A one-time code has been sent to your email",
+    "logs_cleared": "Successfully deleted all logs."
   },
   "errors": {
     "provider_missing_auth_url": "Provider {{name}} is missing an auth URL",

@@ -307,7 +307,12 @@
     "accent_custom": "Couleur personnalisée",
     "accent_eyedropper": "Prélever une couleur à l'écran",
     "accent_presets": "Préréglages",
-    "collection": "Collection d'auth"
+    "collection": "Collection d'auth",
+    "max_data_size": "Taille max des données du journal (octets)",
+    "max_data_size_help": "Définissez sur 0 pour utiliser la limite par défaut de 16 Ko (16384 octets) par entrée de journal.",
+    "delete_all_logs": "Supprimer tous les journaux",
+    "delete_all_logs_title": "Supprimer tous les journaux",
+    "delete_all_logs_confirm": "Voulez-vous vraiment supprimer tous les journaux ?"
   },
   "auth": {
     "login": "Connexion",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL exécuté",
     "cron_triggered": "{{id}} déclenché",
     "copied": "Copié",
-    "otp_sent": "Un code à usage unique a été envoyé à votre adresse e-mail"
+    "otp_sent": "Un code à usage unique a été envoyé à votre adresse e-mail",
+    "logs_cleared": "Tous les journaux ont été supprimés avec succès."
   },
   "errors": {
     "provider_missing_auth_url": "Le fournisseur {{name}} n’a pas d’URL d’authentification",

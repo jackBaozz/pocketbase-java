@@ -716,7 +716,12 @@
     "accent_custom": "Benutzerdefinierte Farbe",
     "accent_eyedropper": "Farbe vom Bildschirm wählen",
     "accent_presets": "Vorlagen",
-    "collection": "Auth-Sammlung"
+    "collection": "Auth-Sammlung",
+    "max_data_size": "Maximale Protokolldatengröße (Bytes)",
+    "max_data_size_help": "Auf 0 setzen, um das Standardlimit von 16 KB (16384 Bytes) pro Protokolleintrag zu verwenden.",
+    "delete_all_logs": "Alle Protokolle löschen",
+    "delete_all_logs_title": "Alle Protokolle löschen",
+    "delete_all_logs_confirm": "Möchten Sie wirklich alle Protokolle löschen?"
   },
   "transfer": {
     "export_intro": "Unten findest du die aktuelle Sammlungskonfiguration, die du in eine andere PocketBase-Umgebung importieren kannst.",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL ausgeführt",
     "cron_triggered": "{{id}} ausgelöst",
     "copied": "Kopiert",
-    "otp_sent": "Ein Einmalcode wurde an deine E-Mail-Adresse gesendet"
+    "otp_sent": "Ein Einmalcode wurde an deine E-Mail-Adresse gesendet",
+    "logs_cleared": "Alle Protokolle wurden erfolgreich gelöscht."
   },
   "errors": {
     "provider_missing_auth_url": "Anbieter {{name}} hat keine Auth-URL",

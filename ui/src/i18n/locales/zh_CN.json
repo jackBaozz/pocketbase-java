@@ -307,7 +307,12 @@
     "accent_custom": "自定义颜色",
     "accent_eyedropper": "从屏幕取色",
     "accent_presets": "预设颜色",
-    "collection": "认证集合"
+    "collection": "认证集合",
+    "max_data_size": "最大日志数据大小 (字节)",
+    "max_data_size_help": "设为 0 时使用默认的单条日志 16KB (16384 字节) 数据大小限制。",
+    "delete_all_logs": "删除全部日志",
+    "delete_all_logs_title": "删除全部日志",
+    "delete_all_logs_confirm": "确定要删除全部日志吗？"
   },
   "auth": {
     "login": "登录",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL 已执行",
     "cron_triggered": "已触发 {{id}}",
     "copied": "已复制",
-    "otp_sent": "一次性验证码已发送到你的邮箱"
+    "otp_sent": "一次性验证码已发送到你的邮箱",
+    "logs_cleared": "已成功删除全部日志。"
   },
   "errors": {
     "provider_missing_auth_url": "提供方 {{name}} 缺少认证 URL",

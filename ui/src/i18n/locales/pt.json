@@ -307,7 +307,12 @@
     "accent_custom": "Cor personalizada",
     "accent_eyedropper": "Escolher cor da tela",
     "accent_presets": "Predefinições",
-    "collection": "Coleção de auth"
+    "collection": "Coleção de auth",
+    "max_data_size": "Tamanho máximo de dados do log (bytes)",
+    "max_data_size_help": "Defina como 0 para usar o limite padrão de 16 KB (16384 bytes) por entrada de log.",
+    "delete_all_logs": "Excluir todos os logs",
+    "delete_all_logs_title": "Excluir todos os logs",
+    "delete_all_logs_confirm": "Tem certeza de que deseja excluir todos os logs?"
   },
   "auth": {
     "login": "Entrar",
@@ -818,7 +823,8 @@
     "sql_executed": "SQL executado",
     "cron_triggered": "{{id}} acionado",
     "copied": "Copiado",
-    "otp_sent": "Um código de uso único foi enviado para o seu e-mail"
+    "otp_sent": "Um código de uso único foi enviado para o seu e-mail",
+    "logs_cleared": "Todos os logs foram excluídos com sucesso."
   },
   "errors": {
     "provider_missing_auth_url": "O provedor {{name}} está sem uma URL de autenticação",

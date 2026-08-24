@@ -2554,6 +2554,31 @@ function App() {
     }
   }
 
+  async function clearAllLogs() {
+    const confirmed = await confirm({
+      title: t("settings.delete_all_logs_title", "Delete all logs"),
+      message: t(
+        "settings.delete_all_logs_confirm",
+        "Do you really want to delete all logs?"
+      ),
+      confirmLabel: t("actions.delete", "Delete"),
+      danger: true
+    });
+    if (!confirmed) return;
+    try {
+      await api("/api/logs", { method: "DELETE" });
+      notify(t("notifications.logs_cleared", "Successfully deleted all logs."));
+      setLogsSettingsOpen(false);
+      setSelectedLog(null);
+      setLogRouteId("");
+      replaceLogRoute(logFilter, 1, includeSuperuserRequests, "");
+      logPageCacheRef.current = { scope: "", pages: new Map(), stats: null };
+      setLogRefreshVersion((v) => v + 1);
+    } catch (error) {
+      notify(errorMessage(error), "error");
+    }
+  }
+
   async function saveSettings(draft?: string): Promise<boolean> {
     // onClick={saveSettings} would pass a MouseEvent as the first arg — only accept real draft strings.
     const source = typeof draft === "string" ? draft : settingsDraft;
@@ -3258,6 +3283,7 @@ function App() {
           loading={loading}
           onDraft={setSettingsDraft}
           onSave={saveSettings}
+          onClearLogs={clearAllLogs}
           onClose={() => setLogsSettingsOpen(false)}
         />
       )}
@@ -5784,6 +5810,7 @@ type LogSettingsModalProps = {
   loading: boolean;
   onDraft: (value: string) => void;
   onSave: (draft?: string) => Promise<boolean>;
+  onClearLogs: () => Promise<void>;
   onClose: () => void;
 };
 
@@ -5832,10 +5859,10 @@ function LogSettingsModal(props: LogSettingsModalProps) {
   }
 
   const levelHints = [
+    { value: "-4", label: "DEBUG" },
     { value: "0", label: "INFO" },
     { value: "4", label: "WARN" },
-    { value: "8", label: "ERROR" },
-    { value: "-4", label: "DEBUG" }
+    { value: "8", label: "ERROR" }
   ] as const;
 
   return (
@@ -5870,15 +5897,37 @@ function LogSettingsModal(props: LogSettingsModalProps) {
               name="logs.maxDays"
               type="number"
               min={0}
-              max={3650}
               value={String(logs.maxDays ?? 5)}
               onChange={(event) =>
-                updateSetting("maxDays", Math.max(0, Math.min(3650, Number(event.target.value || 0))))
+                updateSetting("maxDays", Math.max(0, Number(event.target.value || 0)))
               }
               disabled={disabled}
             />
             <span className="logs-settings-help">
               {t("settings.max_days_retention_help", "Set to 0 to disable logs persistence.")}
+            </span>
+          </label>
+
+          <label className="logs-settings-field">
+            <span className="logs-settings-label">
+              {t("settings.max_data_size", "Max log data size (bytes)")}
+              <em className="logs-settings-required" aria-hidden="true">
+                *
+              </em>
+            </span>
+            <input
+              id="logs-max-data-size"
+              name="logs.maxDataSize"
+              type="number"
+              min={0}
+              value={String(logs.maxDataSize ?? 0)}
+              onChange={(event) =>
+                updateSetting("maxDataSize", Math.max(0, Number(event.target.value || 0)))
+              }
+              disabled={disabled}
+            />
+            <span className="logs-settings-help">
+              {t("settings.max_data_size_help", "Set to 0 to use the default 16KB (16384 bytes) per log entry data limit.")}
             </span>
           </label>
 
@@ -5893,11 +5942,11 @@ function LogSettingsModal(props: LogSettingsModalProps) {
               id="logs-min-level"
               name="logs.minLevel"
               type="number"
-              min={-8}
-              max={16}
+              min={-100}
+              max={100}
               value={String(logs.minLevel ?? 0)}
               onChange={(event) =>
-                updateSetting("minLevel", Math.max(-8, Math.min(16, Number(event.target.value || 0))))
+                updateSetting("minLevel", Math.max(-100, Math.min(100, Number(event.target.value || 0))))
               }
               disabled={disabled}
             />
@@ -5943,17 +5992,27 @@ function LogSettingsModal(props: LogSettingsModalProps) {
         </div>
 
         <footer className="logs-settings-foot">
-          <button type="button" className="logs-settings-btn-close" onClick={closeUnlessSaving} disabled={saving}>
-            {t("actions.close", "Close")}
-          </button>
           <button
             type="button"
-            className="logs-settings-btn-save"
-            onClick={() => void save()}
-            disabled={disabled || !dirty}
+            className="logs-settings-btn-clear"
+            onClick={props.onClearLogs}
+            disabled={disabled}
           >
-            {saving ? t("common.submitting", "Submitting...") : t("actions.save_changes", "Save changes")}
+            {t("settings.delete_all_logs", "Delete all logs")}
           </button>
+          <div className="logs-settings-foot-actions">
+            <button type="button" className="logs-settings-btn-close" onClick={closeUnlessSaving} disabled={saving}>
+              {t("actions.close", "Close")}
+            </button>
+            <button
+              type="button"
+              className="logs-settings-btn-save"
+              onClick={() => void save()}
+              disabled={disabled || !dirty}
+            >
+              {saving ? t("common.submitting", "Submitting...") : t("actions.save_changes", "Save changes")}
+            </button>
+          </div>
         </footer>
       </section>
     </div>
@@ -10329,7 +10388,7 @@ function logDataChips(log: LogItem): LogChip[] {
     if (data.userIP !== undefined) chips.push({ key: "userIP", value: String(data.userIP) });
   } else {
     for (const [key, value] of Object.entries(data)) {
-      if (key === "error" || key === "details") continue;
+      if (key === "error" || key === "details" || key === "__pb_truncated__") continue;
       if (chips.length >= 6) break;
       if (value === null || value === undefined || value === "") continue;
       chips.push({ key, value: typeof value === "object" ? JSON.stringify(value) : String(value) });
