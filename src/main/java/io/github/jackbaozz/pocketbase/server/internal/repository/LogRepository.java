@@ -3,6 +3,7 @@ package io.github.jackbaozz.pocketbase.server.internal.repository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.internal.ApiException;
 import io.github.jackbaozz.pocketbase.server.internal.IdGenerator;
+import io.github.jackbaozz.pocketbase.server.internal.LogPersistenceSanitizer;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.RecordProcessor;
 import io.github.jackbaozz.pocketbase.server.internal.RequestPrincipal;
@@ -174,14 +175,15 @@ public class LogRepository extends BaseRepository {
       String remoteIp) {
     Map<String, Object> settings = logSettings();
     int level = status >= 400 ? 8 : 0;
-    if (intSetting(settings.get("maxDays"), 5) <= 0
-        || level < intSetting(settings.get("minLevel"), 0)) {
+    long maxDays = longSetting(settings.get("maxDays"), 5L);
+    long minLevel = longSetting(settings.get("minLevel"), 0L);
+    if (maxDays <= 0 || level < minLevel) {
       return;
     }
 
     String id = IdGenerator.id();
     String now = Instant.now().toString();
-    String message = (method == null ? "" : method) + " " + (url == null ? "" : url);
+    String rawMessage = (method == null ? "" : method) + " " + (url == null ? "" : url);
     Map<String, Object> data = new LinkedHashMap<>();
     data.put("type", "request");
     data.put("method", method == null ? "" : method);
@@ -206,9 +208,13 @@ public class LogRepository extends BaseRepository {
     data.put(
         "auth",
         principal != null ? (principal.superuser() ? SUPERUSERS : principal.collectionName()) : "");
-    if (principal != null && truthySetting(settings.get("logAuthId"), true)) {
+    if (principal != null && truthySetting(settings.get("logAuthId"), false)) {
       data.put("authId", principal.id());
     }
+
+    long maxDataSize = longSetting(settings.get("maxDataSize"), 0L);
+    LogPersistenceSanitizer.Result sanitized =
+        LogPersistenceSanitizer.sanitize(rawMessage, data, maxDataSize, mapper);
 
     try {
       database
@@ -218,24 +224,28 @@ public class LogRepository extends BaseRepository {
           .set(qfs("created"), now)
           .set(qfs("updated"), now)
           .set(qfi("level"), level)
-          .set(qfs("message"), message)
-          .set(qfs("data"), mapper.writeValueAsString(data))
+          .set(qfs("message"), sanitized.message())
+          .set(qfs("data"), sanitized.dataJson())
           .execute();
-    } catch (DataAccessException | IOException ignored) {
+    } catch (DataAccessException ignored) {
       // Activity logging must never fail the request
     }
   }
 
   public void cleanupForCurrentSettings() {
     Map<String, Object> settings = logSettings();
-    int maxDays = intSetting(settings.get("maxDays"), 5);
-    int minLevel = intSetting(settings.get("minLevel"), 0);
-    Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(maxDays, ChronoUnit.DAYS);
+    long maxDays = longSetting(settings.get("maxDays"), 5L);
+    long minLevel = longSetting(settings.get("minLevel"), 0L);
+    if (maxDays <= 0) {
+      truncateLogs();
+      return;
+    }
+    Instant cutoff = cutoffInstant(maxDays);
     try {
       database
           .dsl()
           .deleteFrom(qt("_logs"))
-          .where(qfs("created").le(cutoff.toString()).or(qfi("level").lt(minLevel)))
+          .where(qfs("created").le(cutoff.toString()).or(qfi("level").lt((int) Math.min(Integer.MAX_VALUE, Math.max(Integer.MIN_VALUE, minLevel)))))
           .execute();
     } catch (DataAccessException ignored) {
     }
@@ -243,10 +253,28 @@ public class LogRepository extends BaseRepository {
 
   public void deleteOldLogs() {
     Map<String, Object> settings = logSettings();
-    int maxDays = intSetting(settings.get("maxDays"), 5);
-    Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(maxDays, ChronoUnit.DAYS);
+    long maxDays = longSetting(settings.get("maxDays"), 5L);
+    if (maxDays <= 0) {
+      truncateLogs();
+      return;
+    }
+    Instant cutoff = cutoffInstant(maxDays);
     try {
       database.dsl().deleteFrom(qt("_logs")).where(qfs("created").le(cutoff.toString())).execute();
+    } catch (DataAccessException ignored) {
+    }
+  }
+
+  private Instant cutoffInstant(long maxDays) {
+    if (maxDays >= 365_000L) {
+      return Instant.EPOCH;
+    }
+    return Instant.now().minus(maxDays, ChronoUnit.DAYS);
+  }
+
+  public void truncateLogs() {
+    try {
+      database.dsl().deleteFrom(qt("_logs")).execute();
     } catch (DataAccessException ignored) {
     }
   }
@@ -254,6 +282,17 @@ public class LogRepository extends BaseRepository {
   private Map<String, Object> logSettings() {
     Object value = settingsRepository.loadRawSettings().get("logs");
     return value instanceof Map<?, ?> map ? Unsafe.stringObjectMap(map) : Map.of();
+  }
+
+  private long longSetting(Object value, long fallback) {
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    try {
+      return Long.parseLong(String.valueOf(value));
+    } catch (Exception ignored) {
+      return fallback;
+    }
   }
 
   private int intSetting(Object value, int fallback) {

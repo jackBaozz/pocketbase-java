@@ -268,10 +268,11 @@ public class SettingsRepository extends BaseRepository {
     if (logs.containsKey("logIp") && !logs.containsKey("logIP")) {
       logs.put("logIP", logs.remove("logIp"));
     }
-    normalizeInt(logs, "maxDays", 5, 0, 3650);
-    normalizeInt(logs, "minLevel", 0, 0, 16);
+    normalizeLong(logs, "maxDataSize", 0L, 0L, 9_007_199_254_740_991L);
+    normalizeLong(logs, "maxDays", 5L, 0L, 9_007_199_254_740_991L);
+    normalizeLong(logs, "minLevel", 0L, -9_007_199_254_740_991L, 9_007_199_254_740_991L);
     normalizeBool(logs, "logIP", true);
-    normalizeBool(logs, "logAuthId", true);
+    normalizeBool(logs, "logAuthId", false);
     Map<String, Object> batch = section(settings, "batch");
     normalizeInt(batch, "maxRequests", 50, 1, 500);
     normalizeInt(batch, "timeout", 3, 1, 3600);
@@ -422,7 +423,7 @@ public class SettingsRepository extends BaseRepository {
             "senderName", "PocketBase Java",
             "senderAddress", "noreply@example.com",
             "hideControls", false),
-        "logs", orderedMap("maxDays", 5, "minLevel", 0, "logIP", true, "logAuthId", true),
+        "logs", orderedMap("maxDays", 5, "minLevel", 0, "logIP", true, "logAuthId", false, "maxDataSize", 0),
         "smtp",
         orderedMap(
             "enabled",
@@ -520,6 +521,21 @@ public class SettingsRepository extends BaseRepository {
     return "password".equals(normalized)
         || "secret".equals(normalized)
         || "privatekey".equals(normalized);
+  }
+
+  private void normalizeLong(
+      Map<String, Object> section, String key, long fallback, long min, long max) {
+    section.put(key, Math.max(min, Math.min(max, longSetting(section.get(key), fallback))));
+  }
+
+  private long longSetting(Object value, long fallback) {
+    if (value instanceof Number number)
+      return number.longValue();
+    try {
+      return Long.parseLong(String.valueOf(value));
+    } catch (Exception ignored) {
+      return fallback;
+    }
   }
 
   private void normalizeInt(

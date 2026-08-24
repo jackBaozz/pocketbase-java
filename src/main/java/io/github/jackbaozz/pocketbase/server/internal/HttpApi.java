@@ -74,6 +74,7 @@ public final class HttpApi implements HttpHandler {
           new Route("POST", "/api/collections/{collection}/confirm-email-change"),
           new Route("POST", "/api/collections/{collection}/impersonate/{id}"),
           new Route("GET", "/api/logs"),
+          new Route("DELETE", "/api/logs"),
           new Route("GET", "/api/logs/stats"),
           new Route("GET", "/api/logs/{id}"),
           new Route("GET", "/api/backups"),
@@ -461,6 +462,10 @@ public final class HttpApi implements HttpHandler {
     if (segments.size() >= 2 && "logs".equals(segments.get(1))) {
       RequestPrincipal principal = principal(exchange).orElse(null);
       requireSuperuser(principal);
+      if (segments.size() == 2 && "DELETE".equals(method)) {
+        store.truncateLogs();
+        return NoContent.INSTANCE;
+      }
       if (segments.size() == 2 && "GET".equals(method)) {
         return store.listLogs(query);
       }
@@ -1350,6 +1355,7 @@ public final class HttpApi implements HttpHandler {
     // Record files are supplied by users. Never allow the browser to infer an active
     // document type (for example an HTML payload named as an image), and sandbox any
     // document that a browser still chooses to render inline.
+    exchange.getResponseHeaders().set("Cross-Origin-Opener-Policy", "same-origin");
     exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
     exchange
         .getResponseHeaders()
@@ -1493,6 +1499,7 @@ public final class HttpApi implements HttpHandler {
   }
 
   private void addCommonHeaders(HttpExchange exchange) {
+    exchange.getResponseHeaders().set("Cross-Origin-Opener-Policy", "same-origin");
     exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
     exchange
         .getResponseHeaders()

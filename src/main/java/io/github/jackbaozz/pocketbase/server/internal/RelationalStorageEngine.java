@@ -233,6 +233,11 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
   }
 
   @Override
+  public void truncateLogs() {
+    logRepository.truncateLogs();
+  }
+
+  @Override
   public List<Map<String, Object>> listCrons() {
     List<Map<String, Object>> jobs = new ArrayList<>();
     jobs.add(Map.of("id", "__pbLogsCleanup__", "expression", "0 */6 * * *"));

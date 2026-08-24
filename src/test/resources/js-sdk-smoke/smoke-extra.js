@@ -47,6 +47,14 @@ async function run() {
             console.error("Failed to list auth methods:", e);
         }
 
+        console.log("Testing logs truncate via API/SDK...");
+        if (typeof pb.logs?.truncate === "function") {
+            await pb.logs.truncate();
+        } else {
+            await pb.send("/api/logs", { method: "DELETE" });
+        }
+        console.log("Logs truncate verified!");
+
         // Cleanup
         console.log("✅ JS SDK Extra Smoke Test Passed!");
         process.exit(0);

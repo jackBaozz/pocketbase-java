@@ -283,6 +283,16 @@ class PocketBaseClientTest {
   }
 
   @Test
+  void logsServiceTruncateSendsDeleteRequest() {
+    client.authStore().save("super-token", null);
+
+    client.logs().truncate();
+
+    assertEquals("Bearer super-token", lastLogsAuthorization);
+    assertEquals("/api/logs", lastLogsPath);
+  }
+
+  @Test
   void logsServiceBuildsListViewAndStatsRoutes() {
     client.authStore().save("super-token", null);
 
@@ -563,6 +573,10 @@ class PocketBaseClientTest {
   private void handleLogs(HttpExchange exchange) throws IOException {
     lastLogsAuthorization = exchange.getRequestHeaders().getFirst("Authorization");
     lastLogsPath = exchange.getRequestURI().getPath();
+    if ("DELETE".equals(exchange.getRequestMethod())) {
+      sendNoContent(exchange);
+      return;
+    }
     lastLogsQuery =
         exchange.getRequestURI().getRawQuery() == null
             ? ""

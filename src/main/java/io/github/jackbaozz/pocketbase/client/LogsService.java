@@ -40,6 +40,19 @@ public final class LogsService {
         JsonNode.class);
   }
 
+  public void truncate() {
+    truncate(Map.of());
+  }
+
+  public void truncate(Map<String, ?> query) {
+    client.send(
+        "DELETE",
+        client.apiPath("logs"),
+        query == null ? Map.of() : query,
+        null,
+        Void.class);
+  }
+
   private static String requireText(String value, String name) {
     if (value == null || value.isBlank()) {
       throw new IllegalArgumentException(name + " must not be blank");

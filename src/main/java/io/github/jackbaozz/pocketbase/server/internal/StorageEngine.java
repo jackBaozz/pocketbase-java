@@ -39,6 +39,8 @@ public interface StorageEngine {
 
   Map<String, Object> getLog(String id, Map<String, String> query);
 
+  void truncateLogs();
+
   List<Map<String, Object>> listCrons();
 
   void runCron(String id);
