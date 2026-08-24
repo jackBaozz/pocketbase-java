@@ -67,13 +67,13 @@ make build dev && make run dev
 或者直接用 Maven 编译并以 JAR 启动：
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.3.7-all.jar start --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.4.0-all.jar start --http 127.0.0.1:8090 --dir pb_data
 ```
 
 当前只有启动这一种命令，因此 `start` 也可以省略：
 
 ```bash
-java -jar target/pocketbase-java-0.3.7-all.jar
+java -jar target/pocketbase-java-0.4.0-all.jar
 ```
 
 启动后可打开：
@@ -84,7 +84,7 @@ java -jar target/pocketbase-java-0.3.7-all.jar
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.3.7-all.jar start
+java -jar target/pocketbase-java-0.4.0-all.jar start
 ```
 
 ### 配置文件
@@ -105,7 +105,7 @@ storage.type=sqlite
 然后正常启动即可：
 
 ```bash
-java -jar target/pocketbase-java-0.3.7-all.jar start
+java -jar target/pocketbase-java-0.4.0-all.jar start
 ```
 
 SQLite 数据库会自动创建在 `<server.data-dir>/pocketbase.db`，不需要单独启动
@@ -140,9 +140,9 @@ cp config/application-production.properties.example config/application-productio
 可以在运行时选择 profile，优先级从高到低如下：
 
 ```bash
-java -jar target/pocketbase-java-0.3.7-all.jar start --profile dev
-java -Dapp.profile=dev -jar target/pocketbase-java-0.3.7-all.jar start
-PB_PROFILE=dev java -jar target/pocketbase-java-0.3.7-all.jar start
+java -jar target/pocketbase-java-0.4.0-all.jar start --profile dev
+java -Dapp.profile=dev -jar target/pocketbase-java-0.4.0-all.jar start
+PB_PROFILE=dev java -jar target/pocketbase-java-0.4.0-all.jar start
 ```
 
 也可以在基础配置中设置 `app.profile=dev`。Maven Profile 仅在构建期生效，
