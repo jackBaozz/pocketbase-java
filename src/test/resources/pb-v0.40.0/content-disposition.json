@@ -1,0 +1,21 @@
+{
+  "header": "Content-Disposition",
+  "examples": [
+    {
+      "input": "simple.txt",
+      "expected": "attachment; filename=\"simple.txt\""
+    },
+    {
+      "input": "my file.pdf",
+      "expected": "attachment; filename=\"my file.pdf\""
+    },
+    {
+      "input": "test\"file.txt",
+      "expected": "attachment; filename=\"test_file.txt\""
+    },
+    {
+      "input": "test;file.txt",
+      "expected": "attachment; filename=\"test;file.txt\""
+    }
+  ]
+}

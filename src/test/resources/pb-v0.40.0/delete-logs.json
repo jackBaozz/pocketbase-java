@@ -1,0 +1,6 @@
+{
+  "method": "DELETE",
+  "path": "/api/logs",
+  "auth": "superuser",
+  "expectedStatus": 204
+}

@@ -1,0 +1,25 @@
+{
+  "messageMaxBytes": 8000,
+  "defaultMaxDataSize": 16384,
+  "truncatedMarkerKey": "__pb_truncated__",
+  "testCases": [
+    {
+      "name": "under_threshold",
+      "data": {
+        "key": "value"
+      },
+      "maxDataSize": 100,
+      "expectTruncated": false
+    },
+    {
+      "name": "over_threshold",
+      "data": {
+        "k1": "v1",
+        "k2": "long long long value that exceeds budget",
+        "k3": "v3"
+      },
+      "maxDataSize": 30,
+      "expectTruncated": true
+    }
+  ]
+}

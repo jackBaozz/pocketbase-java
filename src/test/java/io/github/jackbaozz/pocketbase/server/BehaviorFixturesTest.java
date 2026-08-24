@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InputStream;
+import java.util.HashSet;
+import java.util.Set;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -435,5 +438,35 @@ public class BehaviorFixturesTest {
     String storage = System.getProperty("storage");
     assertNotNull(storage);
     System.out.println("Current storage system property is: " + storage);
+  }
+
+  @Test
+  void testV040TargetFixturesConsistency() throws Exception {
+    try (InputStream is = getClass().getResourceAsStream("/pb-v0.40.0/target-route-manifest.json")) {
+      assertNotNull(is, "Missing target-route-manifest.json");
+      JsonNode root = mapper.readTree(is);
+      assertTrue(root.isArray());
+      boolean hasDeleteLogs = false;
+      Set<String> uniqueRoutes = new HashSet<>();
+      for (JsonNode route : root) {
+        String method = route.get("method").asText();
+        String path = route.get("path").asText();
+        String key = method + " " + path;
+        assertTrue(uniqueRoutes.add(key), "Duplicate route in target manifest: " + key);
+        if ("DELETE".equals(method) && "/api/logs".equals(path)) {
+          hasDeleteLogs = true;
+          assertEquals("superuser", route.get("auth").asText());
+        }
+      }
+      assertTrue(hasDeleteLogs, "Target manifest must include DELETE /api/logs");
+    }
+
+    try (InputStream is = getClass().getResourceAsStream("/pb-v0.40.0/settings-logs.json")) {
+      assertNotNull(is);
+      JsonNode node = mapper.readTree(is);
+      assertTrue(node.has("logs"));
+      assertEquals(0, node.get("logs").get("maxDataSize").asLong());
+      assertEquals(false, node.get("logs").get("logAuthId").asBoolean());
+    }
   }
 }

@@ -1,0 +1,16 @@
+{
+  "logs": {
+    "maxDataSize": 0,
+    "maxDays": 5,
+    "minLevel": 0,
+    "logIP": true,
+    "logAuthId": false
+  },
+  "constraints": {
+    "maxDataSizeMin": 0,
+    "maxDataSizeMax": 9007199254740991,
+    "maxDaysMin": 0,
+    "maxDaysMax": 9007199254740991,
+    "minLevelDefault": 0
+  }
+}
