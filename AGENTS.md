@@ -22,7 +22,7 @@
 
 ## 🎨 Admin UI 与官方交互对齐 (2026-07-26)
 
-- **差异基线文档**：`docs/UI-Parity-Gap-Analysis-v0.39.9.md` 记录了本项目 Admin UI 与官方 v0.39.9 的逐模块交互差异分析及完整修复记录。**所有可落地的差异项已全部修复**，剩余仅为架构性重构和文档明确排除的 Java 实现边界。补充新 UI 功能前可参考该文档了解已覆盖的范围。
+- **差异基线文档**：`docs/UI-Parity-Gap-Analysis-v0.39.11.md` 是当前 Admin UI 对标官方 PocketBase v0.39.11 的基线，记录本轮增量、Java 映射结论和剩余验收项。`docs/UI-Parity-Gap-Analysis-v0.39.9.md` 与 `docs/UI-Parity-Gap-Analysis-v0.39.10.md` 仅保留为历史分析，不应再作为当前版本判断依据。补充新 UI 功能前先查阅当前基线文档，避免重复实现已覆盖的范围。
 - **已修复的关键语义**：API 规则的空字符串 `""`（所有人可访问）与 `null`（仅超管）是两种不同状态，必须在加载与提交时严格保持区分——不可用 `?? ""` 或 "空则转 null" 之类的写法抹平，那会静默破坏用户的集合权限配置。UI 上以锁定/解锁交互体现这一区分。
 - **字段控件的唯一实现**在 `ui/src/components/RecordFieldControl.tsx`；`App.tsx` 内曾存在一份从未被引用的同名副本，已删除，请勿再在 `App.tsx` 里重复定义组件。
 - **CSS 变量**必须使用 `ui/src/styles.css` 中实际定义的名称（如 `--surfaceColor`、`--surfaceTxtHintColor`、`--surfaceAlt1~4Color`），不要照搬官方 Svelte 版的变量名（`--baseColor`、`--txtHintColor` 等在本项目不存在，会静默失效）。

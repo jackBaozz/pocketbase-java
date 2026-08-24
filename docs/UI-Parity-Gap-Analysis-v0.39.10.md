@@ -1,5 +1,7 @@
 # Admin UI 交互差异分析（对照官方 PocketBase v0.39.10）
 
+> **历史文档**：本文只记录 v0.39.9 → v0.39.10 的增量；当前对标基线已升级为 [PocketBase v0.39.11](UI-Parity-Gap-Analysis-v0.39.11.md)。
+
 > 生成于 2026-08-08。
 >
 > 对照上游标签：[`v0.39.10`](https://github.com/pocketbase/pocketbase/tree/v0.39.10)（`0a74d2f25d6decfc9bd0fc64656ec431f23bf610`），相对 [`v0.39.9`](https://github.com/pocketbase/pocketbase/compare/v0.39.9...v0.39.10) 共 **7 个提交 / 23 个文件**。
@@ -128,7 +130,7 @@ Java 端没有等价的可空指针对象图：`UploadedFile` 是值 record，�
 
 ### 4. npm 开发依赖及上游 `ui/dist` 重建 — 不直接同步
 
-官方只更新锁文件中的开发期依赖并重新打包其 Svelte UI。本项目的 React/Vite 依赖图独立（见 `UI/package.json`），应基于自身锁文件、Node 版本与构建回归安排维护，不能复制 PocketBase Go 仓库的 `package-lock.json`。
+官方只更新锁文件中的开发期依赖并重新打包其 Svelte UI。本项目的 React/Vite 依赖图独立（见 `ui/package.json`），应基于自身锁文件、Node 版本与构建回归安排维护，不能复制 PocketBase Go 仓库的 `package-lock.json`。
 
 ---
 
@@ -141,7 +143,7 @@ Java 端没有等价的可空指针对象图：`UploadedFile` 是值 record，�
 | P2 | P2-39.10-1 日志图表首次加载占位与空列表折叠 | **待实现** | 唯一应当落地的 v0.39.10 UI 增量 |
 | P3 | CLI、Go file pointer、Go SQLite、上游 dev deps | **不纳入 UI 实现** | 需各自的 Java 运行时/依赖维护专题，而非机械移植 |
 
-> **下一步**：实现 P2-39.10-1 后，执行 `cd UI && npm run build`，并以慢速统计、空日志、快速切换筛选、缓存翻页四类场景完成浏览器回归；构建产物会写入 `src/main/resources/pocketbase-admin/`。
+> **下一步**：实现 P2-39.10-1 后，执行 `cd ui && npm run build`，并以慢速统计、空日志、快速切换筛选、缓存翻页四类场景完成浏览器回归；构建产物会写入 `src/main/resources/pocketbase-admin/`。
 
 ---
 
@@ -156,7 +158,7 @@ git diff --stat v0.39.9..v0.39.10
 git diff v0.39.9..v0.39.10 -- ui/src/logs/logsChart.js ui/src/logs/logsList.js ui/src/logs/pageLogs.js ui/src/css/logs.css
 
 # 本项目实现 P2 后的 UI 构建
-cd UI && npm run build
+cd ui && npm run build
 ```
 
 > 本文档是 **v0.39.10 增量基线**。它不改写 v0.39.9 历史分析；将来继续升级时，应从本文件的“待实现 / 不适用”结论继续比较，而不是重新把已修复项计入缺口。

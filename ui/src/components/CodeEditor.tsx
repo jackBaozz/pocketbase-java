@@ -6,8 +6,9 @@ import "./CodeEditor.css";
 /**
  * Lightweight code editor with syntax highlight + inline autocomplete.
  *
- * Ported from the official PocketBase v0.39.9 `base/codeEditor.js`, but without
- * any third-party dependency: the highlighting is a small hand written scanner
+ * Inspired by the official PocketBase code editor behavior (including the
+ * v0.39.11 ESC workaround for the TAB focus trap), but without any third-party
+ * dependency: the highlighting is a small hand-written scanner
  * and the editing surface is a plain transparent `<textarea>` stacked on top of
  * a `<pre>` that paints the colored tokens.
  *
