@@ -1429,9 +1429,10 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       Map<String, String> headers,
       String remoteAddress) {
     Map<String, Object> logSettings = settingsSection("logs");
-    int maxDays = intSetting(logSettings.get("maxDays"), 5);
+    long maxDays = longSetting(logSettings.get("maxDays"), 5L);
+    long minLevel = longSetting(logSettings.get("minLevel"), 0L);
     int level = status >= 400 ? 8 : 0;
-    if (maxDays <= 0 || level < intSetting(logSettings.get("minLevel"), 0)) {
+    if (maxDays <= 0 || level < minLevel) {
       return;
     }
 
@@ -1460,20 +1461,25 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
     if (principal != null) {
       data.put("auth", principal.superuser() ? SUPERUSERS : principal.collectionName());
-      if (truthySetting(logSettings.get("logAuthId"), true)) {
+      if (truthySetting(logSettings.get("logAuthId"), false)) {
         data.put("authId", principal.id());
       }
     } else {
       data.put("auth", "");
     }
 
+    long maxDataSize = longSetting(logSettings.get("maxDataSize"), 0L);
+    String rawMessage = (method == null ? "" : method) + " " + (url == null ? "" : url);
+    LogPersistenceSanitizer.Result sanitized =
+        LogPersistenceSanitizer.sanitize(rawMessage, data, maxDataSize, mapper);
+
     Map<String, Object> log = new LinkedHashMap<>();
     log.put("id", IdGenerator.id());
     log.put("created", timestamp);
     log.put("updated", timestamp);
     log.put("level", level);
-    log.put("message", method + " " + url);
-    log.put("data", data);
+    log.put("message", sanitized.message());
+    log.put("data", sanitized.dataMap());
     logs.add(log);
     pruneLogs();
     saveLogs();
@@ -2443,15 +2449,25 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     }
   }
 
-  public synchronized Map<String, Object> createBackup(JsonNode body) {
+  @Override
+  public Map<String, Object> createBackup(JsonNode body) {
     String requested = body == null || !body.hasNonNull("name") ? "" : body.get("name").asText();
     String key = createBackupKey(requested);
     return backupOperations.run(
         key,
         () -> {
-          saveAll();
+          Path snapshotDir;
+          synchronized (this) {
+            saveAll();
+            try {
+              snapshotDir = createSnapshotDirectory();
+            } catch (IOException e) {
+              throw new IllegalStateException("failed to create backup snapshot", e);
+            }
+          }
           Path backup = backupPath(key);
           if (Files.exists(backup)) {
+            deleteRecursively(snapshotDir);
             throw new ApiException(400, "Backup already exists.", ApiErrors.notUniqueField("name"));
           }
           Path temporary = null;
@@ -2461,7 +2477,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
             try (OutputStream output =
                 Files.newOutputStream(temporary, StandardOpenOption.TRUNCATE_EXISTING);
                 ZipOutputStream zip = new ZipOutputStream(output)) {
-              zipDirectory(dataDir, zip);
+              zipDirectory(snapshotDir, zip);
             }
             publishBackup(temporary, backup);
             FilePermissionSupport.secureFile(backup);
@@ -2470,9 +2486,29 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
           } catch (IOException e) {
             throw new IllegalStateException("failed to create backup", e);
           } finally {
+            deleteRecursively(snapshotDir);
             deleteTemporaryBackup(temporary);
           }
         });
+  }
+
+  private Path createSnapshotDirectory() throws IOException {
+    Path tempDir = Files.createTempDirectory(dataDir, ".backup-snap-");
+    FilePermissionSupport.secureDirectory(tempDir);
+    try (Stream<Path> paths = Files.walk(dataDir)) {
+      for (Path path : paths
+          .filter(Files::isRegularFile)
+          .filter(path -> !Files.isSymbolicLink(path))
+          .filter(path -> !isBackupExcluded(path))
+          .filter(path -> !path.startsWith(tempDir))
+          .collect(Collectors.toList())) {
+        Path relative = dataDir.relativize(path);
+        Path target = tempDir.resolve(relative);
+        Files.createDirectories(target.getParent());
+        Files.copy(path, target, StandardCopyOption.REPLACE_EXISTING);
+      }
+    }
+    return tempDir;
   }
 
   public synchronized Map<String, Object> uploadBackup(String filename, byte[] bytes) {
@@ -4927,14 +4963,15 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     if (textSetting(meta.get("appURL")).isBlank()) {
       meta.put("appURL", "http://127.0.0.1:8090");
     }
-    normalizeInt(settingsSection("logs"), "maxDays", 5, 0, 3650);
-    normalizeInt(settingsSection("logs"), "minLevel", 0, 0, 16);
+    normalizeLong(settingsSection("logs"), "maxDataSize", 0L, 0L, 9_007_199_254_740_991L);
+    normalizeLong(settingsSection("logs"), "maxDays", 5L, 0L, 9_007_199_254_740_991L);
+    normalizeLong(settingsSection("logs"), "minLevel", 0L, -9_007_199_254_740_991L, 9_007_199_254_740_991L);
     Map<String, Object> logSettings = settingsSection("logs");
     if (logSettings.containsKey("logIp") && !logSettings.containsKey("logIP")) {
       logSettings.put("logIP", logSettings.remove("logIp"));
     }
     normalizeBool(logSettings, "logIP", true);
-    normalizeBool(settingsSection("logs"), "logAuthId", true);
+    normalizeBool(settingsSection("logs"), "logAuthId", false);
     normalizeInt(settingsSection("batch"), "maxRequests", 50, 1, 500);
     normalizeInt(settingsSection("batch"), "timeout", 3, 1, 3600);
     normalizeInt(settingsSection("batch"), "maxBodySize", 33_554_432, 1, Integer.MAX_VALUE);
@@ -4961,7 +4998,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
                 "senderName", "PocketBase Java",
                 "senderAddress", "noreply@example.com",
                 "hideControls", false),
-            "logs", orderedMap("maxDays", 5, "minLevel", 0, "logIP", true, "logAuthId", true),
+            "logs", orderedMap("maxDays", 5, "minLevel", 0, "logIP", true, "logAuthId", false, "maxDataSize", 0),
             "smtp",
             orderedMap(
                 "enabled", false,
@@ -5067,6 +5104,26 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
         || "privatekey".equals(normalized);
   }
 
+  private void normalizeLong(
+      Map<String, Object> section, String key, long fallback, long min, long max) {
+    long value = longSetting(section.get(key), fallback);
+    section.put(key, Math.max(min, Math.min(max, value)));
+  }
+
+  private long longSetting(Object value, long fallback) {
+    if (value instanceof Number number) {
+      return number.longValue();
+    }
+    if (value instanceof String text && !text.isBlank()) {
+      try {
+        return Long.parseLong(text);
+      } catch (NumberFormatException ignored) {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+
   private void normalizeInt(
       Map<String, Object> section, String key, int fallback, int min, int max) {
     int value = intSetting(section.get(key), fallback);
@@ -5111,15 +5168,17 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
 
   private void pruneLogs() {
     Map<String, Object> logSettings = settingsSection("logs");
-    int maxDays = intSetting(logSettings.get("maxDays"), 5);
-    int minLevel = intSetting(logSettings.get("minLevel"), 0);
-    Instant cutoff = maxDays <= 0 ? Instant.now() : Instant.now().minus(Duration.ofDays(maxDays));
+    long maxDays = longSetting(logSettings.get("maxDays"), 5L);
+    long minLevel = longSetting(logSettings.get("minLevel"), 0L);
+    Instant cutoff = maxDays <= 0
+        ? Instant.now()
+        : (maxDays >= 365_000L ? Instant.EPOCH : Instant.now().minus(maxDays, ChronoUnit.DAYS));
     logs.removeIf(
         log -> {
           if (maxDays <= 0) {
             return true;
           }
-          if (intSetting(log.get("level"), 0) < minLevel) {
+          if (longSetting(log.get("level"), 0L) < minLevel) {
             return true;
           }
           try {
@@ -5132,6 +5191,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     if (overflow > 0) {
       logs.subList(0, overflow).clear();
     }
+  }
+
+  @Override
+  public synchronized void truncateLogs() {
+    logs.clear();
+    saveLogs();
   }
 
   private void pruneMfas() {

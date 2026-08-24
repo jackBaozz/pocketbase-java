@@ -308,11 +308,36 @@ public class BackupRepository extends BaseRepository {
 
   private void writeBackupZip(OutputStream output) throws IOException {
     byte[] snapshot = mapper.writeValueAsBytes(createSnapshot());
+    Path storage = dataDir.resolve("storage");
+    List<Path> filesToZip = new ArrayList<>();
+    if (Files.exists(storage)) {
+      try (Stream<Path> paths = Files.walk(storage)) {
+        filesToZip = paths
+            .filter(Files::isRegularFile)
+            .filter(p -> !Files.isSymbolicLink(p))
+            .collect(Collectors.toList());
+      }
+    }
+
     try (ZipOutputStream zip = new ZipOutputStream(output)) {
       zip.putNextEntry(new ZipEntry(SNAPSHOT_ENTRY));
       zip.write(snapshot);
       zip.closeEntry();
-      zipStorageFiles(zip);
+
+      for (Path path : filesToZip) {
+        if (!Files.exists(path) || Files.isSymbolicLink(path)) {
+          continue;
+        }
+        String entryName = dataDir.relativize(path).toString().replace('\\', '/');
+        zip.putNextEntry(new ZipEntry(entryName));
+        try {
+          Files.copy(path, zip);
+        } catch (NoSuchFileException ignored) {
+          zip.closeEntry();
+          continue;
+        }
+        zip.closeEntry();
+      }
     }
   }
 
@@ -463,8 +488,22 @@ public class BackupRepository extends BaseRepository {
 
   private Map<String, Object> createSnapshot() {
     Connection conn = null;
+    boolean previousAutoCommit = true;
     try {
       conn = database.connection();
+      previousAutoCommit = conn.getAutoCommit();
+      conn.setAutoCommit(false);
+
+      if (database.engine() == JooqDatabase.Engine.MYSQL) {
+        try (Statement s = conn.createStatement()) {
+          s.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY");
+        }
+      } else if (database.engine() == JooqDatabase.Engine.POSTGRES) {
+        try (Statement s = conn.createStatement()) {
+          s.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        }
+      }
+
       List<Map<String, Object>> objects = readDatabaseObjects(conn);
       List<Map<String, Object>> tables = new ArrayList<>();
       for (Map<String, Object> object : objects) {
@@ -482,11 +521,23 @@ public class BackupRepository extends BaseRepository {
       snapshot.put("engine", database.engine().name().toLowerCase(java.util.Locale.ROOT));
       snapshot.put("objects", objects);
       snapshot.put("tables", tables);
+
+      conn.commit();
       return snapshot;
     } catch (SQLException e) {
+      if (conn != null) {
+        try {
+          conn.rollback();
+        } catch (SQLException ignored) {
+        }
+      }
       throw internalFailure(400, "Failed to create backup snapshot.", "create backup snapshot", e);
     } finally {
       if (conn != null) {
+        try {
+          conn.setAutoCommit(previousAutoCommit);
+        } catch (SQLException ignored) {
+        }
         try {
           database.closeIfStandalone(conn);
         } catch (SQLException ignored) {
