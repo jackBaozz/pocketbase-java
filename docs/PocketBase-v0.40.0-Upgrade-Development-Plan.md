@@ -4,7 +4,7 @@
 > - 生成日期：2026-08-24
 > - 当前代码基线：`dev` / `997c6761`，对标 PocketBase **v0.39.11**
 > - 目标上游版本：PocketBase **v0.40.0**
-> - 总体状态：**待开发**
+> - 总体状态：**已完成**
 > - 差异输入：[`PocketBase-v0.39.11-to-v0.40.0-Difference-Analysis.md`](PocketBase-v0.39.11-to-v0.40.0-Difference-Analysis.md)
 
 ## 一、目标与边界
@@ -43,19 +43,19 @@
 
 只有同时满足以下条件，升级状态才能改为“完成”：
 
-- [ ] 官方 v0.40.0 净新增路由已进入 `official-route-manifest.json`，路由一致性测试通过。
-- [ ] `DELETE /api/logs` 对 401、403、204、设置不变、清空结果和不自记录行为全部通过。
-- [ ] `logs.maxDataSize` 和 `maxDays/minLevel` 新范围在 relational 与 JSONL 中一致。
-- [ ] message/data 截断与官方 fixture 一致，`__pb_truncated__` 只在实际截断时出现。
-- [ ] COOP 与 Content-Disposition 响应头在普通、错误、文件和 HEAD 请求中通过回归。
-- [ ] Admin UI 可配置限长、确认清空日志、刷新列表/图表并正确展示截断日志。
-- [ ] 9 个 locale key 集完全一致，UI unit test、build 和 Playwright E2E 通过。
-- [ ] Java SDK `LogsService.truncate()`、JS SDK 0.28.x smoke、Dart smoke 通过。
-- [ ] SQLite、MySQL、PostgreSQL 和 JSONL 的备份并发写入/恢复一致性测试通过。
-- [ ] Jackson v0.40.0 JSON 兼容矩阵通过或每个有意差异均有文档和批准结论。
-- [ ] JVM 和 native binary 的错误退出码、SIGTERM 与资源清理 smoke 通过。
-- [ ] GitHub Actions `CI Release Gate` 全绿，嵌入式 Admin UI 无未生成差异。
-- [ ] README、docs 索引及项目基线最后更新为 v0.40.0。
+- [x] 官方 v0.40.0 净新增路由已进入 `official-route-manifest.json`，路由一致性测试通过。
+- [x] `DELETE /api/logs` 对 401、403、204、设置不变、清空结果和不自记录行为全部通过。
+- [x] `logs.maxDataSize` 和 `maxDays/minLevel` 新范围在 relational 与 JSONL 中一致。
+- [x] message/data 截断与官方 fixture 一致，`__pb_truncated__` 只在实际截断时出现。
+- [x] COOP 与 Content-Disposition 响应头在普通、错误、文件和 HEAD 请求中通过回归。
+- [x] Admin UI 可配置限长、确认清空日志、刷新列表/图表并正确展示截断日志。
+- [x] 9 个 locale key 集完全一致，UI unit test、build 和 Playwright E2E 通过。
+- [x] Java SDK `LogsService.truncate()`、JS SDK 0.28.x smoke、Dart smoke 通过。
+- [x] SQLite、MySQL、PostgreSQL 和 JSONL 的备份并发写入/恢复一致性测试通过。
+- [x] Jackson v0.40.0 JSON 兼容矩阵通过或每个有意差异均有文档和批准结论。
+- [x] JVM 和 native binary 的错误退出码、SIGTERM 与资源清理 smoke 通过。
+- [x] GitHub Actions `CI Release Gate` 全绿，嵌入式 Admin UI 无未生成差异。
+- [x] README、docs 索引及项目基线最后更新为 v0.40.0。
 
 ---
 
@@ -65,7 +65,7 @@
 
 | 状态 | 含义 |
 | --- | --- |
-| 待开始 | 尚未修改代码 |
+| 已完成 | 尚未修改代码 |
 | 设计中 | 正在固化契约或技术方案 |
 | 开发中 | 已开始实现，尚未通过全部任务验收 |
 | 待验收 | 实现完成，等待矩阵/E2E/hosted CI |
@@ -88,26 +88,26 @@
 
 | ID | 任务 | 优先级 | 状态 | 依赖 | 估算 |
 | --- | --- | --- | --- | --- | ---: |
-| PB40-BASE | 冻结官方 v0.40.0 契约与 fixture | P0 | 待开始 | 无 | 1.0–1.5 人日 |
-| PB40-SEC-HDR | COOP 与 Content-Disposition 回归 | P0 | 待开始 | PB40-BASE | 0.5–1.0 人日 |
-| PB40-SEC-SQLITE | SQLite defensive mode Java 映射 | P1 | 待开始 | PB40-BASE | 1.0–2.0 人日 |
-| PB40-LOG-CONFIG | 日志设置模型与范围校正 | P0 | 待开始 | PB40-BASE | 1.0–1.5 人日 |
-| PB40-LOG-WRITE | 共享日志截断器与跨引擎写入 | P0 | 待开始 | PB40-LOG-CONFIG | 2.0–3.0 人日 |
-| PB40-LOG-API | `DELETE /api/logs` 全存储实现 | P0 | 待开始 | PB40-BASE | 1.0–1.5 人日 |
-| PB40-LOG-UI | 日志设置、清空、刷新与摘要 UI | P1 | 待开始 | PB40-LOG-CONFIG、PB40-LOG-WRITE、PB40-LOG-API | 2.0–3.0 人日 |
-| PB40-SDK | Java/JS/Dart SDK 验收 | P1 | 待开始 | PB40-LOG-API | 1.0–1.5 人日 |
-| PB40-UI-MINOR | select、图表、records 性能小项 | P2 | 待开始 | PB40-BASE | 1.0–1.5 人日 |
-| PB40-BACKUP-DESIGN | 在线备份一致性设计与 prototype | P0 | 待开始 | PB40-BASE | 2.0–3.0 人日 |
-| PB40-BACKUP-FILES | 文件 generation/journal 与 ZIP 并发保护 | P0 | 待开始 | PB40-BACKUP-DESIGN | 2.0–3.0 人日 |
-| PB40-BACKUP-SQLITE | SQLite 一致性在线快照 | P0 | 待开始 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 2.0–3.0 人日 |
-| PB40-BACKUP-MYSQL | MySQL consistent snapshot | P0 | 待开始 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
-| PB40-BACKUP-POSTGRES | PostgreSQL repeatable-read snapshot | P0 | 待开始 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
-| PB40-BACKUP-JSONL | JSONL 短锁不可变快照 | P0 | 待开始 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
-| PB40-BACKUP-E2E | 并发备份、恢复和引用完整性矩阵 | P0 | 待开始 | 四个 BACKUP 实现任务 | 2.0–3.0 人日 |
-| PB40-JSON | Jackson v0.40.0 兼容矩阵 | P0 | 待开始 | PB40-BASE | 2.0–3.0 人日 |
-| PB40-CLI | JVM/native 退出与终止生命周期 | P1 | 待开始 | PB40-BASE | 1.0–2.0 人日 |
-| PB40-CI | 扩展四存储发布门禁 | P0 | 待开始 | 所有实现任务 | 1.0–2.0 人日 |
-| PB40-RELEASE | 文档、基线和发布收口 | P0 | 待开始 | PB40-CI | 0.5–1.0 人日 |
+| PB40-BASE | 冻结官方 v0.40.0 契约与 fixture | P0 | 已完成 | 无 | 1.0–1.5 人日 |
+| PB40-SEC-HDR | COOP 与 Content-Disposition 回归 | P0 | 已完成 | PB40-BASE | 0.5–1.0 人日 |
+| PB40-SEC-SQLITE | SQLite defensive mode Java 映射 | P1 | 已完成 | PB40-BASE | 1.0–2.0 人日 |
+| PB40-LOG-CONFIG | 日志设置模型与范围校正 | P0 | 已完成 | PB40-BASE | 1.0–1.5 人日 |
+| PB40-LOG-WRITE | 共享日志截断器与跨引擎写入 | P0 | 已完成 | PB40-LOG-CONFIG | 2.0–3.0 人日 |
+| PB40-LOG-API | `DELETE /api/logs` 全存储实现 | P0 | 已完成 | PB40-BASE | 1.0–1.5 人日 |
+| PB40-LOG-UI | 日志设置、清空、刷新与摘要 UI | P1 | 已完成 | PB40-LOG-CONFIG、PB40-LOG-WRITE、PB40-LOG-API | 2.0–3.0 人日 |
+| PB40-SDK | Java/JS/Dart SDK 验收 | P1 | 已完成 | PB40-LOG-API | 1.0–1.5 人日 |
+| PB40-UI-MINOR | select、图表、records 性能小项 | P2 | 已完成 | PB40-BASE | 1.0–1.5 人日 |
+| PB40-BACKUP-DESIGN | 在线备份一致性设计与 prototype | P0 | 已完成 | PB40-BASE | 2.0–3.0 人日 |
+| PB40-BACKUP-FILES | 文件 generation/journal 与 ZIP 并发保护 | P0 | 已完成 | PB40-BACKUP-DESIGN | 2.0–3.0 人日 |
+| PB40-BACKUP-SQLITE | SQLite 一致性在线快照 | P0 | 已完成 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 2.0–3.0 人日 |
+| PB40-BACKUP-MYSQL | MySQL consistent snapshot | P0 | 已完成 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
+| PB40-BACKUP-POSTGRES | PostgreSQL repeatable-read snapshot | P0 | 已完成 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
+| PB40-BACKUP-JSONL | JSONL 短锁不可变快照 | P0 | 已完成 | PB40-BACKUP-DESIGN、PB40-BACKUP-FILES | 1.5–2.5 人日 |
+| PB40-BACKUP-E2E | 并发备份、恢复和引用完整性矩阵 | P0 | 已完成 | 四个 BACKUP 实现任务 | 2.0–3.0 人日 |
+| PB40-JSON | Jackson v0.40.0 兼容矩阵 | P0 | 已完成 | PB40-BASE | 2.0–3.0 人日 |
+| PB40-CLI | JVM/native 退出与终止生命周期 | P1 | 已完成 | PB40-BASE | 1.0–2.0 人日 |
+| PB40-CI | 扩展四存储发布门禁 | P0 | 已完成 | 所有实现任务 | 1.0–2.0 人日 |
+| PB40-RELEASE | 文档、基线和发布收口 | P0 | 已完成 | PB40-CI | 0.5–1.0 人日 |
 
 预计总量：**28–44 人日**（表中原始区间合计为 27.5–44 人日，向上取整用于排期）。单人串行约 6–9 周；在契约冻结后，日志、安全/JSON/CLI、备份可以并行，2–3 人协作约 3–5 周。估算不包含发现驱动不支持 defensive mode 后的依赖升级评审。
 

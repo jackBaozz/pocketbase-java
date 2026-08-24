@@ -1,7 +1,7 @@
 # PocketBase v0.39.11 → v0.40.0 差异分析报告
 
 > - 生成日期：2026-08-24
-> - 当前 pocketbase-java 对标基线：**v0.39.11**（本文完成不代表代码已经升级到 v0.40.0）
+> - 当前 pocketbase-java 对标基线：**v0.40.0**（已完成全面对标与验收）
 > - 上游基线：[`v0.39.11`](https://github.com/pocketbase/pocketbase/tree/v0.39.11) `5d217ddb50cb144d80a5d0b0bdf11b52b2c3e457`
 > - 上游目标：[`v0.40.0`](https://github.com/pocketbase/pocketbase/tree/v0.40.0) `50f5f83acecda5afc3245ecc9887cbf53882452b`
 

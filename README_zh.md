@@ -2,7 +2,7 @@
 
 PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java SDK**，以及一个低依赖的 **嵌入式服务器 (Embedded Server)**：使用 JDK `HttpServer` 提供 PocketBase 风格的 API，内置 Admin UI，采用 JSON 文件持久化，特别面向 GraalVM Native Image 约束而设计。
 
-**官方 PocketBase 基准版本:** v0.39.11
+**官方 PocketBase 基准版本:** v0.40.0
 
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
@@ -23,7 +23,7 @@ PocketBase 的 Java 实现。本项目包含一个轻量级的 **PocketBase Java
 ## 核心特性
 
 - **低依赖**: HTTP 服务基于 `java.net.http.HttpClient` 与 JDK 内置 `HttpServer`，核心运行时依赖极少，保持极小的体积与资源占用，且便于 Native Image 编译。
-- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.39.11**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
+- **标准 API 映射**: 完美对齐官方 PocketBase REST API 规范 (截至 **v0.40.0**)，包括 `/api/collections/{collection}/records`、密码/OTP/MFA/OAuth2 认证流程、账号模拟 (impersonate)、视图查询、速率限制与客户端 IP 策略规则。
 - **嵌入式服务器 (Embedded Server)**: 提供 `io.github.jackbaozz.pocketbase.server.PocketBaseServer`，可直接在 Java 应用中编程式启动本地 PocketBase 风格服务，无需依赖 Spring/Tomcat。
 - **内置 Admin UI**: 访问 `/_/` 即可使用超级管理员初始化、登录、集合/记录管理、文件上传、备份、配置编辑以及详细日志查看等功能。支持 9 种语言国际化、API 文档侧栏、Schema/索引编辑器、关联记录选择器、带语法高亮和自动补全的代码编辑器，以及 `hideControls` 安全锁定模式。前端源码位于 `ui/`，构建产物内嵌至 Java 资源文件。
 - **多存储引擎矩阵**: 引入了灵活的 `StorageEngine` SPI。默认使用 SQLite，将数据保存到 `<server.data-dir>/pocketbase.db`；旧版 JSONL（`.jsonl` 记录文件和 `.json` 元数据）仍可通过 `storage.type=jsonl` 显式启用。MySQL 与 PostgreSQL 也可通过 `application.properties`、`-Dstorage` 或 native 运行时的 `PB_STORAGE` 配置，底层使用 jOOQ 与 HikariCP。
@@ -322,7 +322,7 @@ pocketbase-java/
 | **实时推送** | `GET/POST /api/realtime` |
 | **备份还原** | `GET/POST /api/backups`<br>`POST /api/backups/upload`<br>`GET/DELETE /api/backups/{key}`<br>`POST /api/backups/{key}/restore` |
 | **系统设置** | `GET/PATCH /api/settings`<br>`POST /api/settings/test/s3`<br>`POST /api/settings/test/email`<br>`POST /api/settings/apple/generate-client-secret` |
-| **系统日志** | `GET /api/logs`<br>`GET /api/logs/{id}`<br>`GET /api/logs/stats` |
+| **系统日志** | `GET /api/logs`<br>`DELETE /api/logs`<br>`GET /api/logs/{id}`<br>`GET /api/logs/stats` |
 | **定时任务** | `GET /api/crons`<br>`POST /api/crons/{id}` |
 | **SQL API** | `POST /api/sql` *(仅 Superuser 权限)* |
 | **Auth 详情** | `GET /api/collections/{collection}/auth-methods`<br>`POST /api/collections/{collection}/auth-with-password`<br>`POST /api/collections/{collection}/auth-with-otp`<br>`POST /api/collections/{collection}/auth-with-oauth2`<br>`POST /api/collections/{collection}/auth-refresh`<br>`POST /api/collections/{collection}/request-otp`<br>`POST /api/collections/{collection}/request-password-reset`<br>`POST /api/collections/{collection}/confirm-password-reset`<br>`POST /api/collections/{collection}/request-verification`<br>`POST /api/collections/{collection}/confirm-verification`<br>`POST /api/collections/{collection}/request-email-change`<br>`POST /api/collections/{collection}/confirm-email-change`<br>`POST /api/collections/{collection}/impersonate/{id}`<br>`GET/POST /api/oauth2-redirect` |
