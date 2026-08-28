@@ -1723,11 +1723,11 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
           mapper.convertValue(node, CollectionSchema.EmailTemplate.class);
     }
     CollectionResponseSupport.preserveOAuth2ClientSecrets(persisted.oauth2, existing.oauth2);
+    AuthCollectionConfigMerge.mergeSubmitted(mapper, existing, persisted, body);
     if ("view".equals(existing.type)) {
       prepareViewCollection(existing, "Failed to update collection.");
     }
     normalizeCollection(existing, true);
-    AuthCollectionConfigMerge.mergeSubmitted(mapper, existing, persisted, body);
     CollectionModelValidation.validate(
         persisted,
         existing,

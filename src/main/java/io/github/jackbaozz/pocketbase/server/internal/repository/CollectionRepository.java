@@ -352,8 +352,8 @@ public class CollectionRepository extends BaseRepository {
           currentSchema.fields, newSchema.fields, "Failed to update collection.");
     }
     CollectionResponseSupport.preserveOAuth2ClientSecrets(currentSchema.oauth2, newSchema.oauth2);
-    normalizeCollectionSchema(newSchema, rawOptions, true);
     AuthCollectionConfigMerge.mergeSubmitted(mapper, newSchema, currentSchema, body);
+    normalizeCollectionSchema(newSchema, rawOptions, true);
     if ("view".equals(newSchema.type)) {
       prepareViewCollection(newSchema, "Failed to update collection.");
     }

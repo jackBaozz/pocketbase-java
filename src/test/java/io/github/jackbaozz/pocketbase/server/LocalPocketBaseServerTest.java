@@ -6403,6 +6403,139 @@ class LocalPocketBaseServerTest {
   }
 
   @Test
+  void collectionPatchMergesOAuth2ProviderConfigurationByName() throws Exception {
+    start();
+    bootstrapSuperuser();
+    String token = loginToken();
+
+    request(
+        "POST",
+        "/api/collections",
+        token,
+        Map.of(
+            "name",
+            "oauth2_provider_merge_users",
+            "type",
+            "auth",
+            "oauth2",
+            Map.of(
+                "enabled",
+                true,
+                "providers",
+                List.of(
+                    Map.of(
+                        "name",
+                        "github",
+                        "clientId",
+                        "github-client",
+                        "clientSecret",
+                        "github-secret"),
+                    Map.of(
+                        "name",
+                        "google",
+                        "clientId",
+                        "google-client",
+                        "clientSecret",
+                        "google-secret",
+                        "tokenURL",
+                        "https://example.test/token",
+                        "displayName",
+                        "Original Google",
+                        "scopes",
+                        List.of("openid", "email"),
+                        "pkce",
+                        true,
+                        "extra",
+                        Map.of("tenant", "before"))))));
+
+    HttpResponse<String> response =
+        rawJsonRequest(
+            "PATCH",
+            "/api/collections/oauth2_provider_merge_users",
+            token,
+            """
+            {
+              "oauth2": {
+                "providers": [
+                  {"name": "apple", "clientId": "apple-client", "clientSecret": "apple-secret"},
+                  {"pkce": null, "name": "google", "authURL": "", "displayName": "Updated Google", "extra": {}}
+                ]
+              }
+            }
+            """);
+    assertEquals(200, response.statusCode(), response.body());
+
+    JsonNode providers = mapper.readTree(response.body()).path("oauth2").path("providers");
+    assertEquals(2, providers.size());
+    assertEquals("apple", providers.get(0).path("name").asText());
+    assertEquals("google", providers.get(1).path("name").asText());
+    assertEquals("google-client", providers.get(1).path("clientId").asText());
+    assertEquals("https://example.test/token", providers.get(1).path("tokenURL").asText());
+    assertEquals("Updated Google", providers.get(1).path("displayName").asText());
+    assertEquals(2, providers.get(1).path("scopes").size());
+    assertFalse(providers.get(1).path("pkce").asBoolean());
+    assertEquals(0, providers.get(1).path("extra").size());
+
+    JsonNode retained =
+        request(
+            "PATCH",
+            "/api/collections/oauth2_provider_merge_users",
+            token,
+            Map.of("oauth2", Map.of("enabled", false)));
+    assertFalse(retained.path("oauth2").path("enabled").asBoolean());
+    assertEquals(2, retained.path("oauth2").path("providers").size());
+
+    JsonNode cleared =
+        request(
+            "PATCH",
+            "/api/collections/oauth2_provider_merge_users",
+            token,
+            Map.of("oauth2", Map.of("providers", List.of())));
+    assertEquals(0, cleared.path("oauth2").path("providers").size());
+  }
+
+  @Test
+  void malformedSurrogateRecordValueIsMangledWithoutTruncatingJsonResponse() throws Exception {
+    start();
+    bootstrapSuperuser();
+    String token = loginToken();
+    request(
+        "POST",
+        "/api/collections",
+        token,
+        Map.of(
+            "name",
+            "invalid_utf8_records",
+            "type",
+            "base",
+            "fields",
+            List.of(Map.of("name", "title", "type", "text"))));
+
+    byte[] prefix = "{\"title\":\"bad \\".getBytes(StandardCharsets.US_ASCII);
+    byte[] suffix = "uD800\"}".getBytes(StandardCharsets.US_ASCII);
+    byte[] payload = java.util.Arrays.copyOf(prefix, prefix.length + suffix.length);
+    System.arraycopy(suffix, 0, payload, prefix.length, suffix.length);
+    HttpResponse<String> created =
+        rawBodyRequest(
+            "POST",
+            "/api/collections/invalid_utf8_records/records",
+            token,
+            "application/json",
+            payload);
+    assertEquals(200, created.statusCode(), created.body());
+    JsonNode createdRecord = mapper.readTree(created.body());
+    assertEquals("bad \uFFFD", createdRecord.path("title").asText());
+
+    JsonNode fetched =
+        request(
+            "GET",
+            "/api/collections/invalid_utf8_records/records/" + createdRecord.path("id").asText(),
+            token,
+            null);
+    assertEquals("bad \uFFFD", fetched.path("title").asText());
+  }
+
+  @Test
   void authCollectionOptionsValidateIdentityFieldsAndMfaMethods() throws Exception {
     start();
     bootstrapSuperuser();

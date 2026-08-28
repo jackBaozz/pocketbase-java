@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jackbaozz.pocketbase.server.model.CollectionSchema;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Restores PocketBase's nested patch semantics after collection normalization. */
 public final class AuthCollectionConfigMerge {
@@ -32,6 +34,10 @@ public final class AuthCollectionConfigMerge {
     JsonNode mfa = option(body, "mfa");
     if (mfa != null) {
       target.mfa = merge(mapper, defaults.mfa, mfa, CollectionSchema.MfaConfig.class);
+    }
+    JsonNode oauth2 = option(body, "oauth2");
+    if (oauth2 != null) {
+      target.oauth2 = mergeOAuth2(mapper, defaults.oauth2, oauth2);
     }
     JsonNode authAlert = option(body, "authAlert");
     if (authAlert != null) {
@@ -115,6 +121,67 @@ public final class AuthCollectionConfigMerge {
       }
     }
     return merged;
+  }
+
+  /**
+   * Merges an OAuth2 collection patch while treating each submitted provider as a partial update
+   * keyed by its name.
+   *
+   * <p>The dashboard deliberately omits provider secrets (and can omit other unchanged fields)
+   * when a collection is edited. Replacing the providers array wholesale would therefore discard
+   * the retained configuration of a provider that is still present in the request.
+   */
+  private static CollectionSchema.OAuth2Config mergeOAuth2(
+      ObjectMapper mapper, CollectionSchema.OAuth2Config base, JsonNode patch) {
+    CollectionSchema.OAuth2Config current =
+        base == null ? new CollectionSchema.OAuth2Config() : base;
+    CollectionSchema.OAuth2Config merged =
+        merge(mapper, current, patch, CollectionSchema.OAuth2Config.class);
+
+    if (!patch.isObject() || !patch.has("providers") || !patch.get("providers").isArray()) {
+      return merged;
+    }
+
+    List<CollectionSchema.OAuth2ProviderConfig> providers = new ArrayList<>();
+    for (JsonNode submitted : patch.get("providers")) {
+      if (submitted == null || submitted.isNull() || !submitted.isObject()) {
+        providers.add(mapper.convertValue(submitted, CollectionSchema.OAuth2ProviderConfig.class));
+        continue;
+      }
+
+      CollectionSchema.OAuth2ProviderConfig original =
+          findProviderByName(current.providers, submitted.path("name").asText(null));
+      CollectionSchema.OAuth2ProviderConfig mergedProvider =
+          original == null
+              ? mapper.convertValue(submitted, CollectionSchema.OAuth2ProviderConfig.class)
+              : merge(mapper, original, submitted, CollectionSchema.OAuth2ProviderConfig.class);
+      // The Admin UI sends an empty clientSecret as a redacted-secret sentinel. Retain the
+      // persisted value for an existing provider, as the pre-v0.40.1 update path already did.
+      if (original != null
+          && original.clientSecret != null
+          && !original.clientSecret.isBlank()
+          && submitted.has("clientSecret")
+          && (submitted.path("clientSecret").isNull()
+              || submitted.path("clientSecret").asText().isBlank())) {
+        mergedProvider.clientSecret = original.clientSecret;
+      }
+      providers.add(mergedProvider);
+    }
+    merged.providers = providers;
+    return merged;
+  }
+
+  private static CollectionSchema.OAuth2ProviderConfig findProviderByName(
+      List<CollectionSchema.OAuth2ProviderConfig> providers, String name) {
+    if (providers == null || name == null) {
+      return null;
+    }
+    for (CollectionSchema.OAuth2ProviderConfig provider : providers) {
+      if (provider != null && name.equals(provider.name)) {
+        return provider;
+      }
+    }
+    return null;
   }
 
   private static <T> T merge(ObjectMapper mapper, T base, JsonNode patch, Class<T> type) {

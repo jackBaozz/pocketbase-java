@@ -1291,7 +1291,7 @@ public final class HttpApi implements HttpHandler {
                   fields.set(entry.getKey(), entry.getValue());
                 }
               });
-      return new RecordInput(fields, multipart.files());
+      return new RecordInput(JsonResponseSanitizer.sanitize(store.mapper(), fields), multipart.files());
     }
     if (bytes.length == 0) {
       return new RecordInput(store.mapper().createObjectNode(), Map.of());
@@ -1317,7 +1317,7 @@ public final class HttpApi implements HttpHandler {
 
   private JsonNode readJsonBytes(byte[] bytes) throws IOException {
     try {
-      return store.mapper().readTree(bytes);
+      return JsonResponseSanitizer.sanitize(store.mapper(), store.mapper().readTree(bytes));
     } catch (JsonProcessingException e) {
       throw new ApiException(
           400,
@@ -1467,7 +1467,7 @@ public final class HttpApi implements HttpHandler {
   }
 
   private void sendJson(HttpExchange exchange, int status, Object body) throws IOException {
-    byte[] bytes = store.mapper().writeValueAsBytes(body);
+    byte[] bytes = store.mapper().writeValueAsBytes(JsonResponseSanitizer.sanitize(store.mapper(), body));
     exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
     if ("HEAD".equals(exchange.getRequestMethod())) {
       exchange.sendResponseHeaders(status, -1);
