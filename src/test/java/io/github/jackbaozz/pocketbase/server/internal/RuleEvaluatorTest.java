@@ -287,11 +287,45 @@ class RuleEvaluatorTest {
         ApiException.class, () -> RuleEvaluator.matches("unknownFunction(created) = 'x'", ctx));
   }
 
+  @Test
   void matchesDateComparison() {
     var ctx =
         RuleEvaluator.context(
             Map.of("created", "2026-06-28 10:30:00.000Z"), null, null, null, null);
     assertTrue(RuleEvaluator.matches("created >= '2026-06-28 10:00:00.000Z'", ctx));
     assertTrue(RuleEvaluator.matches("created < '2026-06-29 00:00:00.000Z'", ctx));
+  }
+
+  @Test
+  void matchesEmptyStringAndPlaceholderLiteralExpressions() {
+    var ctx =
+        RuleEvaluator.context(
+            Map.of(
+                "title", "",
+                "quoted", "''",
+                "tag", "{:other}",
+                "escaped", "hello 'world'"),
+            null,
+            null,
+            null,
+            null);
+
+    // Empty string matches
+    assertTrue(RuleEvaluator.matches("title = ''", ctx));
+    assertTrue(RuleEvaluator.matches("title = \"\"", ctx));
+    assertFalse(RuleEvaluator.matches("title != ''", ctx));
+    assertFalse(RuleEvaluator.matches("title = 'anything'", ctx));
+
+    // Literal containing quotes vs empty string
+    assertTrue(RuleEvaluator.matches("quoted = \"''\"", ctx));
+    assertFalse(RuleEvaluator.matches("title = \"''\"", ctx));
+
+    // Literal containing placeholder pattern like {:other}
+    assertTrue(RuleEvaluator.matches("tag = '{:other}'", ctx));
+    assertTrue(RuleEvaluator.matches("tag ~ '{:other}'", ctx));
+    assertFalse(RuleEvaluator.matches("tag = '{:different}'", ctx));
+
+    // Escaped quotes in string literals
+    assertTrue(RuleEvaluator.matches("escaped = 'hello \\'world\\''", ctx));
   }
 }

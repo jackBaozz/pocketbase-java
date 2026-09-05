@@ -214,10 +214,10 @@ function tokenize(source: string, language: CodeEditorLanguage): Token[] {
 const COMPLETION_WORD_CHAR = /[\p{Alphabetic}\p{Number}_@:."'{}]/u;
 const PLAIN_WORD_CHAR = /[\p{Alphabetic}\p{Number}_$]/u;
 
-type WordMatch = { word: string; start: number; end: number };
+export type WordMatch = { word: string; prefix: string; start: number; end: number };
 
-/** Returns the word surrounding `caret` (`end` is exclusive). */
-function wordAt(text: string, caret: number, charRe: RegExp): WordMatch {
+/** Returns the word and prefix surrounding `caret` (`end` is exclusive). */
+export function wordAt(text: string, caret: number, charRe: RegExp): WordMatch {
   let start = caret;
   while (start > 0 && charRe.test(text.charAt(start - 1))) {
     start--;
@@ -228,7 +228,12 @@ function wordAt(text: string, caret: number, charRe: RegExp): WordMatch {
     end++;
   }
 
-  return { word: text.slice(start, end), start, end };
+  return {
+    word: text.slice(start, end),
+    prefix: text.slice(start, caret),
+    start,
+    end,
+  };
 }
 
 const MAX_SUGGESTIONS = 30;
@@ -238,7 +243,7 @@ const MAX_SUGGESTIONS = 30;
  * candidates that *start* with the typed word are ranked first and, inside each
  * group, the shortest keys win - which is how PocketBase sorts its keys too.
  */
-function filterCompletions(candidates: string[], word: string): string[] {
+export function filterCompletions(candidates: string[], word: string): string[] {
   const needle = word.toLowerCase();
   if (!needle) {
     return [];
@@ -372,6 +377,7 @@ export function CodeEditor({
   /** set while we mutate the value ourselves so the edit does not re-open the dropdown */
   const suppressRef = useRef(false);
 
+  const debounceTimerRef = useRef<number | null>(null);
   const [suggest, setSuggest] = useState<SuggestState | null>(null);
   const [tabTrapped, setTabTrapped] = useState(true);
   const [pos, setPos] = useState<DropdownPos | null>(null);
@@ -401,6 +407,10 @@ export function CodeEditor({
   }, [tokens, singleLine]);
 
   const closeSuggest = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     setSuggest(null);
     setPos(null);
   }, []);
@@ -538,7 +548,7 @@ export function CodeEditor({
 
   const openSuggest = useCallback(
     (source: string, caret: number) => {
-      if (disabled || !completions.length) {
+      if (disabled || !completions.length || !source.length) {
         closeSuggest();
         return;
       }
@@ -552,8 +562,11 @@ export function CodeEditor({
         return;
       }
 
-      const items = filterCompletions(completions, match.word);
-      if (!items.length) {
+      const query = match.prefix || match.word;
+      const items = filterCompletions(completions, query);
+
+      // Don't show if no items, or if the only suggestion is already the exact full word
+      if (!items.length || (items.length === 1 && items[0] === match.word)) {
         closeSuggest();
         return;
       }
@@ -660,6 +673,11 @@ export function CodeEditor({
 
     onChange(next);
 
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
     if (suppressRef.current) {
       suppressRef.current = false;
       closeSuggest();
@@ -671,7 +689,23 @@ export function CodeEditor({
       return;
     }
 
-    openSuggest(next, input.selectionStart ?? next.length);
+    if (!next.length || disabled || !completions.length) {
+      closeSuggest();
+      return;
+    }
+
+    const caret = input.selectionStart ?? next.length;
+
+    debounceTimerRef.current = window.setTimeout(() => {
+      debounceTimerRef.current = null;
+      const currentInput = inputRef.current;
+      if (!currentInput || document.activeElement !== currentInput) {
+        closeSuggest();
+        return;
+      }
+      const currentCaret = currentInput.selectionStart ?? caret;
+      openSuggest(currentInput.value, currentCaret);
+    }, 50);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {

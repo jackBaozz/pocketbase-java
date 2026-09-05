@@ -104,6 +104,56 @@ class CollectionIndexSupportTest {
   }
 
   @Test
+  void rejectsInvalidIndexExpressionsAndMultiPartNames() {
+    List<String> invalidExpressions =
+        List.of(
+            "create index on ()",
+            "create index a.b.c on ()",
+            "create index a.b.c on posts (title)",
+            "create index on posts (title)",
+            "create index idx_test on ()",
+            "create index idx_test on posts ()",
+            "create index .idx_test on posts (title)",
+            "create index idx_test. on posts (title)");
+
+    for (String expr : invalidExpressions) {
+      CollectionSchema collection = collection("posts");
+      collection.indexes = List.of(expr);
+      ApiException error =
+          assertThrows(
+              ApiException.class,
+              () -> CollectionIndexSupport.normalize(collection, List.of(), "Failed."),
+              "Expected failure for: " + expr);
+      assertTrue(
+          String.valueOf(error.data()).contains("validation_invalid_index_expression"),
+          "Expected validation_invalid_index_expression for: " + expr);
+      assertEquals("", CollectionIndexSupport.normalizeDefinition(expr, "posts"));
+      assertEquals("", CollectionIndexSupport.createSql(expr, "posts", id -> "`" + id + "`"));
+    }
+  }
+
+  @Test
+  void acceptsValidSchemaPrefixedAndQuotedDottedNames() {
+    CollectionSchema collection = collection("posts");
+    collection.indexes =
+        List.of(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"schemaname\".[indexname] on 'posts' (title)",
+            "CREATE INDEX `a.b.c` ON posts (count)");
+
+    List<String> normalized = CollectionIndexSupport.normalize(collection, List.of(), "Failed.");
+    assertEquals(2, normalized.size());
+    assertEquals(
+        "CREATE UNIQUE INDEX IF NOT EXISTS `schemaname`.`indexname` ON `posts` (`title`)",
+        normalized.get(0));
+    assertEquals("CREATE INDEX `a.b.c` ON `posts` (`count`)", normalized.get(1));
+
+    String dropSql =
+        CollectionIndexSupport.dropSql(
+            normalized.get(0), "posts", JooqDatabase.Engine.POSTGRES, id -> "\"" + id + "\"");
+    assertEquals("DROP INDEX \"schemaname\".\"indexname\"", dropSql);
+  }
+
+  @Test
   void rejectsIndexesForViews() {
     CollectionSchema view = collection("post_view");
     view.type = "view";

@@ -17,6 +17,63 @@ const INDEX_REGEX =
   /create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*\(([\s\S]*)\)(?:\s*where\s+([\s\S]*))?/i;
 const QUOTE_REGEX = /^["'`[{]|["'`\]}]$/gm;
 
+export function splitIdentifierParts(raw: string): string[] {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return [];
+  const parts: string[] = [];
+  let current = "";
+  let quote = "";
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+    if (quote) {
+      current += char;
+      if (quote === "[" && char === "]") {
+        quote = "";
+      } else if (char === quote) {
+        if (i + 1 < trimmed.length && trimmed[i + 1] === quote) {
+          current += trimmed[i + 1];
+          i++;
+        } else {
+          quote = "";
+        }
+      }
+    } else {
+      if (char === "`" || char === '"' || char === "'") {
+        quote = char;
+        current += char;
+      } else if (char === "[") {
+        quote = "[";
+        current += char;
+      } else if (char === ".") {
+        parts.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+  }
+  if (quote) return [];
+  parts.push(current.trim());
+  return parts;
+}
+
+export function unquoteIdentifier(value: string): string {
+  const trimmed = (value || "").trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if (
+      (first === "`" && last === "`") ||
+      (first === '"' && last === '"') ||
+      (first === "'" && last === "'") ||
+      (first === "[" && last === "]")
+    ) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
 /** Port of the official utils.parseIndex, trimmed to the parts this UI edits. */
 export function parseIndex(raw: string): ParsedIndex {
   const result: ParsedIndex = {
@@ -33,9 +90,24 @@ export function parseIndex(raw: string): ParsedIndex {
   result.unique = matches[1]?.trim().toLowerCase() === "unique";
   result.optional = Boolean(matches[2]?.trim());
 
-  const namePair = (matches[3] || "").split(".");
-  result.indexName = (namePair.length === 2 ? namePair[1] : namePair[0]).replace(QUOTE_REGEX, "");
-  result.tableName = (matches[4] || "").replace(QUOTE_REGEX, "");
+  const nameParts = splitIdentifierParts(matches[3] || "");
+  if (nameParts.length === 1) {
+    result.indexName = unquoteIdentifier(nameParts[0]);
+  } else if (nameParts.length === 2) {
+    result.indexName = unquoteIdentifier(nameParts[1]);
+  } else {
+    result.indexName = "";
+  }
+
+  const tableParts = splitIdentifierParts(matches[4] || "");
+  if (tableParts.length === 1) {
+    result.tableName = unquoteIdentifier(tableParts[0]);
+  } else if (tableParts.length === 2) {
+    result.tableName = unquoteIdentifier(tableParts[1]);
+  } else {
+    result.tableName = "";
+  }
+
   result.where = matches[6]?.trim() || "";
 
   // Commas inside expressions like max(a, b) must not split columns.

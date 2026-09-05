@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 public final class CollectionIndexSupport {
   private static final Pattern INDEX_PATTERN =
       Pattern.compile(
-          "(?is)^\\s*create\\s+(unique\\s+)?index\\s+(if\\s+not\\s+exists\\s+)?(\\S+)\\s+on\\s+(\\S+)\\s*\\((.*)\\)\\s*(?:where\\s+(.+))?\\s*$");
+          "(?is)^\\s*create\\s+(unique\\s+)?index\\s+(if\\s+not\\s+exists\\s+)?(\\S*)\\s+on\\s+(\\S*)\\s*\\((.*)\\)\\s*(?:where\\s+(.+))?\\s*$");
   private static final Pattern COLUMN_PATTERN =
       Pattern.compile("(?is)^(.+?)(?:\\s+collate\\s+([a-zA-Z0-9_]+))?(?:\\s+(asc|desc))?$");
   private static final Pattern SIMPLE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
@@ -177,11 +177,15 @@ public final class CollectionIndexSupport {
       String table,
       JooqDatabase.Engine engine,
       Function<String, String> quoteIdentifier) {
-    String name = indexName(raw);
-    if (name.isBlank()) {
+    ParsedIndex parsed = parse(raw);
+    if (parsed == null || parsed.name().isBlank()) {
       return "";
     }
-    String sql = "DROP INDEX " + quoteIdentifier.apply(name);
+    String identifier =
+        parsed.schema().isBlank()
+            ? quoteIdentifier.apply(parsed.name())
+            : quoteIdentifier.apply(parsed.schema()) + "." + quoteIdentifier.apply(parsed.name());
+    String sql = "DROP INDEX " + identifier;
     return engine == JooqDatabase.Engine.MYSQL ? sql + " ON " + quoteIdentifier.apply(table) : sql;
   }
 
@@ -190,9 +194,31 @@ public final class CollectionIndexSupport {
     if (!matcher.matches()) {
       return null;
     }
-    String name = unquote(lastIdentifierPart(matcher.group(3)));
-    String table = unquote(lastIdentifierPart(matcher.group(4)));
-    if (name.isBlank() || table.isBlank()) {
+    List<String> nameParts = splitIdentifierParts(matcher.group(3));
+    String schema = "";
+    String name = "";
+    if (nameParts.size() == 1) {
+      name = unquote(nameParts.get(0));
+    } else if (nameParts.size() == 2) {
+      schema = unquote(nameParts.get(0));
+      name = unquote(nameParts.get(1));
+    } else {
+      return null;
+    }
+    if (name.isBlank() || (nameParts.size() == 2 && schema.isBlank())) {
+      return null;
+    }
+
+    List<String> tableParts = splitIdentifierParts(matcher.group(4));
+    String table = "";
+    if (tableParts.size() == 1) {
+      table = unquote(tableParts.get(0));
+    } else if (tableParts.size() == 2) {
+      table = unquote(tableParts.get(1));
+    } else {
+      return null;
+    }
+    if (table.isBlank()) {
       return null;
     }
     List<String> rawColumns = splitColumns(matcher.group(5));
@@ -218,6 +244,7 @@ public final class CollectionIndexSupport {
     return new ParsedIndex(
         matcher.group(1) != null,
         matcher.group(2) != null,
+        schema,
         name,
         table,
         columns,
@@ -242,6 +269,9 @@ public final class CollectionIndexSupport {
     sql.append("INDEX ");
     if (index.optional()) {
       sql.append("IF NOT EXISTS ");
+    }
+    if (!index.schema().isBlank()) {
+      sql.append(quoteIdentifier.apply(index.schema())).append(".");
     }
     sql.append(quoteIdentifier.apply(index.name()))
         .append(" ON ")
@@ -526,9 +556,47 @@ public final class CollectionIndexSupport {
             Map.of(String.valueOf(index), ApiErrors.validationError(code, errorMessage))));
   }
 
-  private static String lastIdentifierPart(String value) {
-    int separator = value.lastIndexOf('.');
-    return separator < 0 ? value : value.substring(separator + 1);
+  private static List<String> splitIdentifierParts(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return List.of();
+    }
+    List<String> parts = new ArrayList<>();
+    StringBuilder current = new StringBuilder();
+    char quote = 0;
+    for (int i = 0; i < raw.length(); i++) {
+      char c = raw.charAt(i);
+      if (quote != 0) {
+        current.append(c);
+        if (quote == '[' && c == ']') {
+          quote = 0;
+        } else if (c == quote) {
+          if (i + 1 < raw.length() && raw.charAt(i + 1) == quote) {
+            current.append(raw.charAt(i + 1));
+            i++;
+          } else {
+            quote = 0;
+          }
+        }
+      } else {
+        if (c == '`' || c == '"' || c == '\'') {
+          quote = c;
+          current.append(c);
+        } else if (c == '[') {
+          quote = '[';
+          current.append(c);
+        } else if (c == '.') {
+          parts.add(current.toString().trim());
+          current.setLength(0);
+        } else {
+          current.append(c);
+        }
+      }
+    }
+    if (quote != 0) {
+      return List.of();
+    }
+    parts.add(current.toString().trim());
+    return parts;
   }
 
   private static String unquote(String value) {
@@ -536,11 +604,17 @@ public final class CollectionIndexSupport {
     if (result.length() >= 2) {
       char first = result.charAt(0);
       char last = result.charAt(result.length() - 1);
-      if (first == '`' && last == '`'
-          || first == '"' && last == '"'
-          || first == '[' && last == ']'
-          || first == '\'' && last == '\'') {
-        result = result.substring(1, result.length() - 1);
+      if (first == '`' && last == '`') {
+        return result.substring(1, result.length() - 1).replace("``", "`");
+      }
+      if (first == '"' && last == '"') {
+        return result.substring(1, result.length() - 1).replace("\"\"", "\"");
+      }
+      if (first == '[' && last == ']') {
+        return result.substring(1, result.length() - 1);
+      }
+      if (first == '\'' && last == '\'') {
+        return result.substring(1, result.length() - 1).replace("''", "'");
       }
     }
     return result;
@@ -557,6 +631,7 @@ public final class CollectionIndexSupport {
   private record ParsedIndex(
       boolean unique,
       boolean optional,
+      String schema,
       String name,
       String table,
       List<IndexColumn> columns,

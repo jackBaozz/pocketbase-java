@@ -1218,6 +1218,30 @@ class LocalPocketBaseServerTest {
         rawRequest("GET", "/api/collections/invalid_partial_index_posts", token, null)
             .statusCode());
 
+    HttpResponse<String> invalidMultiPart =
+        rawRequest(
+            "POST",
+            "/api/collections",
+            token,
+            Map.of(
+                "name", "invalid_multipart_index_posts",
+                "fields", List.of(Map.of("name", "title", "type", "text")),
+                "indexes", List.of("create index a.b.c on invalid_multipart_index_posts (title)")));
+    assertEquals(400, invalidMultiPart.statusCode());
+    assertEquals(
+        "validation_invalid_index_expression",
+        mapper
+            .readTree(invalidMultiPart.body())
+            .get("data")
+            .get("indexes")
+            .get("0")
+            .get("code")
+            .asText());
+    assertEquals(
+        404,
+        rawRequest("GET", "/api/collections/invalid_multipart_index_posts", token, null)
+            .statusCode());
+
     HttpResponse<String> duplicated =
         rawRequest(
             "POST",
@@ -1312,6 +1336,53 @@ class LocalPocketBaseServerTest {
     assertEquals(
         updated.get("indexes"),
         request("GET", "/api/collections/indexed_posts", token, null).get("indexes"));
+
+    HttpResponse<String> invalidMultiPartUpdate =
+        rawRequest(
+            "PATCH",
+            "/api/collections/indexed_posts",
+            token,
+            Map.of(
+                "indexes",
+                List.of("create index a.b.c on indexed_posts (title)")));
+    assertEquals(400, invalidMultiPartUpdate.statusCode());
+    assertEquals(
+        "validation_invalid_index_expression",
+        mapper
+            .readTree(invalidMultiPartUpdate.body())
+            .get("data")
+            .get("indexes")
+            .get("0")
+            .get("code")
+            .asText());
+    assertEquals(
+        updated.get("indexes"),
+        request("GET", "/api/collections/indexed_posts", token, null).get("indexes"));
+
+    HttpResponse<String> invalidBatchImport =
+        rawRequest(
+            "PUT",
+            "/api/collections/import",
+            token,
+            Map.of(
+                "collections",
+                List.of(
+                    Map.of(
+                        "name", "import_atomic_valid",
+                        "type", "base",
+                        "fields", List.of(Map.of("name", "title", "type", "text"))),
+                    Map.of(
+                        "name", "import_atomic_invalid",
+                        "type", "base",
+                        "fields", List.of(Map.of("name", "title", "type", "text")),
+                        "indexes", List.of("create index a.b.c on import_atomic_invalid (title)")))));
+    assertEquals(400, invalidBatchImport.statusCode());
+    assertEquals(
+        404,
+        rawRequest("GET", "/api/collections/import_atomic_valid", token, null).statusCode());
+    assertEquals(
+        404,
+        rawRequest("GET", "/api/collections/import_atomic_invalid", token, null).statusCode());
 
     if (Files.exists(tempDir.resolve("pocketbase.db"))) {
       assertEquals(List.of("idx_indexed_count_v2"), sqliteCustomIndexNames("indexed_posts"));

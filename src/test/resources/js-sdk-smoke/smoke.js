@@ -139,6 +139,24 @@ async function run() {
         }
 
         // 6. Testing batch CRUD & rollback
+        console.log("Testing official pb.filter() with edge-case strings...");
+        await pb.collection("smoke_test_collection").create({ title: "placeholder {:test} string", count: 123 });
+        await pb.collection("smoke_test_collection").create({ title: "regular title", count: 456 });
+
+        const notEmptyMatch = await pb.collection("smoke_test_collection").getList(1, 10, {
+            filter: pb.filter("title != {:empty}", { empty: "" })
+        });
+        if (notEmptyMatch.items.length === 0) {
+            throw new Error("pb.filter not-empty comparison failed");
+        }
+
+        const placeholderMatch = await pb.collection("smoke_test_collection").getList(1, 10, {
+            filter: pb.filter("title ~ {:title}", { title: "{:test}" })
+        });
+        if (!placeholderMatch.items.some(it => it.title.includes("{:test}"))) {
+            throw new Error("pb.filter placeholder literal match failed");
+        }
+
         console.log("Testing batch create...");
         const batch = pb.createBatch();
         batch.collection('smoke_test_collection').create({ title: "Batch 1", count: 1 });

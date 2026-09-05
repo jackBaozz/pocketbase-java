@@ -67,13 +67,13 @@ make build dev && make run dev
 Or compile and start the server directly with Maven and the JAR:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.4.1-all.jar start --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.4.2-all.jar start --http 127.0.0.1:8090 --dir pb_data
 ```
 
 The `start` command is optional when it is the only operation:
 
 ```bash
-java -jar target/pocketbase-java-0.4.1-all.jar
+java -jar target/pocketbase-java-0.4.2-all.jar
 ```
 
 Once started, open:
@@ -84,7 +84,7 @@ You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.4.1-all.jar start
+java -jar target/pocketbase-java-0.4.2-all.jar start
 ```
 
 ### Configuration file
@@ -105,7 +105,7 @@ storage.type=sqlite
 Then start the server normally:
 
 ```bash
-java -jar target/pocketbase-java-0.4.1-all.jar start
+java -jar target/pocketbase-java-0.4.2-all.jar start
 ```
 
 For SQLite, the database file is created automatically at
@@ -141,9 +141,9 @@ cp config/application-production.properties.example config/application-productio
 Select a profile at runtime with one of the following (highest priority first):
 
 ```bash
-java -jar target/pocketbase-java-0.4.1-all.jar start --profile dev
-java -Dapp.profile=dev -jar target/pocketbase-java-0.4.1-all.jar start
-PB_PROFILE=dev java -jar target/pocketbase-java-0.4.1-all.jar start
+java -jar target/pocketbase-java-0.4.2-all.jar start --profile dev
+java -Dapp.profile=dev -jar target/pocketbase-java-0.4.2-all.jar start
+PB_PROFILE=dev java -jar target/pocketbase-java-0.4.2-all.jar start
 ```
 
 You may also set `app.profile=dev` in the base properties file. Maven profiles are build-time

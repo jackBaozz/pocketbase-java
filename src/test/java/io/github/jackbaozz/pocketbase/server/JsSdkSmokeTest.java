@@ -30,7 +30,8 @@ public class JsSdkSmokeTest {
 
     // Ensure npm modules are installed in our test resources dir
     File jsDir = new File("src/test/resources/js-sdk-smoke");
-    if (jsDir.exists()) {
+    File nodeModules = new File(jsDir, "node_modules");
+    if (jsDir.exists() && !nodeModules.exists()) {
       ProcessBuilder npmPb = new ProcessBuilder("npm", "install");
       npmPb.directory(jsDir);
       npmPb.start().waitFor();
