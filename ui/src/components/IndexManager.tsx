@@ -94,7 +94,9 @@ export function parseIndex(raw: string): ParsedIndex {
   if (nameParts.length === 1) {
     result.indexName = unquoteIdentifier(nameParts[0]);
   } else if (nameParts.length === 2) {
-    result.indexName = unquoteIdentifier(nameParts[1]);
+    const schema = unquoteIdentifier(nameParts[0]);
+    const name = unquoteIdentifier(nameParts[1]);
+    result.indexName = schema ? name : "";
   } else {
     result.indexName = "";
   }
@@ -103,7 +105,9 @@ export function parseIndex(raw: string): ParsedIndex {
   if (tableParts.length === 1) {
     result.tableName = unquoteIdentifier(tableParts[0]);
   } else if (tableParts.length === 2) {
-    result.tableName = unquoteIdentifier(tableParts[1]);
+    const tableSchema = unquoteIdentifier(tableParts[0]);
+    const tableName = unquoteIdentifier(tableParts[1]);
+    result.tableName = tableSchema ? tableName : "";
   } else {
     result.tableName = "";
   }

@@ -699,7 +699,12 @@ export function CodeEditor({
     debounceTimerRef.current = window.setTimeout(() => {
       debounceTimerRef.current = null;
       const currentInput = inputRef.current;
-      if (!currentInput || document.activeElement !== currentInput) {
+      if (
+        !currentInput ||
+        (document.activeElement &&
+          document.activeElement !== document.body &&
+          document.activeElement !== currentInput)
+      ) {
         closeSuggest();
         return;
       }

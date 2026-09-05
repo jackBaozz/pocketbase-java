@@ -57,6 +57,12 @@ describe("IndexManager utils", () => {
     expect(invalidMultiNoTable.indexName).toBe("");
     expect(invalidMultiNoTable.tableName).toBe("");
     expect(invalidMultiNoTable.columns).toEqual([]);
+
+    const emptySchemaTable = parseIndex("CREATE INDEX idx_name ON .posts (title)");
+    expect(emptySchemaTable.tableName).toBe("");
+
+    const emptySchemaIndex = parseIndex("CREATE INDEX .idx_name ON posts (title)");
+    expect(emptySchemaIndex.indexName).toBe("");
   });
 
   it("builds index SQL with proper escaping", () => {

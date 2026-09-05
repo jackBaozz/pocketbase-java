@@ -114,7 +114,9 @@ class CollectionIndexSupportTest {
             "create index idx_test on ()",
             "create index idx_test on posts ()",
             "create index .idx_test on posts (title)",
-            "create index idx_test. on posts (title)");
+            "create index idx_test. on posts (title)",
+            "create index idx_test on .posts (title)",
+            "create index idx_test on posts. (title)");
 
     for (String expr : invalidExpressions) {
       CollectionSchema collection = collection("posts");

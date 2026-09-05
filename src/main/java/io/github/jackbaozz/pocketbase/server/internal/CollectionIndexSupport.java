@@ -211,14 +211,16 @@ public final class CollectionIndexSupport {
 
     List<String> tableParts = splitIdentifierParts(matcher.group(4));
     String table = "";
+    String tableSchema = "";
     if (tableParts.size() == 1) {
       table = unquote(tableParts.get(0));
     } else if (tableParts.size() == 2) {
+      tableSchema = unquote(tableParts.get(0));
       table = unquote(tableParts.get(1));
     } else {
       return null;
     }
-    if (table.isBlank()) {
+    if (table.isBlank() || (tableParts.size() == 2 && tableSchema.isBlank())) {
       return null;
     }
     List<String> rawColumns = splitColumns(matcher.group(5));
