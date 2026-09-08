@@ -250,6 +250,8 @@ class RuleEvaluatorTest {
         RuleEvaluator.matches(
             "strftime('%F', '2024-02-29', '+1 year', 'floor') = '2025-02-28'", ctx));
     assertTrue(RuleEvaluator.matches("geoDistance(location.lon, location.lat, 0, 0) < 20", ctx));
+    assertTrue(RuleEvaluator.matches("geoDistance(0, 8, 0, 8) = 0", ctx));
+    assertTrue(RuleEvaluator.matches("geoDistance(0, 45, 0, 45) = 0", ctx));
     assertEquals(
         List.of("created", "location.lon", "location.lat"),
         RuleEvaluator.identifiers(

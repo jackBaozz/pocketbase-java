@@ -12,6 +12,7 @@ import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitForSelectorState;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -174,6 +175,51 @@ public class AdminUiPlaywrightTest {
         name);
   }
 
+  private void createSelfReferentialCascadeCollectionFromBrowser(String name) {
+    page.evaluate(
+        """
+            async (name) => {
+              const token = window.localStorage.getItem('pbj_token');
+              const headers = {
+                'Accept': 'application/json',
+                'Authorization': 'Bearer ' + token,
+                'Content-Type': 'application/json'
+              };
+              const collectionId = `${name}_id`;
+              const collection = await fetch('/api/collections', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  id: collectionId,
+                  name,
+                  fields: [
+                    { name: 'title', type: 'text', required: true },
+                    {
+                      name: 'parent',
+                      type: 'relation',
+                      collectionId,
+                      cascadeDelete: true,
+                      maxSelect: 1
+                    }
+                  ]
+                })
+              });
+              if (!collection.ok) {
+                throw new Error(await collection.text());
+              }
+              const record = await fetch(`/api/collections/${encodeURIComponent(name)}/records`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ title: 'Cascade parent' })
+              });
+              if (!record.ok) {
+                throw new Error(await record.text());
+              }
+            }
+            """,
+        name);
+  }
+
   private String createOAuthAuthCollectionFromBrowser(String name) {
     return String.valueOf(
         page.evaluate(
@@ -318,6 +364,44 @@ public class AdminUiPlaywrightTest {
     assertHashRoute("#/settings/import-collections", "#import-collections-json");
     assertHashRoute("#/settings/sql", "#sql-query");
     assertHashRoute("#/logs", ".logs-page");
+  }
+
+  @Test
+  void testSelfReferentialCascadeDeleteReloadsRecordsFromServer() {
+    bootstrapAndLogin("admin-cascade@example.com");
+    createSelfReferentialCascadeCollectionFromBrowser("ui_cascade_posts");
+
+    // Creating a collection through fetch does not update the already-mounted collection list.
+    // Reload from a blank document so the route bootstraps against the newly persisted schema.
+    page.navigate("about:blank");
+    page.navigate(baseUrl + "/_/#/collections/ui_cascade_posts/records");
+    page.waitForSelector(".records-page", new Page.WaitForSelectorOptions().setTimeout(10000));
+    waitForCollectionRoute("ui_cascade_posts");
+    page.waitForSelector(
+        "tr:has-text('Cascade parent')", new Page.WaitForSelectorOptions().setTimeout(10000));
+
+    AtomicInteger listReloads = new AtomicInteger();
+    page.onRequest(
+        request -> {
+          if ("GET".equals(request.method())
+              && request.url().contains("/api/collections/ui_cascade_posts/records?")) {
+            listReloads.incrementAndGet();
+          }
+        });
+    listReloads.set(0);
+
+    page.click("tr:has-text('Cascade parent') .checkbox-button");
+    page.waitForSelector(".selection-tray-delete", new Page.WaitForSelectorOptions().setTimeout(5000));
+    page.click(".selection-tray-delete");
+    page.waitForSelector(".confirm-dialog", new Page.WaitForSelectorOptions().setTimeout(5000));
+    page.click(".confirm-actions button.danger");
+    page.waitForSelector(
+        "tr:has-text('Cascade parent')",
+        new Page.WaitForSelectorOptions()
+            .setState(WaitForSelectorState.HIDDEN)
+            .setTimeout(10000));
+
+    assertTrue(listReloads.get() > 0, "Cascade-aware deletion must reload the record list.");
   }
 
   @Test

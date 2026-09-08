@@ -1161,7 +1161,7 @@ public final class HttpApi implements HttpHandler {
     }
     headers.add("CF-Connecting-IP");
     headers.add("Fly-Client-IP");
-    headers.add("X\u2011Forwarded-For");
+    headers.add("X-Forwarded-For");
 
     for (String header : headers) {
       String value = exchange.getRequestHeaders().getFirst(header);

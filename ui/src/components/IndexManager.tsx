@@ -14,7 +14,7 @@ export type ParsedIndex = {
 };
 
 const INDEX_REGEX =
-  /create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*\(([\s\S]*)\)(?:\s*where\s+([\s\S]*))?/i;
+  /^\s*create\s+(unique\s+)?\s*index\s*(if\s+not\s+exists\s+)?(\S*)\s+on\s+(\S*)\s*\(([\s\S]*?)\)(?:\s+where\s+([\s\S]*?))?\s*$/i;
 const QUOTE_REGEX = /^["'`[{]|["'`\]}]$/gm;
 
 export function splitIdentifierParts(raw: string): string[] {
@@ -74,6 +74,60 @@ export function unquoteIdentifier(value: string): string {
   return trimmed;
 }
 
+/** Split index columns without treating commas in nested expressions as separators. */
+export function splitIndexColumns(raw: string): string[] {
+  const value = raw || "";
+  const columns: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote = "";
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if (quote) {
+      current += char;
+      if (quote === "[" && char === "]") {
+        quote = "";
+      } else if (char === quote) {
+        if (i + 1 < value.length && value[i + 1] === quote) {
+          current += value[i + 1];
+          i++;
+        } else {
+          quote = "";
+        }
+      }
+      continue;
+    }
+
+    if (char === "`" || char === '"' || char === "'") {
+      quote = char;
+      current += char;
+    } else if (char === "[") {
+      quote = char;
+      current += char;
+    } else if (char === "(") {
+      depth++;
+      current += char;
+    } else if (char === ")") {
+      if (depth === 0) return [];
+      depth--;
+      current += char;
+    } else if (char === "," && depth === 0) {
+      const column = current.trim();
+      if (!column) return [];
+      columns.push(column);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  const column = current.trim();
+  if (quote || depth !== 0 || !column) return [];
+  columns.push(column);
+  return columns;
+}
+
 /** Port of the official utils.parseIndex, trimmed to the parts this UI edits. */
 export function parseIndex(raw: string): ParsedIndex {
   const result: ParsedIndex = {
@@ -114,12 +168,13 @@ export function parseIndex(raw: string): ParsedIndex {
 
   result.where = matches[6]?.trim() || "";
 
-  // Commas inside expressions like max(a, b) must not split columns.
-  const rawColumns = (matches[5] || "").replace(/,(?=[^(]*\))/gim, "{PB_TEMP}").split(",");
-  for (const column of rawColumns) {
-    const name = column.trim().replaceAll("{PB_TEMP}", ",").replace(QUOTE_REGEX, "");
-    if (name) result.columns.push(name);
-  }
+  const rawColumns = splitIndexColumns(matches[5] || "");
+  const columns = rawColumns
+    .map((column) => column.replace(QUOTE_REGEX, "").trim())
+    .filter(Boolean);
+  // Never silently drop a malformed segment. An empty column list makes the
+  // invalid expression visible to the editor and lets the server reject it.
+  if (columns.length === rawColumns.length) result.columns = columns;
   return result;
 }
 

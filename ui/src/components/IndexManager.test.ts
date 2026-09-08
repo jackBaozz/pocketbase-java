@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIndex, buildIndex, splitIdentifierParts, unquoteIdentifier } from "./IndexManager";
+import { buildIndex, parseIndex, splitIdentifierParts, splitIndexColumns, unquoteIdentifier } from "./IndexManager";
 
 describe("IndexManager utils", () => {
   it("splits identifiers by dots outside quotes", () => {
@@ -41,6 +41,21 @@ describe("IndexManager utils", () => {
 
     const quotedDotted = parseIndex("CREATE INDEX `a.b.c` ON posts (title)");
     expect(quotedDotted.indexName).toBe("a.b.c");
+
+    const parenthesizedWhere = parseIndex(
+      "CREATE UNIQUE INDEX idx_posts_cast ON posts (lower(title), json_extract(metadata, '$.slug')) WHERE cast(count as int) > 10 AND (title != '')"
+    );
+    expect(parenthesizedWhere.columns).toEqual(["lower(title)", "json_extract(metadata, '$.slug')"]);
+    expect(parenthesizedWhere.where).toBe("cast(count as int) > 10 AND (title != '')");
+  });
+
+  it("splits nested column expressions and rejects malformed segments", () => {
+    expect(splitIndexColumns("title, coalesce(json_extract(metadata, '$.slug'), 'draft')")).toEqual([
+      "title",
+      "coalesce(json_extract(metadata, '$.slug'), 'draft')"
+    ]);
+    expect(splitIndexColumns("title, ")).toEqual([]);
+    expect(splitIndexColumns("lower(title")).toEqual([]);
   });
 
   it("rejects invalid multi-part names instead of silently converting them", () => {
@@ -63,6 +78,9 @@ describe("IndexManager utils", () => {
 
     const emptySchemaIndex = parseIndex("CREATE INDEX .idx_name ON posts (title)");
     expect(emptySchemaIndex.indexName).toBe("");
+
+    const missingWhereSeparator = parseIndex("CREATE INDEX idx_name ON posts (title)where count > 0");
+    expect(missingWhereSeparator.columns).toEqual([]);
   });
 
   it("builds index SQL with proper escaping", () => {

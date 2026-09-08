@@ -36,6 +36,43 @@ class CollectionIndexSupportTest {
   }
 
   @Test
+  void preservesParenthesizedWhereClausesAndNestedColumnExpressions() {
+    CollectionSchema collection = collection("posts");
+    collection.indexes =
+        List.of(
+            "CREATE INDEX idx_posts_active ON posts (title) WHERE (count > 0)",
+            "CREATE UNIQUE INDEX idx_posts_cast ON posts (lower(title), count) "
+                + "WHERE cast(count as int) > 10",
+            "CREATE INDEX idx_posts_json ON posts (json_extract(title, '$.slug')) "
+                + "WHERE (count > 0)");
+
+    List<String> normalized = CollectionIndexSupport.normalize(collection, List.of(), "Failed.");
+
+    assertEquals(3, normalized.size());
+    assertTrue(normalized.get(0).endsWith("WHERE (count > 0)"));
+    assertTrue(normalized.get(1).contains("lower(title), `count`"));
+    assertTrue(normalized.get(1).endsWith("WHERE cast(count as int) > 10"));
+    assertTrue(normalized.get(2).contains("json_extract(title, '$.slug')"));
+    assertTrue(normalized.get(2).endsWith("WHERE (count > 0)"));
+  }
+
+  @Test
+  void rejectsMalformedIndexColumnsAndWhereWithoutASeparator() {
+    for (String expression : List.of(
+        "CREATE INDEX idx_posts_bad ON posts (lower(title)",
+        "CREATE INDEX idx_posts_bad ON posts (title)where count > 0")) {
+      CollectionSchema collection = collection("posts");
+      collection.indexes = List.of(expression);
+
+      ApiException error =
+          assertThrows(
+              ApiException.class,
+              () -> CollectionIndexSupport.normalize(collection, List.of(), "Failed."));
+      assertTrue(String.valueOf(error.data()).contains("validation_invalid_index_expression"));
+    }
+  }
+
+  @Test
   void mysqlUsesBoundedPrefixesForLongTextIndexesWithoutChangingMetadata() {
     CollectionSchema collection = collection("posts");
 

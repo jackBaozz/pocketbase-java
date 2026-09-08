@@ -20,6 +20,7 @@ public class FieldSchema {
   public boolean presentable;
   public String collectionId;
   public List<String> collectionIds;
+  public boolean cascadeDelete;
   public Integer minSelect;
   public Integer maxSelect;
   public Integer maxFiles;

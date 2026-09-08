@@ -65,7 +65,7 @@ import { useRecordSelection } from "./hooks/useRecordSelection";
 import { useColumnPreferences } from "./hooks/useColumnPreferences";
 import { useCollections } from "./hooks/useCollections";
 import type { FieldSchema as SharedFieldSchema } from "./types/api";
-import { fieldMultiplicity } from "./domain/fields";
+import { fieldMultiplicity, hasSelfReferentialCascadeDelete } from "./domain/fields";
 import { formatDate as sharedFormatDate, formatValue as sharedFormatValue } from "./utils/date";
 
 import { useTranslation } from "react-i18next";
@@ -1221,6 +1221,27 @@ function App() {
     if (recordPage && records.length < recordPage.totalItems) setRecordsNeedRefresh(true);
   }
 
+  /**
+   * A self-referencing relation with cascadeDelete can remove descendants the
+   * client did not explicitly delete. Reset to the authoritative first page so
+   * stale descendants cannot remain in loaded pages or selection state.
+   */
+  async function reconcileDeletedRecords(ids: Iterable<string>) {
+    const deletedIds = [...new Set(ids)];
+    if (deletedIds.length === 0) return;
+    if (!hasSelfReferentialCascadeDelete(selected)) {
+      removeRecordsFromLoadedState(deletedIds);
+      return;
+    }
+
+    clearRecordSelection();
+    recordPageCacheRef.current = { scope: "", pages: new Map() };
+    setRecordRoutePage(1);
+    setRecordRouteId("");
+    replaceRecordRoute(query, 1, "");
+    await refreshRecords(selected.name, query, 1, { force: true });
+  }
+
   const confirm = useCallback(
     (request: ConfirmRequest) =>
       new Promise<boolean>((resolve) => {
@@ -2371,7 +2392,7 @@ function App() {
         method: "DELETE"
       });
       notify(t("notifications.record_deleted", "Record deleted"));
-      removeRecordsFromLoadedState([record.id]);
+      await reconcileDeletedRecords([record.id]);
     } catch (error) {
       notify(errorMessage(error), "error");
     }
@@ -2414,7 +2435,7 @@ function App() {
         // completed requests are still reflected locally below.
         if (failed) break;
       }
-      removeRecordsFromLoadedState(deletedIds);
+      await reconcileDeletedRecords(deletedIds);
       if (failed) throw failure;
       notify(t("notifications.records_deleted", "Records deleted"));
     } catch (error) {
@@ -4590,7 +4611,7 @@ function RecordsView(props: RecordsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.4.2</span>
+            <span>PocketBase v0.4.3</span>
           </a>
         </div>
       </footer>
@@ -7640,7 +7661,7 @@ function LogsView(props: LogsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.4.2</span>
+            <span>PocketBase v0.4.3</span>
           </a>
         </div>
       </footer>

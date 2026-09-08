@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { fieldMultiplicity, fieldDefault } from "./fields";
-import type { FieldSchema } from "../types/api";
+import { fieldMultiplicity, fieldDefault, hasSelfReferentialCascadeDelete } from "./fields";
+import type { CollectionSchema, FieldSchema } from "../types/api";
 
 describe("fieldMultiplicity", () => {
   it("returns 1 for a plain text field with no multiplicity options", () => {
@@ -85,5 +85,44 @@ describe("fieldDefault", () => {
 
   it("returns empty string for text", () => {
     expect(fieldDefault({ name: "title", type: "text" })).toBe("");
+  });
+});
+
+describe("hasSelfReferentialCascadeDelete", () => {
+  const categories: CollectionSchema = {
+    id: "categories-id",
+    name: "categories",
+    type: "base",
+    fields: []
+  };
+
+  it("detects a current relation field that cascades to the same collection", () => {
+    expect(
+      hasSelfReferentialCascadeDelete({
+        ...categories,
+        fields: [{ name: "parent", type: "relation", collectionId: "categories-id", cascadeDelete: true }]
+      })
+    ).toBe(true);
+  });
+
+  it("supports legacy relation options and ignores non-self or non-cascading fields", () => {
+    expect(
+      hasSelfReferentialCascadeDelete({
+        ...categories,
+        fields: [{ name: "parent", type: "relation", options: { collectionId: "categories", cascadeDelete: true } }]
+      })
+    ).toBe(true);
+    expect(
+      hasSelfReferentialCascadeDelete({
+        ...categories,
+        fields: [{ name: "owner", type: "relation", collectionId: "users-id", cascadeDelete: true }]
+      })
+    ).toBe(false);
+    expect(
+      hasSelfReferentialCascadeDelete({
+        ...categories,
+        fields: [{ name: "parent", type: "relation", collectionId: "categories-id", cascadeDelete: false }]
+      })
+    ).toBe(false);
   });
 });

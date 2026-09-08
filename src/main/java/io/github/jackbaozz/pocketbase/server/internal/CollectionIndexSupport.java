@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 public final class CollectionIndexSupport {
   private static final Pattern INDEX_PATTERN =
       Pattern.compile(
-          "(?is)^\\s*create\\s+(unique\\s+)?index\\s+(if\\s+not\\s+exists\\s+)?(\\S*)\\s+on\\s+(\\S*)\\s*\\((.*)\\)\\s*(?:where\\s+(.+))?\\s*$");
+          "(?i)^\\s*create\\s+(unique\\s+)?\\s*index\\s*(if\\s+not\\s+exists\\s+)?(\\S*)\\s+on\\s+(\\S*)\\s*\\(([\\s\\S]*?)\\)(?:\\s+where\\s+([\\s\\S]*?))?\\s*$");
   private static final Pattern COLUMN_PATTERN =
       Pattern.compile("(?is)^(.+?)(?:\\s+collate\\s+([a-zA-Z0-9_]+))?(?:\\s+(asc|desc))?$");
   private static final Pattern SIMPLE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
@@ -49,6 +49,7 @@ public final class CollectionIndexSupport {
           "as",
           "distinct",
           "text",
+          "int",
           "integer",
           "real",
           "numeric",
@@ -240,7 +241,10 @@ public final class CollectionIndexSupport {
               text(columnMatcher.group(2)),
               text(columnMatcher.group(3)).toUpperCase(Locale.ROOT)));
     }
-    if (columns.isEmpty()) {
+    // Keep an unparseable column segment from being silently omitted and changing
+    // the submitted index definition. The caller will turn this into the standard
+    // PocketBase-compatible invalid-index validation error.
+    if (columns.isEmpty() || columns.size() != rawColumns.size()) {
       return null;
     }
     return new ParsedIndex(
@@ -525,10 +529,16 @@ public final class CollectionIndexSupport {
         depth++;
       } else if (current == ')') {
         depth--;
+        if (depth < 0) {
+          return List.of();
+        }
       } else if (current == ',' && depth == 0) {
         result.add(value.substring(start, i));
         start = i + 1;
       }
+    }
+    if (quote != 0 || depth != 0) {
+      return List.of();
     }
     result.add(value.substring(start));
     return result;

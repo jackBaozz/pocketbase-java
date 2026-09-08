@@ -145,7 +145,12 @@ public final class FilterFunctionSupport {
     double sinLat = Math.sin(deltaLat / 2D);
     double sinLon = Math.sin(deltaLon / 2D);
     double a = sinLat * sinLat + Math.cos(latARadians) * Math.cos(latBRadians) * sinLon * sinLon;
-    return EARTH_RADIUS_KM * 2D * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0D, 1D - a)));
+    // Floating-point rounding can make a mathematically valid Haversine value
+    // slightly larger than 1. Keep both square-root operands in their domain.
+    double clampedA = Math.min(1D, Math.max(0D, a));
+    return EARTH_RADIUS_KM
+        * 2D
+        * Math.atan2(Math.sqrt(clampedA), Math.sqrt(1D - clampedA));
   }
 
   private static String formatTime(String format, Object rawValue, List<String> modifiers) {

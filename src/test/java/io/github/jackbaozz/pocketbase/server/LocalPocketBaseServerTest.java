@@ -738,6 +738,22 @@ class LocalPocketBaseServerTest {
             "title", "Far August",
             "occurred", "2026-08-03T09:15:00Z",
             "location", Map.of("lon", 40, "lat", 20)));
+    request(
+        "POST",
+        "/api/collections/filter_function_places/records",
+        token,
+        Map.of(
+            "title", "Exact Eight",
+            "occurred", "2026-08-04T09:15:00Z",
+            "location", Map.of("lon", 0, "lat", 8)));
+    request(
+        "POST",
+        "/api/collections/filter_function_places/records",
+        token,
+        Map.of(
+            "title", "Exact Forty Five",
+            "occurred", "2026-08-05T09:15:00Z",
+            "location", Map.of("lon", 0, "lat", 45)));
 
     JsonNode month =
         request(
@@ -773,6 +789,28 @@ class LocalPocketBaseServerTest {
     assertEquals(1, distance.get("totalItems").asInt());
     assertEquals("Near July", distance.get("items").get(0).get("title").asText());
 
+    JsonNode exactEight =
+        request(
+            "GET",
+            "/api/collections/filter_function_places/records?filter="
+                + URLEncoder.encode(
+                    "geoDistance(location.lon, location.lat, 0, 8) = 0", StandardCharsets.UTF_8),
+            null,
+            null);
+    assertEquals(1, exactEight.get("totalItems").asInt());
+    assertEquals("Exact Eight", exactEight.get("items").get(0).get("title").asText());
+
+    JsonNode exactFortyFive =
+        request(
+            "GET",
+            "/api/collections/filter_function_places/records?filter="
+                + URLEncoder.encode(
+                    "geoDistance(location.lon, location.lat, 0, 45) = 0", StandardCharsets.UTF_8),
+            null,
+            null);
+    assertEquals(1, exactFortyFive.get("totalItems").asInt());
+    assertEquals("Exact Forty Five", exactFortyFive.get("items").get(0).get("title").asText());
+
     HttpResponse<String> invalid =
         rawRequest(
             "GET",
@@ -787,6 +825,34 @@ class LocalPocketBaseServerTest {
         "filter",
         "validation_invalid_value",
         "[geoDistance] expected 4 arguments");
+  }
+
+  @Test
+  void preservesRelationCascadeDeleteConfigurationForAdminUi() throws Exception {
+    start();
+    bootstrapSuperuser();
+    String token = loginToken();
+
+    JsonNode created =
+        request(
+            "POST",
+            "/api/collections",
+            token,
+            Map.of(
+                "id", "cascade_config_posts",
+                "name", "cascade_config_posts",
+                "fields",
+                List.of(
+                    Map.of("name", "title", "type", "text"),
+                    Map.of(
+                        "name", "parent",
+                        "type", "relation",
+                        "collectionId", "cascade_config_posts",
+                        "cascadeDelete", true))));
+
+    assertTrue(created.get("fields").get(2).get("cascadeDelete").asBoolean());
+    JsonNode reloaded = request("GET", "/api/collections/cascade_config_posts", token, null);
+    assertTrue(reloaded.get("fields").get(2).get("cascadeDelete").asBoolean());
   }
 
   @Test
@@ -2788,6 +2854,18 @@ class LocalPocketBaseServerTest {
                 .body());
     assertEquals("127.0.0.1", commonProxy.get("data").get("realIP").asText());
     assertEquals("CF-Connecting-IP", commonProxy.get("data").get("possibleProxyHeader").asText());
+
+    JsonNode forwardedForProxy =
+        mapper.readTree(
+            rawRequest(
+                "GET",
+                "/api/health",
+                rootToken,
+                null,
+                Map.of("X-Forwarded-For", "203.0.113.195"))
+                .body());
+    assertEquals(
+        "X-Forwarded-For", forwardedForProxy.get("data").get("possibleProxyHeader").asText());
   }
 
   @Test
@@ -6525,15 +6603,15 @@ class LocalPocketBaseServerTest {
             "/api/collections/oauth2_provider_merge_users",
             token,
             """
-            {
-              "oauth2": {
-                "providers": [
-                  {"name": "apple", "clientId": "apple-client", "clientSecret": "apple-secret"},
-                  {"pkce": null, "name": "google", "authURL": "", "displayName": "Updated Google", "extra": {}}
-                ]
-              }
-            }
-            """);
+                {
+                  "oauth2": {
+                    "providers": [
+                      {"name": "apple", "clientId": "apple-client", "clientSecret": "apple-secret"},
+                      {"pkce": null, "name": "google", "authURL": "", "displayName": "Updated Google", "extra": {}}
+                    ]
+                  }
+                }
+                """);
     assertEquals(200, response.statusCode(), response.body());
 
     JsonNode providers = mapper.readTree(response.body()).path("oauth2").path("providers");

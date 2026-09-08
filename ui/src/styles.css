@@ -48,7 +48,7 @@
 }
 
 :root[data-theme="dark"] {
-  --primaryColor: #171a20;
+  --primaryColor: var(--surfaceAlt4Color);
   --primaryAlt1Color: #232832;
   --primaryAlt2Color: #2c333e;
   --primaryTxtColor: #f7f9fb;

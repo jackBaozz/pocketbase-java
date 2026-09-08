@@ -45,3 +45,34 @@ export function fieldDefault(field: FieldSchema): unknown {
   if (field.type === "select") return fieldMultiplicity(field) > 1 ? [] : "";
   return "";
 }
+
+/**
+ * A self-referencing cascade can remove records other than the one selected in
+ * the Admin UI. Those removals cannot be reconciled from a single DELETE response,
+ * so the list needs a server refresh instead of a local optimistic removal.
+ */
+export function hasSelfReferentialCascadeDelete(
+  collection:
+    | { id?: string; name?: string; fields?: FieldSchema[] }
+    | null
+    | undefined
+): boolean {
+  if (!collection) return false;
+  const collectionKeys = new Set(
+    [collection.id, collection.name].filter((value): value is string => Boolean(value))
+  );
+  if (collectionKeys.size === 0) return false;
+
+  return (collection.fields ?? []).some((field) => {
+    if (field.type !== "relation" || (field.cascadeDelete !== true && field.options?.cascadeDelete !== true)) {
+      return false;
+    }
+    const optionCollectionId = typeof field.options?.collectionId === "string" ? field.options.collectionId : "";
+    const optionCollectionIds = Array.isArray(field.options?.collectionIds)
+      ? field.options.collectionIds.filter((value): value is string => typeof value === "string")
+      : [];
+    return [field.collectionId, ...(field.collectionIds ?? []), optionCollectionId, ...optionCollectionIds]
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .some((id) => collectionKeys.has(id));
+  });
+}
