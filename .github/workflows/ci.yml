@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        storage: [sqlite, mysql, postgresql]
+        storage: [sqlite, json, mysql, postgresql]
     steps:
       - uses: actions/checkout@v5
       - name: Setup GraalVM
@@ -29,7 +29,7 @@ jobs:
           sdk: '3.6'
       - name: Run Maven Tests
         run: |
-          if [ "${{ matrix.storage }}" = "sqlite" ]; then
+          if [ "${{ matrix.storage }}" = "sqlite" ] || [ "${{ matrix.storage }}" = "json" ]; then
             mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true -Dtest='!AdminUiPlaywrightTest'
           else
             mvn -B test -Dstorage=${{ matrix.storage }} -DrequireDartSdkSmoke=true -Pexternal-db-drivers -Dtest='!AdminUiPlaywrightTest'

@@ -139,20 +139,29 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     FilePermissionSupport.secureTree(dataDir);
     String secret = readOrCreateSecret(dataDir.resolve("pb_secret"));
     JsonFileStore store = new JsonFileStore(dataDir, mapper, new TokenService(mapper, secret));
-    store.load();
-    if (bootstrapEmail != null
-        && !bootstrapEmail.isBlank()
-        && bootstrapPassword != null
-        && !bootstrapPassword.isBlank()
-        && !store.hasSuperusers()) {
-      ObjectNode body = mapper.createObjectNode();
-      body.put("email", bootstrapEmail);
-      body.put("password", bootstrapPassword);
-      body.put("verified", true);
-      store.createSuperuser(body);
+    try {
+      store.load();
+      if (bootstrapEmail != null
+          && !bootstrapEmail.isBlank()
+          && bootstrapPassword != null
+          && !bootstrapPassword.isBlank()
+          && !store.hasSuperusers()) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("email", bootstrapEmail);
+        body.put("password", bootstrapPassword);
+        body.put("verified", true);
+        store.createSuperuser(body);
+      }
+      FilePermissionSupport.secureTree(dataDir);
+      return store;
+    } catch (IOException | RuntimeException | Error failure) {
+      try {
+        store.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      throw failure;
     }
-    FilePermissionSupport.secureTree(dataDir);
-    return store;
   }
 
   public ObjectMapper mapper() {

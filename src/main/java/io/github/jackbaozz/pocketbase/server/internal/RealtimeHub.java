@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 
 /** In-memory SSE broker for PocketBase-style realtime record events. */
@@ -29,6 +30,7 @@ public final class RealtimeHub {
 
   private final ObjectMapper mapper;
   private final Map<String, Client> clients = new ConcurrentHashMap<>();
+  private final AtomicBoolean closed = new AtomicBoolean();
 
   public RealtimeHub(ObjectMapper mapper) {
     this.mapper = mapper;
@@ -39,9 +41,15 @@ public final class RealtimeHub {
   }
 
   public void connect(HttpExchange exchange, String remoteIp) throws IOException {
+    if (closed.get()) {
+      throw new ApiException(503, "Realtime service is shutting down.");
+    }
     String clientId = IdGenerator.id();
     Client client = new Client(clientId, exchange.getResponseBody(), remoteIp);
     synchronized (clients) {
+      if (closed.get()) {
+        throw new ApiException(503, "Realtime service is shutting down.");
+      }
       if (clients.size() >= MAX_CLIENTS) {
         throw new ApiException(503, "Realtime service is temporarily at capacity.");
       }
@@ -140,6 +148,9 @@ public final class RealtimeHub {
       String recordId,
       String action,
       BiFunction<Subscription, RequestPrincipal, Map<String, Object>> recordFactory) {
+    if (closed.get()) {
+      return;
+    }
     for (Client client : new ArrayList<>(clients.values())) {
       for (Subscription subscription : client.subscriptions()) {
         if (!subscription.matches(collectionName, collectionId, recordId)) {
@@ -160,6 +171,21 @@ public final class RealtimeHub {
           break;
         }
       }
+    }
+  }
+
+  /** Closes every active SSE stream and wakes heartbeat waiters. */
+  public void close() {
+    if (!closed.compareAndSet(false, true)) {
+      return;
+    }
+    List<Client> active;
+    synchronized (clients) {
+      active = new ArrayList<>(clients.values());
+      clients.clear();
+    }
+    for (Client client : active) {
+      client.close();
     }
   }
 
@@ -317,6 +343,7 @@ public final class RealtimeHub {
     private final String remoteIp;
     private final long startedAtNanos = System.nanoTime();
     private final CountDownLatch closed = new CountDownLatch(1);
+    private final AtomicBoolean closedOnce = new AtomicBoolean();
     private volatile Set<Subscription> subscriptions = Set.of();
     private volatile RequestPrincipal principal;
     private volatile boolean subscribed;
@@ -412,6 +439,9 @@ public final class RealtimeHub {
     }
 
     void close() {
+      if (!closedOnce.compareAndSet(false, true)) {
+        return;
+      }
       closed.countDown();
       try {
         output.close();

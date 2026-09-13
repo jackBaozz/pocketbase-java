@@ -1,20 +1,23 @@
 package io.github.jackbaozz.pocketbase.server;
 
 import com.sun.net.httpserver.HttpServer;
+import io.github.jackbaozz.pocketbase.server.internal.ActivityLogDispatcher;
+import io.github.jackbaozz.pocketbase.server.internal.ExternalDatabaseSupport;
 import io.github.jackbaozz.pocketbase.server.internal.HttpApi;
 import io.github.jackbaozz.pocketbase.server.internal.JooqDatabase;
 import io.github.jackbaozz.pocketbase.server.internal.JsonFileStore;
 import io.github.jackbaozz.pocketbase.server.internal.RealtimeHub;
 import io.github.jackbaozz.pocketbase.server.internal.RelationalStorageEngine;
 import io.github.jackbaozz.pocketbase.server.internal.StorageEngine;
-import io.github.jackbaozz.pocketbase.server.internal.ExternalDatabaseSupport;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Programmatic handle for the embedded PocketBase-like runtime. */
@@ -23,17 +26,50 @@ public final class LocalPocketBase implements AutoCloseable {
   private final HttpServer httpServer;
   private final StorageEngine store;
   private final ExecutorService executor;
+  private final RealtimeHub realtimeHub;
+  private final ActivityLogDispatcher activityLogs;
+  private final AtomicBoolean closed = new AtomicBoolean();
 
   private LocalPocketBase(
-      ServerConfig config, HttpServer httpServer, StorageEngine store, ExecutorService executor) {
+      ServerConfig config,
+      HttpServer httpServer,
+      StorageEngine store,
+      ExecutorService executor,
+      RealtimeHub realtimeHub,
+      ActivityLogDispatcher activityLogs) {
     this.config = config;
     this.httpServer = httpServer;
     this.store = store;
     this.executor = executor;
+    this.realtimeHub = realtimeHub;
+    this.activityLogs = activityLogs;
   }
 
   public static LocalPocketBase start(ServerConfig config) throws IOException {
-    StorageEngine store;
+    StorageEngine store = null;
+    RealtimeHub realtimeHub = null;
+    ActivityLogDispatcher activityLogs = null;
+    HttpServer server = null;
+    ExecutorService executor = null;
+    try {
+      store = openStore(config);
+      applyConfiguredApplicationName(store, config.applicationName());
+      realtimeHub = new RealtimeHub(store.mapper());
+      store.realtimeHub(realtimeHub);
+      activityLogs = ActivityLogDispatcher.create(store);
+      server = HttpServer.create(config.bindAddress(), 0);
+      executor = createHttpExecutor();
+      server.setExecutor(executor);
+      server.createContext("/", new HttpApi(store, realtimeHub, activityLogs));
+      server.start();
+      return new LocalPocketBase(config, server, store, executor, realtimeHub, activityLogs);
+    } catch (IOException | RuntimeException | Error failure) {
+      closeFailedStart(server, executor, realtimeHub, activityLogs, store, failure);
+      throw failure;
+    }
+  }
+
+  private static StorageEngine openStore(ServerConfig config) throws IOException {
     String storageType = System.getProperty("storage");
     if (storageType == null || storageType.isBlank()) {
       storageType = System.getenv("PB_STORAGE");
@@ -49,34 +85,62 @@ public final class LocalPocketBase implements AutoCloseable {
         || "mariadb".equalsIgnoreCase(storageType)
         || "postgres".equalsIgnoreCase(storageType)
         || "postgresql".equalsIgnoreCase(storageType)) {
-      store =
-          RelationalStorageEngine.open(
-              config.dataDir(),
-              config.bootstrapSuperuserEmail(),
-              config.bootstrapSuperuserPassword(),
-              JooqDatabase.Engine.fromStorageType(storageType),
-              new ExternalDatabaseSupport.ConnectionDefaults(
-                  config.databaseUrl(), config.databaseUser(), config.databasePassword()));
-    } else if ("json".equalsIgnoreCase(storageType)
+      return RelationalStorageEngine.open(
+          config.dataDir(),
+          config.bootstrapSuperuserEmail(),
+          config.bootstrapSuperuserPassword(),
+          JooqDatabase.Engine.fromStorageType(storageType),
+          new ExternalDatabaseSupport.ConnectionDefaults(
+              config.databaseUrl(), config.databaseUser(), config.databasePassword()));
+    }
+    if ("json".equalsIgnoreCase(storageType)
         || "jsonl".equalsIgnoreCase(storageType)
         || "file".equalsIgnoreCase(storageType)) {
-      store =
-          JsonFileStore.open(
-              config.dataDir(),
-              config.bootstrapSuperuserEmail(),
-              config.bootstrapSuperuserPassword());
-    } else {
-      throw new IllegalArgumentException("Unsupported storage engine: " + storageType);
+      return JsonFileStore.open(
+          config.dataDir(),
+          config.bootstrapSuperuserEmail(),
+          config.bootstrapSuperuserPassword());
     }
-    applyConfiguredApplicationName(store, config.applicationName());
-    RealtimeHub realtimeHub = new RealtimeHub(store.mapper());
-    store.realtimeHub(realtimeHub);
-    HttpServer server = HttpServer.create(config.bindAddress(), 0);
-    ExecutorService executor = createHttpExecutor();
-    server.setExecutor(executor);
-    server.createContext("/", new HttpApi(store, realtimeHub));
-    server.start();
-    return new LocalPocketBase(config, server, store, executor);
+    throw new IllegalArgumentException("Unsupported storage engine: " + storageType);
+  }
+
+  private static void closeFailedStart(
+      HttpServer server,
+      ExecutorService executor,
+      RealtimeHub realtimeHub,
+      ActivityLogDispatcher activityLogs,
+      StorageEngine store,
+      Throwable failure) {
+    if (server != null) {
+      try {
+        server.stop(0);
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+    }
+    if (realtimeHub != null) {
+      try {
+        realtimeHub.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+    }
+    shutdownExecutor(executor);
+    if (activityLogs != null) {
+      try {
+        activityLogs.closeAndFlush(
+            Duration.ofMillis(ActivityLogDispatcher.configuredFlushTimeoutMillis()));
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+    }
+    if (store != null) {
+      try {
+        store.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+    }
   }
 
   private static void applyConfiguredApplicationName(StorageEngine store, String applicationName) {
@@ -141,7 +205,41 @@ public final class LocalPocketBase implements AutoCloseable {
 
   @Override
   public void close() {
-    httpServer.stop(0);
+    if (!closed.compareAndSet(false, true)) {
+      return;
+    }
+    RuntimeException failure = null;
+    try {
+      httpServer.stop(0);
+    } catch (RuntimeException e) {
+      failure = e;
+    }
+    try {
+      realtimeHub.close();
+    } catch (RuntimeException e) {
+      failure = appendFailure(failure, e);
+    }
+    shutdownExecutor(executor);
+    try {
+      activityLogs.closeAndFlush(
+          Duration.ofMillis(ActivityLogDispatcher.configuredFlushTimeoutMillis()));
+    } catch (RuntimeException e) {
+      failure = appendFailure(failure, e);
+    }
+    try {
+      store.close();
+    } catch (RuntimeException e) {
+      failure = appendFailure(failure, e);
+    }
+    if (failure != null) {
+      throw failure;
+    }
+  }
+
+  private static void shutdownExecutor(ExecutorService executor) {
+    if (executor == null) {
+      return;
+    }
     executor.shutdown();
     try {
       if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -152,6 +250,13 @@ public final class LocalPocketBase implements AutoCloseable {
       executor.shutdownNow();
       Thread.currentThread().interrupt();
     }
-    store.close();
+  }
+
+  private static RuntimeException appendFailure(RuntimeException primary, RuntimeException next) {
+    if (primary == null) {
+      return next;
+    }
+    primary.addSuppressed(next);
+    return primary;
   }
 }

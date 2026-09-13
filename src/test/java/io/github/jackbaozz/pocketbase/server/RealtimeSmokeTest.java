@@ -2,6 +2,7 @@ package io.github.jackbaozz.pocketbase.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,10 +12,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -85,6 +90,38 @@ class RealtimeSmokeTest {
     assertNotNull(receivedEvent.get());
     assertEquals("create", receivedEvent.get().get("action").asText());
     assertEquals(created.get("id").asText(), receivedEvent.get().get("record").get("id").asText());
+  }
+
+  @Test
+  void serverCloseActivelyEndsAnOpenSseStream() throws Exception {
+    CompletableFuture<HttpResponse<InputStream>> responseFuture =
+        http.sendAsync(
+            HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
+                .header("Accept", "text/event-stream")
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofInputStream());
+    HttpResponse<InputStream> response = responseFuture.get(3, TimeUnit.SECONDS);
+    assertEquals(200, response.statusCode());
+    try (BufferedReader reader =
+        new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+      assertTrue(reader.readLine() != null, "SSE stream should send an initial event");
+      CompletableFuture<String> nextLine =
+          CompletableFuture.supplyAsync(
+              () -> {
+                try {
+                  while (reader.readLine() != null) {
+                    // Drain the initial PB_CONNECT event and wait for the server-side close.
+                  }
+                  return null;
+                } catch (Exception e) {
+                  return null;
+                }
+              });
+      server.close();
+      assertNull(nextLine.get(3, TimeUnit.SECONDS));
+    }
+    server = null;
   }
 
   private void bootstrapSuperuser() throws Exception {

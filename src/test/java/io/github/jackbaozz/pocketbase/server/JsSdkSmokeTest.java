@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +19,9 @@ public class JsSdkSmokeTest {
 
   @TempDir
   Path dataDir;
+
+  @TempDir
+  Path smokeTempDir;
 
   private LocalPocketBase server;
   private String baseUrl;
@@ -28,14 +34,37 @@ public class JsSdkSmokeTest {
     server = TestDatabaseFactory.start(config);
     baseUrl = "http://127.0.0.1:" + server.port();
 
-    // Ensure npm modules are installed in our test resources dir
-    File jsDir = new File("src/test/resources/js-sdk-smoke");
-    File nodeModules = new File(jsDir, "node_modules");
-    if (jsDir.exists() && !nodeModules.exists()) {
-      ProcessBuilder npmPb = new ProcessBuilder("npm", "install");
-      npmPb.directory(jsDir);
-      npmPb.start().waitFor();
+    // Install into a JUnit-owned temporary directory so npm never rewrites tracked fixture files.
+    Path sourceJsDir = Path.of("src/test/resources/js-sdk-smoke");
+    Path jsDir = smokeTempDir.resolve("js-sdk-smoke");
+    Files.createDirectories(jsDir);
+    Files.copy(sourceJsDir.resolve("package.json"), jsDir.resolve("package.json"));
+    Files.copy(sourceJsDir.resolve("package-lock.json"), jsDir.resolve("package-lock.json"));
+    Files.copy(sourceJsDir.resolve("smoke.js"), jsDir.resolve("smoke.js"));
+
+    Path npmLog = jsDir.resolve("npm-install.log");
+    ProcessBuilder npmPb = new ProcessBuilder("npm", "ci", "--ignore-scripts");
+    npmPb.directory(jsDir.toFile());
+    npmPb.redirectErrorStream(true);
+    npmPb.redirectOutput(npmLog.toFile());
+    Process npm = npmPb.start();
+    boolean finished = npm.waitFor(120, TimeUnit.SECONDS);
+    if (!finished) {
+      npm.destroyForcibly();
+      npm.waitFor(5, TimeUnit.SECONDS);
     }
+    int exitCode = finished ? npm.exitValue() : -1;
+    String npmOutput = Files.exists(npmLog)
+        ? Files.readString(npmLog, StandardCharsets.UTF_8)
+        : "<npm produced no output>";
+    assertEquals(0, exitCode, "npm ci failed for the JS SDK smoke fixture:\n" + npmOutput);
+
+    Path sdkPackage = jsDir.resolve("node_modules/pocketbase/package.json");
+    assertTrue(sdkPackage.toFile().isFile(), "JS SDK 0.28.1 must be installed for the smoke test");
+    String sdkMetadata = Files.readString(sdkPackage, StandardCharsets.UTF_8);
+    assertTrue(
+        sdkMetadata.contains("\"version\": \"0.28.1\""),
+        "JS SDK smoke must execute against pocketbase 0.28.1");
   }
 
   @AfterEach
@@ -47,7 +76,7 @@ public class JsSdkSmokeTest {
 
   @Test
   void testOfficialJsSdkCompatibility() throws Exception {
-    File jsScript = new File("src/test/resources/js-sdk-smoke/smoke.js");
+    File jsScript = smokeTempDir.resolve("js-sdk-smoke/smoke.js").toFile();
     assertTrue(jsScript.exists(), "Smoke test script should exist");
 
     ProcessBuilder pb = new ProcessBuilder("node", "smoke.js", baseUrl);

@@ -5,10 +5,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Concurrent daemon executor whose close waits for already accepted maintenance jobs. */
 final class AsyncJobRunner implements AutoCloseable {
   private final ExecutorService executor;
+  private final AtomicBoolean closed = new AtomicBoolean();
 
   AsyncJobRunner(String threadName) {
     AtomicInteger counter = new AtomicInteger();
@@ -22,6 +24,9 @@ final class AsyncJobRunner implements AutoCloseable {
   }
 
   void execute(Runnable job) {
+    if (closed.get()) {
+      throw new IllegalStateException("storage engine is closed");
+    }
     try {
       executor.execute(job);
     } catch (RejectedExecutionException e) {
@@ -31,6 +36,9 @@ final class AsyncJobRunner implements AutoCloseable {
 
   @Override
   public void close() {
+    if (!closed.compareAndSet(false, true)) {
+      return;
+    }
     executor.shutdown();
     try {
       if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {

@@ -157,6 +157,22 @@ async function run() {
             throw new Error("pb.filter placeholder literal match failed");
         }
 
+        const repeatedPlaceholderMatch = await pb.collection("smoke_test_collection").getList(1, 10, {
+            filter: pb.filter("title = {:title} || title = {:title}", { title: "regular title" })
+        });
+        if (!repeatedPlaceholderMatch.items.some(it => it.title === "regular title")) {
+            throw new Error("pb.filter repeated placeholder replacement failed");
+        }
+
+        const escapedValue = 'quote " and slash \\';
+        await pb.collection("smoke_test_collection").create({ title: escapedValue, count: 789 });
+        const escapedMatch = await pb.collection("smoke_test_collection").getList(1, 10, {
+            filter: pb.filter("title = {:title}", { title: escapedValue })
+        });
+        if (!escapedMatch.items.some(it => it.title === escapedValue)) {
+            throw new Error("pb.filter quote/backslash escaping failed");
+        }
+
         console.log("Testing batch create...");
         const batch = pb.createBatch();
         batch.collection('smoke_test_collection').create({ title: "Batch 1", count: 1 });

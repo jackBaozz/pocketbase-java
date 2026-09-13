@@ -151,18 +151,22 @@ public final class JooqDatabase implements AutoCloseable {
     }
 
     JooqDatabase database = new JooqDatabase(engine, new HikariDataSource(config));
-    if (engine == Engine.SQLITE) {
-      try {
-        FilePermissionSupport.secureSqliteFiles(dataDir);
-      } catch (java.io.IOException e) {
-        database.close();
-        throw new ApiException(500, "Failed to secure SQLite storage.");
+    try {
+      if (engine == Engine.SQLITE) {
+        try {
+          FilePermissionSupport.secureSqliteFiles(dataDir);
+        } catch (java.io.IOException e) {
+          throw new ApiException(500, "Failed to secure SQLite storage.");
+        }
       }
+      if (engine != Engine.SQLITE) {
+        database.validateExternalConnection();
+      }
+      return database;
+    } catch (RuntimeException | Error failure) {
+      database.close();
+      throw failure;
     }
-    if (engine != Engine.SQLITE) {
-      database.validateExternalConnection();
-    }
-    return database;
   }
 
   private static void configureExternal(

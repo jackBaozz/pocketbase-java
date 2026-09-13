@@ -95,11 +95,18 @@ public final class HttpApi implements HttpHandler {
 
   private final StorageEngine store;
   private final RealtimeHub realtimeHub;
+  private final ActivityLogDispatcher activityLogs;
   private final HttpRateLimiter rateLimiter = new HttpRateLimiter();
 
   public HttpApi(StorageEngine store, RealtimeHub realtimeHub) {
+    this(store, realtimeHub, null);
+  }
+
+  public HttpApi(
+      StorageEngine store, RealtimeHub realtimeHub, ActivityLogDispatcher activityLogs) {
     this.store = store;
     this.realtimeHub = realtimeHub;
+    this.activityLogs = activityLogs;
   }
 
   @Override
@@ -197,14 +204,25 @@ public final class HttpApi implements HttpHandler {
           method, path, logStatus, elapsedMs, streamSuffix);
       if (shouldLogActivity(path, method, status)) {
         try {
-          store.recordActivityLog(
-              method,
-              activityUrl(exchange),
-              status,
-              elapsedMs,
-              principal(exchange).orElse(null),
-              activityHeaders(exchange),
-              remoteAddress(exchange));
+          if (activityLogs == null) {
+            store.recordActivityLog(
+                method,
+                activityUrl(exchange),
+                status,
+                elapsedMs,
+                principal(exchange).orElse(null),
+                activityHeaders(exchange),
+                remoteAddress(exchange));
+          } else {
+            activityLogs.submit(
+                method,
+                activityUrl(exchange),
+                status,
+                elapsedMs,
+                principal(exchange).orElse(null),
+                activityHeaders(exchange),
+                remoteAddress(exchange));
+          }
         } catch (RuntimeException ignored) {
           // Activity logging must never change the API response.
         }

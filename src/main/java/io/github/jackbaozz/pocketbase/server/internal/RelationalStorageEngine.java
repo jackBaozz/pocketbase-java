@@ -66,26 +66,50 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
 
     try {
       Files.createDirectories(dataDir);
-    } catch (IOException e) {
-      throw new RuntimeException("failed to create data dir", e);
+      this.database = JooqDatabase.open(engine, dataDir, connectionDefaults);
+    } catch (IOException failure) {
+      try {
+        cronRunner.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      throw new RuntimeException("failed to create data dir", failure);
+    } catch (RuntimeException | Error failure) {
+      try {
+        cronRunner.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      throw failure;
     }
 
-    this.database = JooqDatabase.open(engine, dataDir, connectionDefaults);
-
-    this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
-    this.collectionRepository = new CollectionRepository(database, mapper);
-    this.recordRepository =
-        new RecordRepository(database, mapper, collectionRepository, this, dataDir);
-    this.logRepository = new LogRepository(database, mapper, settingsRepository);
-    this.authRepository =
-        new AuthRepository(
-            database, mapper, tokenService, this, recordRepository, settingsRepository, dataDir);
-    this.backupRepository = new BackupRepository(database, mapper, dataDir);
-    this.fileRepository =
-        new FileRepository(
-            database, mapper, dataDir, tokenService, collectionRepository, recordRepository, this);
-
-    bootstrapSystemTables();
+    try {
+      this.settingsRepository = new SettingsRepository(database, mapper, dataDir);
+      this.collectionRepository = new CollectionRepository(database, mapper);
+      this.recordRepository =
+          new RecordRepository(database, mapper, collectionRepository, this, dataDir);
+      this.logRepository = new LogRepository(database, mapper, settingsRepository);
+      this.authRepository =
+          new AuthRepository(
+              database, mapper, tokenService, this, recordRepository, settingsRepository, dataDir);
+      this.backupRepository = new BackupRepository(database, mapper, dataDir);
+      this.fileRepository =
+          new FileRepository(
+              database, mapper, dataDir, tokenService, collectionRepository, recordRepository, this);
+      bootstrapSystemTables();
+    } catch (RuntimeException | Error failure) {
+      try {
+        cronRunner.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      try {
+        database.close();
+      } catch (RuntimeException cleanup) {
+        failure.addSuppressed(cleanup);
+      }
+      throw failure;
+    }
   }
 
   public static RelationalStorageEngine open(
@@ -113,11 +137,12 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       JooqDatabase.Engine databaseEngine,
       ExternalDatabaseSupport.ConnectionDefaults connectionDefaults) {
     ObjectMapper mapper = RuntimeJson.create();
+    RelationalStorageEngine engine = null;
     try {
       FilePermissionSupport.secureDirectory(dataDir);
       FilePermissionSupport.secureTree(dataDir);
       String secret = readOrCreateSecret(dataDir.resolve("pb_secret"));
-      RelationalStorageEngine engine =
+      engine =
           new RelationalStorageEngine(
               dataDir,
               mapper,
@@ -138,7 +163,22 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       FilePermissionSupport.secureSqliteFiles(dataDir);
       return engine;
     } catch (IOException e) {
+      closeAfterOpenFailure(engine, e);
       throw new RuntimeException("failed to open relational engine", e);
+    } catch (RuntimeException | Error e) {
+      closeAfterOpenFailure(engine, e);
+      throw e;
+    }
+  }
+
+  private static void closeAfterOpenFailure(RelationalStorageEngine engine, Throwable failure) {
+    if (engine == null) {
+      return;
+    }
+    try {
+      engine.close();
+    } catch (RuntimeException cleanup) {
+      failure.addSuppressed(cleanup);
     }
   }
 
