@@ -96,6 +96,7 @@ public final class HttpApi implements HttpHandler {
   private final StorageEngine store;
   private final RealtimeHub realtimeHub;
   private final ActivityLogDispatcher activityLogs;
+  private final HttpCorsPolicy cors;
   private final HttpRateLimiter rateLimiter = new HttpRateLimiter();
 
   public HttpApi(StorageEngine store, RealtimeHub realtimeHub) {
@@ -104,9 +105,18 @@ public final class HttpApi implements HttpHandler {
 
   public HttpApi(
       StorageEngine store, RealtimeHub realtimeHub, ActivityLogDispatcher activityLogs) {
+    this(store, realtimeHub, activityLogs, List.of("*"));
+  }
+
+  public HttpApi(
+      StorageEngine store,
+      RealtimeHub realtimeHub,
+      ActivityLogDispatcher activityLogs,
+      List<String> allowedOrigins) {
     this.store = store;
     this.realtimeHub = realtimeHub;
     this.activityLogs = activityLogs;
+    this.cors = new HttpCorsPolicy(allowedOrigins);
   }
 
   @Override
@@ -117,6 +127,12 @@ public final class HttpApi implements HttpHandler {
     long started = System.nanoTime();
     try {
       addCommonHeaders(exchange);
+      // Preflights must not consume rate limits, authenticate, or create activity logs.
+      if ("OPTIONS".equals(method)) {
+        status = 204;
+        sendNoContent(exchange);
+        return;
+      }
       boolean adminRoute = path.equals("/") || path.equals("/_/") || path.startsWith("/_/");
       RequestPrincipal requestPrincipal = principal(exchange).orElse(null);
       Map<String, Object> settings =
@@ -130,11 +146,6 @@ public final class HttpApi implements HttpHandler {
         rateLimiter.check(
             exchange, settings, requestPrincipal, rateContext.labels(), rateContext.limiterId());
         enforceBodyLimit(exchange, requestBodyLimit(path, method));
-      }
-      if ("OPTIONS".equals(method)) {
-        status = 204;
-        sendNoContent(exchange);
-        return;
       }
 
       if (path.equals("/") || path.equals("/_/") || path.startsWith("/_/")) {
@@ -1518,13 +1529,7 @@ public final class HttpApi implements HttpHandler {
 
   private void addCommonHeaders(HttpExchange exchange) {
     exchange.getResponseHeaders().set("Cross-Origin-Opener-Policy", "same-origin");
-    exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-    exchange
-        .getResponseHeaders()
-        .set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-    exchange
-        .getResponseHeaders()
-        .set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
+    cors.apply(exchange);
     exchange.getResponseHeaders().set("Cache-Control", "no-store");
     exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
     exchange.getResponseHeaders().set("X-Frame-Options", "DENY");

@@ -60,7 +60,7 @@ public final class LocalPocketBase implements AutoCloseable {
       server = HttpServer.create(config.bindAddress(), 0);
       executor = createHttpExecutor();
       server.setExecutor(executor);
-      server.createContext("/", new HttpApi(store, realtimeHub, activityLogs));
+      server.createContext("/", new HttpApi(store, realtimeHub, activityLogs, config.allowedOrigins()));
       server.start();
       return new LocalPocketBase(config, server, store, executor, realtimeHub, activityLogs);
     } catch (IOException | RuntimeException | Error failure) {

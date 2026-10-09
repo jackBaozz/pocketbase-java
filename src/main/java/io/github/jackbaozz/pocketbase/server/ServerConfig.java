@@ -8,6 +8,8 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
@@ -25,8 +27,28 @@ public record ServerConfig(
     String databaseUrl,
     String databaseUser,
     String databasePassword,
-    String profile) {
+    String profile,
+    List<String> allowedOrigins) {
   public static final int DEFAULT_PORT = 8090;
+
+  /** Preserves the pre-v0.4.5 configuration constructor and its default CORS policy. */
+  public ServerConfig(
+      String host,
+      int port,
+      Path dataDir,
+      String bootstrapSuperuserEmail,
+      String bootstrapSuperuserPassword,
+      String encryptionEnv,
+      String applicationName,
+      String storageType,
+      String databaseUrl,
+      String databaseUser,
+      String databasePassword,
+      String profile) {
+    this(host, port, dataDir, bootstrapSuperuserEmail, bootstrapSuperuserPassword,
+        encryptionEnv, applicationName, storageType, databaseUrl, databaseUser,
+        databasePassword, profile, List.of("*"));
+  }
 
   /** Backwards-compatible constructor for embedded applications and existing integrations. */
   public ServerConfig(
@@ -100,6 +122,11 @@ public record ServerConfig(
     databaseUser = blankToNull(databaseUser);
     databasePassword = blankToNull(databasePassword);
     profile = normalizeProfile(profile);
+    allowedOrigins = allowedOrigins == null || allowedOrigins.isEmpty()
+        ? List.of("*") : allowedOrigins.stream().map(String::trim).toList();
+    if (allowedOrigins.stream().anyMatch(String::isEmpty)) {
+      throw new IllegalArgumentException("CORS origins must not contain empty entries");
+    }
   }
 
   public static ServerConfig defaults() {
@@ -152,6 +179,7 @@ public record ServerConfig(
     String databaseUser = configured(file, env, "db.user", "PB_DATABASE_USER", null, "database.user");
     String databasePassword =
         configured(file, env, "db.password", "PB_DATABASE_PASSWORD", null, "database.password");
+    String origins = configured(file, env, "server.origins", "PB_ORIGINS", "*", "server.origins");
 
     for (int i = 0; args != null && i < args.length; i++) {
       String arg = args[i];
@@ -191,6 +219,10 @@ public record ServerConfig(
       }
       if ("--storage".equals(arg) && i + 1 < args.length) {
         storageType = args[++i];
+        continue;
+      }
+      if ("--origins".equals(arg) && i + 1 < args.length) {
+        origins = args[++i];
         continue;
       }
       if ("--http".equals(arg) && i + 1 < args.length) {
@@ -234,6 +266,10 @@ public record ServerConfig(
         storageType = arg.substring("--storage=".length());
         continue;
       }
+      if (arg.startsWith("--origins=")) {
+        origins = arg.substring("--origins=".length());
+        continue;
+      }
       if (arg.startsWith("--http=")) {
         String value = arg.substring("--http=".length());
         int split = value.lastIndexOf(':');
@@ -260,7 +296,8 @@ public record ServerConfig(
         databaseUrl,
         databaseUser,
         databasePassword,
-        profile);
+        profile,
+        Arrays.asList(origins.split(",", -1)));
   }
 
   public InetSocketAddress bindAddress() {
@@ -277,6 +314,7 @@ public record ServerConfig(
           pocketbase-java start [--config application.properties] [--http 127.0.0.1:8090] [--dir pb_data]
                                 [--app-name pocketbase-java] [--profile dev]
                                 [--storage jsonl|sqlite|mysql|postgresql]
+                                [--origins 'https://example.com,https://*.example.com']
           pocketbase-java                         (start is optional)
 
         Configuration:
@@ -291,6 +329,7 @@ public record ServerConfig(
           server.host                  bind host, default 127.0.0.1
           server.port                  bind port, default 8090
           server.data-dir              data directory, default pb_data
+          server.origins               comma-separated CORS origins, default *
           storage.type                 sqlite (default), jsonl (legacy file mode), mysql, or postgresql
           database.url                 JDBC URL for MySQL/PostgreSQL
           database.user                database username
@@ -300,6 +339,7 @@ public record ServerConfig(
           PB_HTTP_HOST              bind host, default 127.0.0.1
           PB_HTTP_PORT              bind port, default 8090
           PB_DATA_DIR               data directory, default pb_data
+          PB_ORIGINS                comma-separated CORS origins, default *
           PB_SUPERUSER_EMAIL        optional first superuser email
           PB_SUPERUSER_PASSWORD     optional first superuser password
           PB_ENCRYPTION_KEY         unsupported until storage encryption is implemented

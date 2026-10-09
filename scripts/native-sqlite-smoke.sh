@@ -25,7 +25,8 @@ if [[ ! -x "${binary}" ]]; then
 fi
 
 start_server() {
-  PB_STORAGE=sqlite "${binary}" --dir="${data_dir}" --port="${port}" >"${log_file}" 2>&1 &
+  PB_STORAGE=sqlite "${binary}" --dir="${data_dir}" --port="${port}" \
+    --origins='https://trusted.*.example.com' >"${log_file}" 2>&1 &
   server_pid=$!
 }
 
@@ -57,6 +58,25 @@ login() {
   printf '%s' "${response}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])'
 }
 
+assert_cors_policy() {
+  local allowed_headers denied_headers
+  allowed_headers="$(curl --fail --silent --show-error --dump-header - --output /dev/null \
+    --header 'Origin: https://trusted.a.example.com' "${base_url}/api/health")"
+  printf '%s' "${allowed_headers}" | python3 -c '
+import sys
+headers = dict(line.split(":", 1) for line in sys.stdin.read().lower().splitlines() if ":" in line)
+if headers.get("access-control-allow-origin", "").strip() != "https://trusted.a.example.com":
+    raise SystemExit("Native CORS did not permit the configured origin")
+'
+  denied_headers="$(curl --fail --silent --show-error --dump-header - --output /dev/null \
+    --header 'Origin: https://evil.a.example.com' "${base_url}/api/health")"
+  printf '%s' "${denied_headers}" | python3 -c '
+import sys
+if any(line.lower().startswith("access-control-allow-origin:") for line in sys.stdin.read().splitlines()):
+    raise SystemExit("Native CORS incorrectly permitted a mismatching wildcard prefix")
+'
+}
+
 assert_persisted_record() {
   local response
   response="$(curl --fail-with-body --silent --show-error \
@@ -75,6 +95,7 @@ if len(items) != 1 or items[0].get("title") != "native sqlite":
 
 start_server
 wait_for_health
+assert_cors_policy
 
 curl --fail-with-body --silent --show-error \
   --header 'Content-Type: application/json' \
@@ -98,8 +119,9 @@ curl --fail-with-body --silent --show-error \
 stop_server
 start_server
 wait_for_health
+assert_cors_policy
 
 token="$(login)"
 assert_persisted_record
 
-echo "Native SQLite smoke passed."
+echo "Native SQLite persistence and CORS smoke passed."

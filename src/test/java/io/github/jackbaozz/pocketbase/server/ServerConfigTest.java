@@ -22,6 +22,7 @@ class ServerConfigTest {
           "server.host",
           "server.port",
           "server.data-dir",
+          "server.origins",
           "superuser.email",
           "superuser.password",
           "security.encryption-key",
@@ -97,6 +98,27 @@ class ServerConfigTest {
     assertEquals("jdbc:sqlite:configured.db", config.databaseUrl());
     assertEquals("config-user", config.databaseUser());
     assertEquals("config-password", config.databasePassword());
+  }
+
+  @Test
+  void corsOriginsFollowConfigurationPrecedenceAndPreserveOldConstructors() throws Exception {
+    Path file = tempDir.resolve("origins.properties");
+    Files.writeString(file, "server.origins=https://file.example.com\n");
+    String[] args = {"--config", file.toString()};
+    assertEquals(List.of("https://file.example.com"), ServerConfig.fromArgs(args, Map.of()).allowedOrigins());
+    Map<String, String> env = Map.of("PB_ORIGINS", "https://env.example.com");
+    assertEquals(List.of("https://env.example.com"), ServerConfig.fromArgs(args, env).allowedOrigins());
+    System.setProperty("server.origins", "https://system.example.com");
+    assertEquals(List.of("https://system.example.com"), ServerConfig.fromArgs(args, env).allowedOrigins());
+    assertEquals(List.of("https://cli.example.com", "https://*.example.com"),
+        ServerConfig.fromArgs(new String[] {"--origins", "https://cli.example.com, https://*.example.com"}, env)
+            .allowedOrigins());
+    assertEquals(List.of("https://equal.example.com"),
+        ServerConfig.fromArgs(new String[] {"--origins=https://equal.example.com"}, env).allowedOrigins());
+    assertEquals(List.of("*"), ServerConfig.defaults().allowedOrigins());
+    assertEquals(List.of("*"), new ServerConfig("127.0.0.1", 0, tempDir, null, null, null).allowedOrigins());
+    assertThrows(IllegalArgumentException.class,
+        () -> ServerConfig.fromArgs(new String[] {"--origins="}, Map.of()));
   }
 
   @Test

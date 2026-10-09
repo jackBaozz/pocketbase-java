@@ -73,6 +73,11 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accentColor) 16%, transparent);
 }
 
+/* Reserve the gutter on the shared scroller, not on either overlay layer. */
+.pbce.pbce--multi {
+  scrollbar-gutter: stable;
+}
+
 /* sizer: not a scroll container, so it always spans the whole content box */
 .pbce .pbce-body {
   position: relative;

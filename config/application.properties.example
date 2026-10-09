@@ -12,6 +12,9 @@ server.host=127.0.0.1
 server.port=8090
 server.data-dir=pb_data
 
+# Allowed browser origins (default *). Wildcards are supported; quote --origins in the shell.
+# server.origins=https://admin.example.com,https://*.example.com
+
 # Storage engine: sqlite (default), jsonl (legacy file mode), mysql, or postgresql.
 storage.type=sqlite
 

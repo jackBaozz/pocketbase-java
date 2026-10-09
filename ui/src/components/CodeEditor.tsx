@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, CSSProperties, JSX, KeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { CompletionRequests, completionValue } from "./codeEditorCompletions";
+import type { CompletionItem, CompletionSource } from "./codeEditorCompletions";
+export { filterCompletions } from "./codeEditorCompletions";
+export type { CompletionItem, CompletionSource } from "./codeEditorCompletions";
 import "./CodeEditor.css";
 
 /**
@@ -27,7 +31,7 @@ export type CodeEditorProps = {
   value: string;
   onChange: (value: string) => void;
   language?: CodeEditorLanguage;
-  completions?: string[];
+  completions?: CompletionSource;
   placeholder?: string;
   disabled?: boolean;
   singleLine?: boolean;
@@ -236,45 +240,6 @@ export function wordAt(text: string, caret: number, charRe: RegExp): WordMatch {
   };
 }
 
-const MAX_SUGGESTIONS = 30;
-
-/**
- * Case insensitive substring match (same as the official editor), but the
- * candidates that *start* with the typed word are ranked first and, inside each
- * group, the shortest keys win - which is how PocketBase sorts its keys too.
- */
-export function filterCompletions(candidates: string[], word: string): string[] {
-  const needle = word.toLowerCase();
-  if (!needle) {
-    return [];
-  }
-
-  const prefixed: string[] = [];
-  const contained: string[] = [];
-  const seen = new Set<string>();
-
-  for (const candidate of candidates) {
-    if (!candidate || seen.has(candidate)) continue;
-    seen.add(candidate);
-
-    const lowered = candidate.toLowerCase();
-    if (lowered === needle) continue; // nothing left to complete
-
-    const at = lowered.indexOf(needle);
-    if (at === 0) {
-      prefixed.push(candidate);
-    } else if (at > 0) {
-      contained.push(candidate);
-    }
-  }
-
-  const byLength = (a: string, b: string) => a.length - b.length || a.localeCompare(b);
-  prefixed.sort(byLength);
-  contained.sort(byLength);
-
-  return prefixed.concat(contained).slice(0, MAX_SUGGESTIONS);
-}
-
 /* -------------------------------------------------------------------------- */
 /* caret measuring                                                            */
 /* -------------------------------------------------------------------------- */
@@ -335,7 +300,7 @@ function caretRect(pre: HTMLElement, index: number): CaretRect | null {
 /* -------------------------------------------------------------------------- */
 
 type SuggestState = {
-  items: string[];
+  items: CompletionItem[];
   active: number;
   /** replacement range of the word being completed */
   start: number;
@@ -378,6 +343,8 @@ export function CodeEditor({
   const suppressRef = useRef(false);
 
   const debounceTimerRef = useRef<number | null>(null);
+  const completionRequests = useRef(new CompletionRequests());
+  const completionsRef = useRef(completions);
   const [suggest, setSuggest] = useState<SuggestState | null>(null);
   const [tabTrapped, setTabTrapped] = useState(true);
   const [pos, setPos] = useState<DropdownPos | null>(null);
@@ -407,6 +374,7 @@ export function CodeEditor({
   }, [tokens, singleLine]);
 
   const closeSuggest = useCallback(() => {
+    completionRequests.current.invalidate();
     if (debounceTimerRef.current !== null) {
       window.clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
@@ -470,12 +438,12 @@ export function CodeEditor({
   );
 
   const acceptSuggestion = useCallback(
-    (item: string) => {
+    (item: CompletionItem) => {
       if (!suggest) {
         return;
       }
       closeSuggest();
-      replaceRange(suggest.start, suggest.end, item);
+      replaceRange(suggest.start, suggest.end, completionValue(item));
     },
     [closeSuggest, replaceRange, suggest]
   );
@@ -547,8 +515,9 @@ export function CodeEditor({
   /* -------------------------------------------------------------- suggesting */
 
   const openSuggest = useCallback(
-    (source: string, caret: number) => {
-      if (disabled || !completions.length || !source.length) {
+    async (source: string, caret: number) => {
+      const candidates = completionsRef.current;
+      if (disabled || (typeof candidates !== "function" && !candidates.length) || !source.length) {
         closeSuggest();
         return;
       }
@@ -563,10 +532,17 @@ export function CodeEditor({
       }
 
       const query = match.prefix || match.word;
-      const items = filterCompletions(completions, query);
+      const items = await completionRequests.current.load(candidates, query);
+      const input = inputRef.current;
+      if (
+        items === null || !input?.isConnected || input.disabled || document.activeElement !== input ||
+        input.value !== source || input.selectionStart !== caret || input.selectionEnd !== caret
+      ) {
+        return;
+      }
 
       // Don't show if no items, or if the only suggestion is already the exact full word
-      if (!items.length || (items.length === 1 && items[0] === match.word)) {
+      if (!items.length || (items.length === 1 && completionValue(items[0]) === match.word)) {
         closeSuggest();
         return;
       }
@@ -658,6 +634,12 @@ export function CodeEditor({
 
   // never leave a dropdown behind
   useEffect(() => closeSuggest, [closeSuggest]);
+  useLayoutEffect(() => {
+    completionsRef.current = completions;
+    completionRequests.current.invalidate();
+    setSuggest(null);
+    setPos(null);
+  }, [completions]);
   useEffect(() => {
     if (disabled) {
       closeSuggest();
@@ -671,6 +653,7 @@ export function CodeEditor({
     const raw = input.value;
     const next = singleLine ? raw.replace(/[\r\n]+/g, " ") : raw;
 
+    closeSuggest();
     onChange(next);
 
     if (debounceTimerRef.current !== null) {
@@ -689,7 +672,7 @@ export function CodeEditor({
       return;
     }
 
-    if (!next.length || disabled || !completions.length) {
+    if (!next.length || disabled || (typeof completions !== "function" && !completions.length)) {
       closeSuggest();
       return;
     }
@@ -709,7 +692,7 @@ export function CodeEditor({
         return;
       }
       const currentCaret = currentInput.selectionStart ?? caret;
-      openSuggest(currentInput.value, currentCaret);
+      void openSuggest(currentInput.value, currentCaret);
     }, 50);
   };
 
@@ -757,8 +740,13 @@ export function CodeEditor({
     }
 
     if (key === "Escape" || key === "Esc") {
+      closeSuggest();
       setTabTrapped(false);
       return;
+    }
+
+    if (["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(key)) {
+      closeSuggest();
     }
 
     if (key === "Tab" && !singleLine) {
@@ -832,6 +820,7 @@ export function CodeEditor({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onBlur={closeSuggest}
+          onClick={closeSuggest}
         />
       </div>
 
@@ -852,7 +841,7 @@ export function CodeEditor({
             >
               {suggest.items.map((item, index) => (
                 <button
-                  key={item}
+                  key={completionValue(item)}
                   ref={index === suggest.active ? activeItemRef : undefined}
                   id={`${listId}-${index}`}
                   type="button"
@@ -864,7 +853,7 @@ export function CodeEditor({
                     setSuggest((prev) => (prev ? { ...prev, active: index } : prev))
                   }
                 >
-                  {item}
+                  {typeof item === "string" ? item : item.label ?? item.value}
                 </button>
               ))}
             </div>,

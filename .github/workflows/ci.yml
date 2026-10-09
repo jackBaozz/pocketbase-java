@@ -63,6 +63,7 @@ jobs:
         run: |
           cd ui
           npm ci
+          npm test
           npm run build
           git diff --exit-code -- ../src/main/resources/pocketbase-admin
 

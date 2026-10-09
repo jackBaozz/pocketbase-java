@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.5
+
+- 对齐 PocketBase v0.40.5 的适用增量，官方为 19 个提交、28 个变更文件；Java/React 映射与任务验收见 `docs/RPD-PocketBase-v0.40.5-Compatibility-Development-Plan.md`。
+- 新增可配置 CORS 来源（`--origins` / `server.origins` / `PB_ORIGINS`），严格校验子域快速匹配的完整前缀与后缀，保留官方 bounded wildcard fallback；预检支持自定义请求 headers，并在鉴权与限流之前返回。
+- React CodeEditor 支持同步/异步补全 provider 和独立 label/value；新输入、关闭及失焦等操作使旧异步结果失效，provider 异常不影响编辑。
+- 多行编辑器在公共滚动容器预留稳定 scrollbar gutter，保留高亮层与输入层的共享尺寸。
+- 同步 Java、SDK User-Agent、管理前端和嵌入产物版本。Go/JSVM/modernc 驱动专属变化不复制到 Java。
+
 ## 0.3.1
 
 **Admin UI 对齐官方 v0.39.9（交互差异修复）:**
