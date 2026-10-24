@@ -601,6 +601,7 @@
     "trusted_proxy_desc": "Behandlung weitergeleiteter IP-Header",
     "superusers": "Superuser",
     "superusers_desc": "Dashboard-Zugriff per IP einschränken",
+    "superuser_ips_help": "Kommagetrennte Liste der erlaubten IP-Adressen und Subnetze für Superuser. Diese Option erhöht die Sicherheit: Selbst wenn jemand ein Superuser-Authentifizierungstoken erhält, kann es von einer IP-Adresse außerhalb dieser Liste nicht verwendet werden.",
     "unavailable": "Nicht verfügbar",
     "resolved_ip": "Aufgelöste Client-IP",
     "detected_proxy_header": "Erkannter Proxy-Header",

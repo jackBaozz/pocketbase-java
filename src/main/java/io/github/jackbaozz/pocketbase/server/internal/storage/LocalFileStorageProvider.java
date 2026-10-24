@@ -60,7 +60,7 @@ public class LocalFileStorageProvider implements FileStorageProvider {
 
   @Override
   public List<String> list(String prefix) {
-    Path dir = prefix == null || prefix.isBlank() ? baseDir : resolveKey(prefix);
+    Path dir = resolvePath(prefix, true);
     if (!Files.exists(dir) || !Files.isDirectory(dir)) {
       return List.of();
     }
@@ -104,11 +104,36 @@ public class LocalFileStorageProvider implements FileStorageProvider {
   }
 
   private Path resolveKey(String key) {
-    if (key == null || key.isBlank() || key.contains("..") || key.startsWith("/") || key.startsWith("\\")) {
+    return resolvePath(key, false);
+  }
+
+  private Path resolvePath(String key, boolean allowRoot) {
+    Path target = baseDir;
+    if (key == null || key.isBlank()) {
+      if (!allowRoot) {
+        throw new IllegalArgumentException("Invalid key for local storage.");
+      }
+    } else {
+      // Object keys use '/' on every platform. Reject Windows separators and drive
+      // paths here as well, rather than interpreting the same key differently by OS.
+      if (key.startsWith("/")
+          || key.indexOf('\\') >= 0
+          || (key.length() >= 2 && Character.isLetter(key.charAt(0)) && key.charAt(1) == ':')) {
+        throw new IllegalArgumentException("Invalid key for local storage.");
+      }
+      Path relative = Path.of(key);
+      for (Path part : relative) {
+        if (part.toString().equals("..")) {
+          throw new IllegalArgumentException("Invalid key for local storage.");
+        }
+      }
+      target = baseDir.resolve(relative).normalize();
+    }
+    // A list prefix may identify the bucket itself; an object key never may.
+    if (!target.startsWith(baseDir) || (!allowRoot && target.equals(baseDir))) {
       throw new IllegalArgumentException("Invalid key for local storage.");
     }
-    Path target = baseDir.resolve(key).normalize();
-    if (!target.startsWith(baseDir)) {
+    if (Files.isSymbolicLink(baseDir)) {
       throw new IllegalArgumentException("Invalid key for local storage.");
     }
     Path current = baseDir;

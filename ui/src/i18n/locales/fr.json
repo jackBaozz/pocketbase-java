@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "Gestion des en-têtes d’IP transmises",
     "superusers": "Superutilisateurs",
     "superusers_desc": "Restreindre l’accès au tableau de bord par IP",
+    "superuser_ips_help": "Liste des IP et sous-réseaux autorisés pour les superutilisateurs, séparés par des virgules. Cette option renforce la sécurité : même si quelqu’un obtient un jeton d’authentification de superutilisateur, il ne pourra pas l’utiliser depuis une IP absente de cette liste.",
     "unavailable": "Indisponible",
     "resolved_ip": "IP client résolue",
     "detected_proxy_header": "En-tête proxy détecté",

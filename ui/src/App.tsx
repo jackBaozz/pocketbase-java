@@ -4611,7 +4611,7 @@ function RecordsView(props: RecordsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.4.5</span>
+            <span>PocketBase v0.4.6</span>
           </a>
         </div>
       </footer>
@@ -5766,6 +5766,12 @@ function SettingsView(props: SettingsViewProps) {
                     onChange={(event) => updateSetting(["superuserIPs"], splitCsv(event.target.value))}
                   />
                 </label>
+                <p className="settings-help-text">
+                  {t(
+                    "settings.superuser_ips_help",
+                    "A comma separated list of superusers allowed IPs and subnets. Enabling this option helps harden the security of your application because even if someone gets hold of a superuser auth token, they will not be able to use it from an IP outside this list."
+                  )}
+                </p>
                 {currentIp && (
                   <div className="settings-current-ip">
                     <span>{t("settings.current_ip", { ip: currentIp, defaultValue: "Your current IP: {{ip}}" })}</span>
@@ -7661,7 +7667,7 @@ function LogsView(props: LogsViewProps) {
             title="PocketBase Java GitHub"
           >
             <GithubMarkIcon />
-            <span>PocketBase v0.4.5</span>
+            <span>PocketBase v0.4.6</span>
           </a>
         </div>
       </footer>

@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "Tratamento de cabeçalhos de IP encaminhado",
     "superusers": "Superusuários",
     "superusers_desc": "Restringe o acesso ao painel por IP",
+    "superuser_ips_help": "Lista de IPs e sub-redes permitidos para superusuários, separados por vírgulas. Esta opção reforça a segurança: mesmo que alguém obtenha um token de autenticação de superusuário, não poderá usá-lo a partir de um IP fora desta lista.",
     "unavailable": "Indisponível",
     "resolved_ip": "IP do cliente resolvido",
     "detected_proxy_header": "Cabeçalho de proxy detectado",

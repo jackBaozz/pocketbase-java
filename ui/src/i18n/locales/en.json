@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "Forwarded IP header handling",
     "superusers": "Superusers",
     "superusers_desc": "Restrict dashboard access by IP",
+    "superuser_ips_help": "A comma separated list of superusers allowed IPs and subnets. Enabling this option helps harden the security of your application because even if someone gets hold of a superuser auth token, they will not be able to use it from an IP outside this list.",
     "unavailable": "Unavailable",
     "resolved_ip": "Resolved client IP",
     "detected_proxy_header": "Detected proxy header",

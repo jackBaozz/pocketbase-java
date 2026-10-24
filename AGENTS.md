@@ -22,6 +22,7 @@
 
 ## 🎨 PocketBase v0.40.0 对齐与 Admin UI 规范 (2026-08-24)
 
+- **当前增量基线（2026-10-24）**：PocketBase **v0.40.6**，Java 项目版本 **v0.4.6**。本轮与 v0.40.5 的净差异、适用性及本地验收见 `docs/RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md`；v0.40.0 文档作为功能基线保留。
 - **基线文档**：`docs/PocketBase-v0.40.0-Upgrade-Development-Plan.md` 与 `docs/PocketBase-v0.39.11-to-v0.40.0-Difference-Analysis.md` 记录了本项目全面对标官方 PocketBase **v0.40.0** 的设计与实现。，记录本轮增量、Java 映射结论和剩余验收项。`docs/UI-Parity-Gap-Analysis-v0.39.9.md` 与 `docs/UI-Parity-Gap-Analysis-v0.39.10.md` 仅保留为历史分析，不应再作为当前版本判断依据。补充新 UI 功能前先查阅当前基线文档，避免重复实现已覆盖的范围。
 - **已修复的关键语义**：API 规则的空字符串 `""`（所有人可访问）与 `null`（仅超管）是两种不同状态，必须在加载与提交时严格保持区分——不可用 `?? ""` 或 "空则转 null" 之类的写法抹平，那会静默破坏用户的集合权限配置。UI 上以锁定/解锁交互体现这一区分。
 - **字段控件的唯一实现**在 `ui/src/components/RecordFieldControl.tsx`；`App.tsx` 内曾存在一份从未被引用的同名副本，已删除，请勿再在 `App.tsx` 里重复定义组件。

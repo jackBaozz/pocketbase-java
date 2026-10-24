@@ -20,12 +20,15 @@ import java.util.zip.InflaterInputStream;
 final class ThumbnailGenerator {
   private static final byte[] PNG_SIGNATURE = new byte[] {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
   private static final Pattern THUMB_PATTERN = Pattern.compile("^(\\d+)x(\\d+)([tbf]?)$");
+  private static final Pattern DECIMAL_NUMBER_PATTERN =
+      Pattern.compile("([-+]?[0-9]*)(?:\\.[0-9]*)?");
   private static final int MAX_DIMENSION = 8192;
   // Keep attacker-controlled decode allocations bounded. A compressed PNG can represent a
   // much larger bitmap than its upload size, so checking only the multipart body limit is not
   // sufficient here.
   private static final int MAX_SOURCE_DIMENSION = 8192;
   private static final long MAX_SOURCE_PIXELS = 16L * 1024 * 1024;
+  private static final long DEFAULT_SOURCE_PIXEL_LIMIT = 250L << 20;
   private static final long MAX_PNG_RAW_BYTES = 64L * 1024 * 1024;
   private static final long MAX_THUMBNAIL_PIXELS = 16L * 1024 * 1024;
 
@@ -49,7 +52,22 @@ final class ThumbnailGenerator {
       return Optional.of(new GeneratedThumbnail(target, "image/png"));
     }
 
-    PngImage image = readPng(Files.readAllBytes(source));
+    long sourcePixelLimit =
+        sourcePixelLimit(System.getenv("PB_THUMBS_MAX_SOURCE_PIXELS"));
+    // Inspect only the fixed PNG header before reading the whole file or allocating decode
+    // buffers. The configurable upstream limit may tighten, but never relax, our decoder caps.
+    try (var input = Files.newInputStream(source)) {
+      byte[] header = input.readNBytes(33);
+      if (header.length != 33
+          || !Arrays.equals(PNG_SIGNATURE, Arrays.copyOf(header, PNG_SIGNATURE.length))
+          || intAt(header, 8) != 13
+          || intAt(header, 12) != 0x49484452
+          || !sourceDimensionsAllowed(intAt(header, 16), intAt(header, 20), sourcePixelLimit)) {
+        return Optional.empty();
+      }
+    }
+
+    PngImage image = readPng(Files.readAllBytes(source), sourcePixelLimit);
     if (image == null) {
       return Optional.empty();
     }
@@ -65,7 +83,80 @@ final class ThumbnailGenerator {
     return Optional.of(new GeneratedThumbnail(target, "image/png"));
   }
 
-  private static PngImage readPng(byte[] bytes) throws IOException {
+  static long sourcePixelLimit(String configured) {
+    if (configured == null || configured.isEmpty()) {
+      return DEFAULT_SOURCE_PIXEL_LIMIT;
+    }
+    // Match cast.ToInt64's string path: trim a decimal fraction, then parse as a Go
+    // base-0 integer. Whitespace is invalid; leading zeroes select octal, not decimal.
+    if (configured.indexOf('.') >= 0) {
+      Matcher decimal = DECIMAL_NUMBER_PATTERN.matcher(configured);
+      if (decimal.matches()) {
+        configured = decimal.group(1);
+      }
+    }
+    if (configured.startsWith("+")) {
+      configured = configured.substring(1);
+    }
+    int radix = 10;
+    int offset = 0;
+    if (configured.startsWith("0")) {
+      radix = 8;
+      offset = 1;
+      if (configured.length() > 1) {
+        switch (configured.charAt(1)) {
+          case 'x', 'X' -> {
+            radix = 16;
+            offset = 2;
+          }
+          case 'o', 'O' -> offset = 2;
+          case 'b', 'B' -> {
+            radix = 2;
+            offset = 2;
+          }
+          default -> {
+            // A leading zero alone is the legacy octal prefix.
+          }
+        }
+      }
+    }
+    long limit = 0;
+    boolean digitSeen = false;
+    boolean underscoreAllowed = offset > 0;
+    for (int i = offset; i < configured.length(); i++) {
+      char current = configured.charAt(i);
+      if (current == '_') {
+        if (!underscoreAllowed || i + 1 == configured.length()) {
+          return DEFAULT_SOURCE_PIXEL_LIMIT;
+        }
+        underscoreAllowed = false;
+        continue;
+      }
+      int digit =
+          current >= '0' && current <= '9'
+              ? current - '0'
+              : current >= 'a' && current <= 'f'
+                  ? current - 'a' + 10
+                  : current >= 'A' && current <= 'F' ? current - 'A' + 10 : -1;
+      if (digit < 0 || digit >= radix || limit > (Long.MAX_VALUE - digit) / radix) {
+        return DEFAULT_SOURCE_PIXEL_LIMIT;
+      }
+      limit = limit * radix + digit;
+      digitSeen = true;
+      underscoreAllowed = true;
+    }
+    return digitSeen && limit > 0 ? limit : DEFAULT_SOURCE_PIXEL_LIMIT;
+  }
+
+  private static boolean sourceDimensionsAllowed(int width, int height, long sourcePixelLimit) {
+    return width > 0
+        && height > 0
+        && width <= MAX_SOURCE_DIMENSION
+        && height <= MAX_SOURCE_DIMENSION
+        && (long) width * height <= Math.min(MAX_SOURCE_PIXELS, sourcePixelLimit);
+  }
+
+  private static PngImage readPng(byte[] bytes, long sourcePixelLimit) throws IOException {
     if (bytes.length < PNG_SIGNATURE.length
         || !Arrays.equals(PNG_SIGNATURE, Arrays.copyOf(bytes, PNG_SIGNATURE.length))) {
       return null;
@@ -99,6 +190,9 @@ final class ThumbnailGenerator {
           bitDepth = bytes[dataOffset + 8] & 0xFF;
           colorType = bytes[dataOffset + 9] & 0xFF;
           interlace = bytes[dataOffset + 12] & 0xFF;
+          if (!sourceDimensionsAllowed(width, height, sourcePixelLimit)) {
+            return null;
+          }
         }
         case "IDAT" -> idat.write(bytes, dataOffset, length);
         case "IEND" -> offset = bytes.length;
@@ -112,12 +206,7 @@ final class ThumbnailGenerator {
       offset = next;
     }
 
-    long sourcePixels = (long) width * height;
-    if (width <= 0
-        || height <= 0
-        || width > MAX_SOURCE_DIMENSION
-        || height > MAX_SOURCE_DIMENSION
-        || sourcePixels > MAX_SOURCE_PIXELS
+    if (!sourceDimensionsAllowed(width, height, sourcePixelLimit)
         || bitDepth != 8
         || interlace != 0
         || (colorType != 2 && colorType != 6)) {

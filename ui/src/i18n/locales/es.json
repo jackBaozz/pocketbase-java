@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "Manejo de cabeceras de IP reenviada",
     "superusers": "Superusuarios",
     "superusers_desc": "Restringe el acceso al panel por IP",
+    "superuser_ips_help": "Lista separada por comas de IP y subredes permitidas para superusuarios. Esta opción refuerza la seguridad: aunque alguien obtenga un token de autenticación de superusuario, no podrá usarlo desde una IP que no figure en la lista.",
     "unavailable": "No disponible",
     "resolved_ip": "IP de cliente resuelta",
     "detected_proxy_header": "Cabecera de proxy detectada",

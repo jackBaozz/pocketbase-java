@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "转发 IP 请求头处理",
     "superusers": "超级用户",
     "superusers_desc": "按 IP 限制后台访问",
+    "superuser_ips_help": "以逗号分隔的超级用户允许 IP 和子网列表。启用后，即使他人获得超级用户认证令牌，也无法从此列表之外的 IP 使用它，从而增强应用安全性。",
     "unavailable": "不可用",
     "resolved_ip": "解析后的客户端 IP",
     "detected_proxy_header": "检测到的代理请求头",

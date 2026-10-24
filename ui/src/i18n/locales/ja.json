@@ -167,6 +167,7 @@
     "trusted_proxy_desc": "転送された IP ヘッダーの扱い",
     "superusers": "スーパーユーザー",
     "superusers_desc": "IP でダッシュボードへのアクセスを制限します",
+    "superuser_ips_help": "スーパーユーザーに許可する IP とサブネットをカンマ区切りで指定します。有効にすると、第三者がスーパーユーザーの認証トークンを入手しても、リストに含まれない IP からは使用できず、アプリの安全性が向上します。",
     "unavailable": "利用不可",
     "resolved_ip": "解決されたクライアント IP",
     "detected_proxy_header": "検出したプロキシヘッダー",

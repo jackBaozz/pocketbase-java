@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.6
+
+- 对齐 PocketBase v0.40.6 的 Java/React 适用增量；12 个提交、29 个变更文件的分类和验收见 `docs/RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md`。
+- 缩略图生成前读取 PNG 头并验证源图像素数，支持 `PB_THUMBS_MAX_SOURCE_PIXELS`；保留 Java 现有更严格的源图/解压内存限制，超限时沿用原文件响应。
+- 加固本地文件存储 SPI：对象 key 不可指向 bucket 根目录，统一验证对象和列表前缀，阻止路径越界与符号链接；正常列表根前缀和合法多点文件名保持可用。
+- 暗色主背景对齐 `#1b1b1b`，补齐超级管理员 IP 限制提示的九语言翻译，并重新生成嵌入 Admin UI。
+- 同步项目 v0.4.6、SDK User-Agent 和文档。官方 Go 自更新源、Goja/Go 依赖不移植；modernc SQLite 的中间升级已被官方撤回，最终版本未变。
+
 ## 0.4.5
 
 - 对齐 PocketBase v0.40.5 的适用增量，官方为 19 个提交、28 个变更文件；Java/React 映射与任务验收见 `docs/RPD-PocketBase-v0.40.5-Compatibility-Development-Plan.md`。
