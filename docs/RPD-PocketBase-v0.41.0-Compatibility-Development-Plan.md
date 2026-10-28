@@ -3,7 +3,7 @@
 > 核对与验收日期：2026-10-28～29（Asia/Shanghai）\
 > 工作分支：`dev`；Java 基线：`1ced41d825c30f1ec8cc1c866f36a5df5aaa24e8` / `v0.4.6`\
 > 上游：`v0.40.6` (`9d281ccaba65f2686eb7b0b614ccda72d1116a1b`) → `v0.41.0` (`f6baa0c43f379de21cd806de97ad6a2b8ca97b83`)\
-> Java 目标版本：`v0.5.0`；状态：Java/React 适用增量及本地 JVM、JSONL、UI、Darwin Native 验收已完成，待提交/推送。交付范围为 `dev`，不合并 `main`。
+> Java 版本：`v0.5.0`；状态：Java/React 适用增量及本地 JVM、JSONL、UI、Darwin Native 验收已完成，升级代码已提交并推送 `dev`。本轮不合并 `main`。
 
 ## 1. 官方版本与比较依据
 
@@ -57,7 +57,7 @@
 | PB410-REGRESSION | SQLite 全量、JSONL 关键链路、SDK、生命周期及路由 | Maven/Playwright | 已完成（SQLite 336 通过/1 skip，JSONL 127/127） |
 | PB410-NATIVE | GraalVM Native Image 及 SQLite/CORS smoke | Darwin native | 已完成 |
 | PB410-VERSION | Java/UI/UA v0.5.0、双语 README、docs 与当前基线 | 版本/语言/资源核对 | 已完成 |
-| PB410-DELIVERY | `dev` 提交、推送并核对远端 SHA | staged check、git push、refs | 待执行 |
+| PB410-DELIVERY | `dev` 提交、推送并核对远端 SHA | staged check、git push、refs | 已完成（代码提交 `3bd2dc8`，远端已核对；本记录另作 docs 提交） |
 
 ## 5. 本轮实际验证
 
@@ -93,4 +93,13 @@ mvn -o spotless:check \
   '-DspotlessFiles=.*(SmtpMailer|SmtpMailerTest|ThumbnailGenerator|ThumbnailGeneratorTest|PocketBaseClient)[.]java'
 ```
 
-交付结果待 Git 操作完成后记录。外部 MySQL/PostgreSQL、真实 SMTP/S3、Linux/Windows Native 和远程 CI 未执行；不能把本地替身或配置存在当作外部部署已验证。
+## 6. 交付记录
+
+2026-10-29 已将升级代码提交并推送至 `origin/dev`：
+
+- 代码提交：`3bd2dc8d12ff61047657dcda632544391c60f3d8` — `feat(release): align PocketBase v0.41.0 and bump v0.5.0`。
+- `git push origin dev` 成功，随后 `git ls-remote origin refs/heads/dev refs/heads/main` 核实远端 dev 为该提交；本地 dev 与 origin/dev 一致，代码交付时工作区干净。
+- `main` 与 `origin/main` 仍为 `1ced41d825c30f1ec8cc1c866f36a5df5aaa24e8`；本轮没有合并或推送 main，没有创建 GitHub Release。
+- 本交付记录作为独立 docs 提交同步到 dev，避免在代码实际推送前宣称交付已完成；最终分支以 Git 引用为准。
+
+外部 MySQL/PostgreSQL、真实 SMTP/S3、Linux/Windows Native 和远程 CI 未执行；不能把本地替身或配置存在当作外部部署已验证。
