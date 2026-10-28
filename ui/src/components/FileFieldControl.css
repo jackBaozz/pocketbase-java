@@ -143,6 +143,7 @@
 
 .file-preview-dialog {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   width: min(900px, 100%);
   max-height: min(780px, 100%);
@@ -155,6 +156,15 @@
 
 .file-preview-dialog > header {
   justify-content: space-between;
+}
+
+.file-preview-dialog > header > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-preview-dialog > header > .icon-button {
+  flex: 0 0 auto;
 }
 
 .file-preview-image,

@@ -2,7 +2,7 @@
 
 PocketBase Java implementation. This project contains a lightweight **PocketBase Java SDK** and a low-dependency **Embedded Server**: using JDK `HttpServer` to serve PocketBase-like APIs, featuring a built-in Admin UI, JSON file persistence, and designed for GraalVM Native Image constraints.
 
-**Official PocketBase Baseline:** v0.40.6
+**Official PocketBase Baseline:** v0.41.0 (Java project v0.5.0)
 
 <p align="center">
     <a href="https://github.com/jackBaozz/pocketbase-java/actions/workflows/ci.yml" target="_blank" rel="noopener">
@@ -23,7 +23,7 @@ PocketBase Java implementation. This project contains a lightweight **PocketBase
 ## Key Features
 
 - **Low Dependency**: HTTP services are built using `java.net.http.HttpClient` and JDK built-in `HttpServer`. The core runtime has extremely minimal dependencies, keeping the resource footprint small and native compilation trivial.
-- **Standard API Parity**: Strictly aligns with the official PocketBase REST API specifications (up to **v0.40.6**) (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
+- **Standard API Parity**: Follows the official PocketBase REST API specifications through **v0.41.0** within the Java implementation's documented feature boundaries (e.g. `/api/collections/{collection}/records`, auth with password/OTP/MFA/OAuth2 flows, impersonate, view queries, rate limiting, and client IP rules).
 - **Embedded Server**: Provides `io.github.jackbaozz.pocketbase.server.PocketBaseServer` to spin up a local PocketBase-like service directly without relying on heavy frameworks like Spring/Tomcat.
 - **Built-in Admin UI**: Access `/_/` for superuser initialization, login, collection/record management, auth collection OTP/MFA/OAuth2 configuration, file uploads, backups, system configuration editing, and activity logs. Features 9-language i18n, an API documentation sidebar, a schema/index editor, a relation picker, a code editor with syntax highlighting and autocompletion, and a `hideControls` safe-lock mode. The frontend source is in `ui/`, and its build outputs are embedded into Java resources.
 - **Storage Engine Matrix**: Features a flexible `StorageEngine` SPI. SQLite is the default local engine and stores data in `<server.data-dir>/pocketbase.db`; legacy JSON Lines (`.jsonl` plus `.json` metadata) remains available explicitly with `storage.type=jsonl`. MySQL and PostgreSQL are also supported through `application.properties`, the JVM `-Dstorage` flag, or native-runtime `PB_STORAGE` environment variable, powered by jOOQ and HikariCP.
@@ -67,13 +67,13 @@ make build dev && make run dev
 Or compile and start the server directly with Maven and the JAR:
 ```bash
 mvn -gs settings.xml -s settings.xml clean package
-java -jar target/pocketbase-java-0.4.6-all.jar start --http 127.0.0.1:8090 --dir pb_data
+java -jar target/pocketbase-java-0.5.0-all.jar start --http 127.0.0.1:8090 --dir pb_data
 ```
 
 The `start` command is optional when it is the only operation:
 
 ```bash
-java -jar target/pocketbase-java-0.4.6-all.jar
+java -jar target/pocketbase-java-0.5.0-all.jar
 ```
 
 Once started, open:
@@ -84,7 +84,7 @@ You can also bootstrap the first superuser via environment variables:
 ```bash
 PB_SUPERUSER_EMAIL=root@example.com \
 PB_SUPERUSER_PASSWORD=secret123 \
-java -jar target/pocketbase-java-0.4.6-all.jar start
+java -jar target/pocketbase-java-0.5.0-all.jar start
 ```
 
 ### Configuration file
@@ -105,7 +105,7 @@ storage.type=sqlite
 Then start the server normally:
 
 ```bash
-java -jar target/pocketbase-java-0.4.6-all.jar start
+java -jar target/pocketbase-java-0.5.0-all.jar start
 ```
 
 For SQLite, the database file is created automatically at
@@ -115,7 +115,7 @@ Browser origins default to `*`. To restrict CORS, set `server.origins` to a comm
 list, or use `PB_ORIGINS`, `-Dserver.origins`, or `--origins` (highest priority):
 
 ```bash
-java -jar target/pocketbase-java-0.4.6-all.jar start --origins 'https://admin.example.com,https://trusted.*.example.com'
+java -jar target/pocketbase-java-0.5.0-all.jar start --origins 'https://admin.example.com,https://trusted.*.example.com'
 ```
 
 Matching follows PocketBase v0.40.5, including its bounded `*`/`?` fallback; `*` can match
@@ -123,10 +123,15 @@ multiple subdomain labels. CORS does not replace API authentication.
 
 Thumbnail generation reads `PB_THUMBS_MAX_SOURCE_PIXELS` to limit the source image's
 width × height before decoding. Missing, invalid, or nonpositive values use the upstream
-default of `262144000`. The Java PNG decoder also keeps its existing stricter caps
+default of `104857600` (`100 << 20`). The Java PNG decoder also keeps its existing stricter caps
 (8192 per side, 16777216 source pixels, and 64 MiB of decoded scanlines), so this setting
 can only tighten those limits. If a thumbnail cannot be generated, the file endpoint
-serves the original file. See the [v0.40.6 compatibility report](docs/RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md).
+serves the original file. See the [v0.41.0 compatibility report](docs/RPD-PocketBase-v0.41.0-Compatibility-Development-Plan.md).
+
+The v0.41.0 update also sends SMTP messages with empty HTML as plain text and fixes
+small-image previews. The upstream project now publishes at
+[ganigeorgiev.com/pocketbase/pocketbase](https://ganigeorgiev.com/pocketbase/pocketbase);
+this Java project's own repository and distribution remain on GitHub.
 
 For MySQL or PostgreSQL, additionally set `database.url`, `database.user`, and
 `database.password`. Command-line options take precedence over JVM properties,
@@ -159,9 +164,9 @@ cp config/application-production.properties.example config/application-productio
 Select a profile at runtime with one of the following (highest priority first):
 
 ```bash
-java -jar target/pocketbase-java-0.4.6-all.jar start --profile dev
-java -Dapp.profile=dev -jar target/pocketbase-java-0.4.6-all.jar start
-PB_PROFILE=dev java -jar target/pocketbase-java-0.4.6-all.jar start
+java -jar target/pocketbase-java-0.5.0-all.jar start --profile dev
+java -Dapp.profile=dev -jar target/pocketbase-java-0.5.0-all.jar start
+PB_PROFILE=dev java -jar target/pocketbase-java-0.5.0-all.jar start
 ```
 
 You may also set `app.profile=dev` in the base properties file. Maven profiles are build-time

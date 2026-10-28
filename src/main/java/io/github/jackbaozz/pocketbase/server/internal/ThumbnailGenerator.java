@@ -28,7 +28,7 @@ final class ThumbnailGenerator {
   // sufficient here.
   private static final int MAX_SOURCE_DIMENSION = 8192;
   private static final long MAX_SOURCE_PIXELS = 16L * 1024 * 1024;
-  private static final long DEFAULT_SOURCE_PIXEL_LIMIT = 250L << 20;
+  private static final long DEFAULT_SOURCE_PIXEL_LIMIT = 100L << 20;
   private static final long MAX_PNG_RAW_BYTES = 64L * 1024 * 1024;
   private static final long MAX_THUMBNAIL_PIXELS = 16L * 1024 * 1024;
 

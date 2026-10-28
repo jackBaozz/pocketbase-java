@@ -98,6 +98,12 @@ public final class SmtpMailer {
       out.append("To: ").append(mailbox("", to)).append("\r\n");
       out.append("Subject: ").append(encodedHeader(subject)).append("\r\n");
       out.append("MIME-Version: 1.0\r\n");
+      if (html == null || html.isEmpty()) {
+        out.append("Content-Type: text/plain; charset=UTF-8\r\n");
+        out.append("Content-Transfer-Encoding: 8bit\r\n\r\n");
+        out.append(noCrlf(text)).append("\r\n");
+        return out.toString();
+      }
       out.append("Content-Type: multipart/alternative; boundary=\"pb-java-test-boundary\"\r\n");
       out.append("\r\n");
       out.append("--pb-java-test-boundary\r\n");

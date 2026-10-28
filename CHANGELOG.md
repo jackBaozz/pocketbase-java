@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- 对齐 PocketBase v0.41.0 的 Java/React 适用增量，逐项差异、排除项和验收见 `docs/RPD-PocketBase-v0.41.0-Compatibility-Development-Plan.md`。
+- `PB_THUMBS_MAX_SOURCE_PIXELS` 的缺省及无效值回退改为 `100 << 20`（104857600）；保留 Java 更严格的 PNG 解码上限及原文件回退。
+- SMTP 空 HTML 邮件使用 `text/plain`，不再生成空 HTML 的 multipart；非空 HTML 保持原有文本/HTML 两部分。
+- 修复小图片预览布局，更新官方项目链接至新主机；本 Java 仓库地址保持不变，管理界面资源由 React 重新构建。
+- 同步 Java、前端和 SDK User-Agent 为 v0.5.0。Go module、Hook Extra、ServeEvent 及 sendmail 专用接口不移植为无对应消费者的 Java API。
+
 ## 0.4.6
 
 - 对齐 PocketBase v0.40.6 的 Java/React 适用增量；12 个提交、29 个变更文件的分类和验收见 `docs/RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md`。

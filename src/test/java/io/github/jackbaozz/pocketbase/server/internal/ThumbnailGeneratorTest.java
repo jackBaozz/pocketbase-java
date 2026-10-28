@@ -49,7 +49,7 @@ class ThumbnailGeneratorTest {
         "09", "0x19.0", "1__0", "_25", "25_", "0x__19", "++25", "+ 25", "-.9", "-.",
         ".9", ".", "+.", "0b102", "２５"
     }) {
-      assertEquals(262144000L, ThumbnailGenerator.sourcePixelLimit(configured), configured);
+      assertEquals(104857600L, ThumbnailGenerator.sourcePixelLimit(configured), configured);
     }
   }
 
