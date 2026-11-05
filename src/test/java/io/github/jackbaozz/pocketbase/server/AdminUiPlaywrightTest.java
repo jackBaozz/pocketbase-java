@@ -11,6 +11,8 @@ import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitForSelectorState;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
@@ -64,7 +66,8 @@ public class AdminUiPlaywrightTest {
     baseUrl = "http://localhost:" + server.port();
 
     context = browser.newContext(new Browser.NewContextOptions().setLocale("en-US"));
-    context.addInitScript("window.localStorage.setItem('i18nextLng', 'en');");
+    context.addInitScript(
+        "if (window.location.origin !== 'null') { window.localStorage.setItem('i18nextLng', 'en'); }");
     page = context.newPage();
   }
 
@@ -346,8 +349,29 @@ public class AdminUiPlaywrightTest {
     assertTrue(page.content().contains("General") || page.content().contains("Settings"));
   }
 
+  private void assertFooterLinksAndVersion() {
+    page.waitForSelector(".page-footer", new Page.WaitForSelectorOptions().setTimeout(5000));
+    var docsLink = page.locator(".page-footer a.footer-link[title='Docs']");
+    assertEquals("https://pocketbase.io/docs", docsLink.getAttribute("href"));
+    assertEquals("_blank", docsLink.getAttribute("target"));
+    assertEquals("noopener noreferrer", docsLink.getAttribute("rel"));
+    var versionLink = page.locator(".page-footer a.footer-link[title='PocketBase Java GitHub']");
+    assertEquals("https://github.com/jackBaozz/pocketbase-java", versionLink.getAttribute("href"));
+    assertEquals("PocketBase v0.5.1", versionLink.textContent().trim());
+    assertEquals(0, page.locator("a[href^='javascript:']").count());
+  }
+
   @Test
   void testCoreHashRoutesRenderAdminWorkflows() {
+    List<String> unexpectedErrors = new ArrayList<>();
+    page.onPageError(unexpectedErrors::add);
+    page.onConsoleMessage(
+        msg -> {
+          if ("error".equals(msg.type()) && msg.text().contains("javascript:")) {
+            unexpectedErrors.add(msg.text());
+          }
+        });
+
     bootstrapAndLogin("admin4@example.com");
     createCollectionFromBrowser("ui_hash_posts");
 
@@ -355,6 +379,7 @@ public class AdminUiPlaywrightTest {
     // in the collection settings drawer opened from the records toolbar.
     assertHashRoute("#/collections/ui_hash_posts/schema", ".records-page");
     assertHashRoute("#/collections/ui_hash_posts/records", ".records-page");
+    assertFooterLinksAndVersion();
     assertHashRoute("#/settings", ".application-settings-footer");
     assertHashRoute("#/settings/mail", "#test-email-recipient");
     assertHashRoute("#/settings/storage", "#s3-enabled");
@@ -364,6 +389,8 @@ public class AdminUiPlaywrightTest {
     assertHashRoute("#/settings/import-collections", "#import-collections-json");
     assertHashRoute("#/settings/sql", "#sql-query");
     assertHashRoute("#/logs", ".logs-page");
+    assertFooterLinksAndVersion();
+    assertTrue(unexpectedErrors.isEmpty(), "Unexpected browser errors: " + unexpectedErrors);
   }
 
   @Test

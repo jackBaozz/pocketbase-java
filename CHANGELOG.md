@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- 对齐 PocketBase v0.41.1 的 Java/React 适用增量，逐提交差异分析、排除项与本地验收见 `docs/RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md`。
+- 修复 Admin UI 记录列表页与日志页页脚 `Docs` 链接使用 `javascript:void(0)` 导致被 React 19 安全机制拦截报错的问题，统一指向官方文档 `https://pocketbase.io/docs` 并重新构建内嵌前端资源。
+- 同步 Java、前端、SDK User-Agent 与文档版本为 v0.5.1；官方 Svelte 内置字体许可证与 `golang.org/x/net` 升级不适用于本 Java/React 实现。
+
 ## 0.5.0
 
 - 对齐 PocketBase v0.41.0 的 Java/React 适用增量，逐项差异、排除项和验收见 `docs/RPD-PocketBase-v0.41.0-Compatibility-Development-Plan.md`。

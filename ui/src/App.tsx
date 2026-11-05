@@ -3528,6 +3528,34 @@ function GithubMarkIcon() {
   );
 }
 
+function PageFooterRight() {
+  return (
+    <div className="page-footer-right">
+      <a
+        href="https://pocketbase.io/docs"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="footer-link"
+        title="Docs"
+      >
+        <DocsBookIcon />
+        <span>Docs</span>
+      </a>
+      <span className="footer-link-separator">|</span>
+      <a
+        href="https://github.com/jackBaozz/pocketbase-java"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="footer-link"
+        title="PocketBase Java GitHub"
+      >
+        <GithubMarkIcon />
+        <span>PocketBase v0.5.1</span>
+      </a>
+    </div>
+  );
+}
+
 function CaptchaView(props: { code: string; onRefresh: () => void }) {
   const { t } = useTranslation();
   const chars = props.code.split("");
@@ -4592,28 +4620,7 @@ function RecordsView(props: RecordsViewProps) {
           <span>{t("collections.fields_count", { count: props.collection.fields?.length ?? 0, defaultValue: "{{count}} fields" })}</span>
           <span>{t("collections.columns_count", { shown: props.columns.length, total: props.allColumns.length, defaultValue: "{{shown}}/{{total}} columns" })}</span>
         </div>
-        <div className="page-footer-right">
-          <a
-            href="javascript:void(0)"
-            className="footer-link"
-            onClick={(e) => e.preventDefault()}
-            title={t("footer.docs", "Docs")}
-          >
-            <DocsBookIcon />
-            <span>Docs</span>
-          </a>
-          <span className="footer-link-separator">|</span>
-          <a
-            href="https://github.com/jackBaozz/pocketbase-java"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="footer-link"
-            title="PocketBase Java GitHub"
-          >
-            <GithubMarkIcon />
-            <span>PocketBase v0.5.0</span>
-          </a>
-        </div>
+        <PageFooterRight />
       </footer>
     </section>
   );
@@ -7648,28 +7655,7 @@ function LogsView(props: LogsViewProps) {
           <span>{t("common.total_count", { count: total, defaultValue: "Total: {{count}}" })}</span>
           <span>{t("logs.visible_count", { count: props.logs.length, defaultValue: "{{count}} visible" })}</span>
         </div>
-        <div className="page-footer-right">
-          <a
-            href="javascript:void(0)"
-            className="footer-link"
-            onClick={(e) => e.preventDefault()}
-            title={t("footer.docs", "Docs")}
-          >
-            <DocsBookIcon />
-            <span>Docs</span>
-          </a>
-          <span className="footer-link-separator">|</span>
-          <a
-            href="https://github.com/jackBaozz/pocketbase-java"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="footer-link"
-            title="PocketBase Java GitHub"
-          >
-            <GithubMarkIcon />
-            <span>PocketBase v0.5.0</span>
-          </a>
-        </div>
+        <PageFooterRight />
       </footer>
       </div>
     </section>
