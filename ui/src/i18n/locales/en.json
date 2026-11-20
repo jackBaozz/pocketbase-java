@@ -30,6 +30,8 @@
     "auto": "Auto"
   },
   "actions": {
+    "move_up": "Move up",
+    "move_down": "Move down",
     "add_record": "Add Record",
     "new_collection": "New Collection",
     "save": "Save",

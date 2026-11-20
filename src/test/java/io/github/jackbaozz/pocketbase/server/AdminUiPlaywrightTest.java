@@ -357,7 +357,7 @@ public class AdminUiPlaywrightTest {
     assertEquals("noopener noreferrer", docsLink.getAttribute("rel"));
     var versionLink = page.locator(".page-footer a.footer-link[title='PocketBase Java GitHub']");
     assertEquals("https://github.com/jackBaozz/pocketbase-java", versionLink.getAttribute("href"));
-    assertEquals("PocketBase v0.5.1", versionLink.textContent().trim());
+    assertEquals("PocketBase v0.6.2", versionLink.textContent().trim());
     assertEquals(0, page.locator("a[href^='javascript:']").count());
   }
 
@@ -558,6 +558,173 @@ public class AdminUiPlaywrightTest {
     page.waitForSelector(
         ".oidc-discovery-assistant",
         new Page.WaitForSelectorOptions().setTimeout(5000));
+  }
+
+  @Test
+  void testInvalidStoredTokenReturnsToLoginAndCanAuthenticateAgain() {
+    bootstrapAndLogin("expired-ui@example.com");
+    page.evaluate("localStorage.setItem('pbj_token', 'unknown-v042-test-token')");
+    page.reload();
+    page.waitForSelector("input[type='password']", new Page.WaitForSelectorOptions().setTimeout(10000));
+    page.waitForFunction("() => !localStorage.getItem('pbj_token')");
+    page.fill("input[type='email']", "expired-ui@example.com");
+    page.fill("input[type='password']", "Password_123456");
+    page.click("button[type='submit']");
+    page.waitForSelector(".page-header", new Page.WaitForSelectorOptions().setTimeout(10000));
+    page.waitForFunction(
+        "() => localStorage.getItem('pbj_token') && localStorage.getItem('pbj_token') !== 'unknown-v042-test-token'");
+  }
+
+  @Test
+  void testUnauthorizedTabReturnsToLoginWithoutClearingTheOtherTabsSession() {
+    bootstrapAndLogin("tab-session@example.com");
+    String originalToken = (String) page.evaluate("localStorage.getItem('pbj_token')");
+    try (Page sibling = context.newPage()) {
+      sibling.navigate(baseUrl + "/api/health");
+      sibling.evaluate("localStorage.setItem('pbj_token', 'other-tab-session')");
+
+      var rejectedCurrentSession = new java.util.concurrent.atomic.AtomicBoolean();
+      page.route("**/api/logs**", route -> {
+        if (String.valueOf(route.request().headers().get("authorization")).equals("Bearer " + originalToken)) {
+          rejectedCurrentSession.set(true);
+        }
+        route.fulfill(new com.microsoft.playwright.Route.FulfillOptions()
+            .setStatus(401)
+            .setContentType("application/json")
+            .setBody("{\"status\":401,\"message\":\"Missing or invalid authentication.\",\"data\":{}}"));
+      });
+      page.navigate(baseUrl + "/_/#/logs");
+      page.waitForSelector(".auth-form input[type='email']", new Page.WaitForSelectorOptions().setTimeout(10000));
+      assertTrue(rejectedCurrentSession.get());
+      assertEquals("other-tab-session", sibling.evaluate("localStorage.getItem('pbj_token')"));
+    }
+  }
+
+  @Test
+  void testOAuthRedirectPagesStayOnTheirResultWithAnInvalidStoredToken() {
+    bootstrapAndLogin("oauth-redirect-ui@example.com");
+    page.evaluate("localStorage.setItem('pbj_token', 'stale-oauth-test-token')");
+    // Treat the result as a direct navigation and verify its fallback content without closing the test tab.
+    context.addInitScript("window.close = () => { window.oauthResultCloseRequested = true; };");
+    for (String result : List.of("success", "failure")) {
+      String hash = "#/auth/oauth2-redirect-" + result;
+      page.navigate("about:blank");
+      page.navigate(baseUrl + "/_/" + hash);
+      page.waitForLoadState(LoadState.NETWORKIDLE);
+      page.waitForFunction("() => window.oauthResultCloseRequested === true");
+      assertEquals(hash, page.evaluate("window.location.hash"));
+      assertEquals("success".equals(result) ? "OAuth2 sign-in complete" : "OAuth2 sign-in failed",
+          page.locator(".oauth-redirect-page h2").textContent().trim());
+      assertEquals("stale-oauth-test-token", page.evaluate("localStorage.getItem('pbj_token')"));
+    }
+  }
+
+  @Test
+  void testWebmFilesUseVideoPreviewInRecordEditor() {
+    bootstrapAndLogin("webm-ui@example.com");
+    String recordId = (String) page.evaluate("""
+        async () => {
+          const Authorization = localStorage.getItem('pbj_token');
+          const collection = await fetch('/api/collections', {
+            method: 'POST', headers: { Authorization, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'ui_webm_assets', viewRule: '', fields: [
+              {name: 'clip', type: 'file', mimeTypes: ['video/webm']}
+            ] })
+          });
+          if (!collection.ok) throw Error(await collection.text());
+          // MIME and preview routing only. No video decoder is required for this fixture.
+          const body = new FormData();
+          body.append('clip', new File([new Uint8Array([26, 69, 223, 163, 128])], 'preview.webm',
+            {type: 'video/webm'}));
+          const record = await fetch('/api/collections/ui_webm_assets/records', {
+            method: 'POST', headers: { Authorization }, body
+          });
+          if (!record.ok) throw Error(await record.text());
+          return (await record.json()).id;
+        }
+        """);
+    page.navigate("about:blank");
+    page.navigate(baseUrl + "/_/#/collections/ui_webm_assets/records?record=" + recordId);
+    page.locator(".file-field-item button[aria-label='Preview']").click();
+    var preview = page.locator(".file-preview-dialog video");
+    preview.waitFor();
+    assertEquals("video/webm", page.evaluate("""
+        async () => {
+          const url = document.querySelector('.file-preview-dialog video').src;
+          const response = await fetch(url, { method: 'HEAD' });
+          if (!response.ok) throw Error(`WebM preview returned ${response.status}`);
+          return response.headers.get('Content-Type');
+        }
+        """));
+  }
+
+  @Test
+  void testOAuthProviderOrderingSavesAndReloads() {
+    bootstrapAndLogin("provider-order-ui@example.com");
+    createOAuthAuthCollectionFromBrowser("ui_ordered_oauth");
+    page.evaluate("""
+        async () => {
+          const response = await fetch('/api/collections/ui_ordered_oauth', {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json', 'Authorization': localStorage.getItem('pbj_token')},
+            body: JSON.stringify({oauth2: {providers: [
+              {name: 'oidc'}, {name: 'github', clientId: 'github-client', clientSecret: 'github-test-secret'}
+            ]}})
+          });
+          if (!response.ok) throw Error(await response.text());
+        }
+        """);
+    // Refresh the collection catalog after creating it through the API.
+    page.navigate("about:blank");
+    page.navigate(baseUrl + "/_/#/collections/ui_ordered_oauth/schema");
+    page.waitForSelector(".records-page");
+    waitForCollectionRoute("ui_ordered_oauth");
+    page.click("button[aria-label='Collection settings']");
+    page.waitForSelector(".drawer-panel[aria-label='Edit ui_ordered_oauth']");
+    page.click(".collection-modal-tabs button:has-text('Options')");
+    page.waitForSelector(".oauth-provider-order li[data-provider='github']");
+    page.locator(".oauth-provider-order li[data-provider='github'] button[aria-label='Move up']").click();
+    assertEquals("github", page.locator(".oauth-provider-order li").first().getAttribute("data-provider"));
+    var saved = page.waitForResponse(
+        response -> "PATCH".equals(response.request().method()) && response.url().contains("/api/collections/"),
+        () -> page.locator(".drawer-panel button[type='submit']").click());
+    assertEquals(200, saved.status());
+    page.waitForSelector(".drawer-panel[aria-label='Edit ui_ordered_oauth']",
+        new Page.WaitForSelectorOptions().setState(WaitForSelectorState.DETACHED));
+    page.waitForFunction("""
+        async () => {
+          const response = await fetch('/api/collections/ui_ordered_oauth/auth-methods');
+          const methods = await response.json();
+          return methods.oauth2.providers[0].name === 'github';
+        }
+        """);
+    page.reload();
+    page.waitForSelector(".records-page");
+    waitForCollectionRoute("ui_ordered_oauth");
+    page.click("button[aria-label='Collection settings']");
+    page.waitForSelector(".drawer-panel[aria-label='Edit ui_ordered_oauth']");
+    page.click(".collection-modal-tabs button:has-text('Options')");
+    assertEquals("github", page.locator(".oauth-provider-order li").first().getAttribute("data-provider"));
+  }
+
+  @Test
+  void testLogsChartReservesWidthForLargeValues() {
+    bootstrapAndLogin("chart-axis@example.com");
+    String hour = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.HOURS).toString();
+    page.route("**/api/logs/stats**", route -> route.fulfill(
+        new com.microsoft.playwright.Route.FulfillOptions().setContentType("application/json")
+            .setBody("[{\"date\":\"" + hour + "\",\"total\":1000000}]")));
+    page.navigate(baseUrl + "/_/#/logs");
+    page.waitForSelector(".logs-chart-y-tick:has-text('1,000,000')");
+    assertTrue((Boolean) page.evaluate("""
+        () => {
+          const axis = document.querySelector('.logs-chart-y').getBoundingClientRect();
+          const plot = document.querySelector('.logs-chart-canvas').getBoundingClientRect();
+          return axis.width >= 80 && axis.right < plot.left &&
+            Array.from(document.querySelectorAll('.logs-chart-y-tick')).every(tick =>
+              tick.getBoundingClientRect().left >= axis.left);
+        }
+        """));
   }
 
 }

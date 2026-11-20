@@ -61,6 +61,8 @@
     "loaded_of_total": "{{loaded}} von {{count}} angezeigt"
   },
   "actions": {
+    "move_up": "Nach oben",
+    "move_down": "Nach unten",
     "add_record": "Datensatz hinzufügen",
     "new_collection": "Neue Sammlung",
     "new_record": "Neuer Datensatz",

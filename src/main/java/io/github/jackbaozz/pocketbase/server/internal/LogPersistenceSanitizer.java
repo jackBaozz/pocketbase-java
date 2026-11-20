@@ -11,9 +11,18 @@ public final class LogPersistenceSanitizer {
   public static final int DEFAULT_MAX_DATA_SIZE = 16384;
   public static final String TRUNCATED_KEY = "__pb_truncated__";
 
-  private LogPersistenceSanitizer() {}
+  private LogPersistenceSanitizer() {
+  }
 
-  public record Result(String message, String dataJson, Map<String, Object> dataMap) {}
+  public static int activityLevel(int status, String warning) {
+    if (status >= 400) {
+      return 8;
+    }
+    return warning == null ? 0 : 4;
+  }
+
+  public record Result(String message, String dataJson, Map<String, Object> dataMap) {
+  }
 
   public static Result sanitize(
       String message, Map<String, Object> data, long maxDataSize, ObjectMapper mapper) {
@@ -53,7 +62,8 @@ public final class LogPersistenceSanitizer {
     return message.substring(0, bestLen);
   }
 
-  public record DataResult(String json, Map<String, Object> map) {}
+  public record DataResult(String json, Map<String, Object> map) {
+  }
 
   public static DataResult sanitizeData(
       Map<String, Object> data, long maxDataSize, ObjectMapper mapper) {

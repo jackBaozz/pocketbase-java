@@ -59,6 +59,18 @@ public final class ActivityLogDispatcher implements AutoCloseable {
       RequestPrincipal principal,
       Map<String, String> headers,
       String remoteIp) {
+    return submit(method, url, status, duration, principal, headers, remoteIp, null);
+  }
+
+  public boolean submit(
+      String method,
+      String url,
+      int status,
+      long duration,
+      RequestPrincipal principal,
+      Map<String, String> headers,
+      String remoteIp,
+      String warning) {
     ActivityLogEvent event =
         new ActivityLogEvent(
             method,
@@ -67,7 +79,8 @@ public final class ActivityLogDispatcher implements AutoCloseable {
             duration,
             principal,
             headers == null ? Map.of() : Map.copyOf(headers),
-            remoteIp);
+            remoteIp,
+            warning);
     long droppedTotal = 0L;
     synchronized (stateMonitor) {
       if (!accepting.get() || !queue.offer(event)) {
@@ -161,7 +174,8 @@ public final class ActivityLogDispatcher implements AutoCloseable {
                 event.duration(),
                 event.principal(),
                 event.headers(),
-                event.remoteIp());
+                event.remoteIp(),
+                event.warning());
           } catch (RuntimeException ignored) {
             // Activity logging must never alter the API response or prevent later events.
           } finally {
@@ -230,6 +244,7 @@ public final class ActivityLogDispatcher implements AutoCloseable {
       long duration,
       RequestPrincipal principal,
       Map<String, String> headers,
-      String remoteIp) {
+      String remoteIp,
+      String warning) {
   }
 }

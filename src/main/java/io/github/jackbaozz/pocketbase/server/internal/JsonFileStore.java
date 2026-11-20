@@ -386,6 +386,20 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     return AppleClientSecretGenerator.generate(mapper, body);
   }
 
+  @Override
+  public synchronized long countLogs(Map<String, String> query) {
+    String filter = query == null ? null : query.get("filter");
+    SearchFieldValidationSupport.validateLogFilter(filter);
+    long count = 0;
+    for (int i = 0; i < logs.size(); i++) {
+      Map<String, Object> log = copyMap(logs.get(i));
+      log.put(INTERNAL_ROWID, i + 1);
+      if (matchesLogFilter(log, filter))
+        count++;
+    }
+    return count;
+  }
+
   public synchronized Map<String, Object> listLogs(Map<String, String> query) {
     Map<String, String> safeQuery = query == null ? Map.of() : query;
     SearchQuerySupport.Parameters search = SearchQuerySupport.parse(safeQuery);
@@ -1429,6 +1443,7 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     return Character.isLetterOrDigit(ch) || ch == '_' || ch == '@';
   }
 
+  @Override
   public synchronized void recordActivityLog(
       String method,
       String url,
@@ -1436,11 +1451,12 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
       long execTimeMillis,
       RequestPrincipal principal,
       Map<String, String> headers,
-      String remoteAddress) {
+      String remoteAddress,
+      String warning) {
     Map<String, Object> logSettings = settingsSection("logs");
     long maxDays = longSetting(logSettings.get("maxDays"), 5L);
     long minLevel = longSetting(logSettings.get("minLevel"), 0L);
-    int level = status >= 400 ? 8 : 0;
+    int level = LogPersistenceSanitizer.activityLevel(status, warning);
     if (maxDays <= 0 || level < minLevel) {
       return;
     }
@@ -1452,6 +1468,9 @@ public final class JsonFileStore implements StorageEngine, RecordProcessor.Store
     data.put("url", url == null ? "" : url);
     data.put("status", status);
     data.put("execTime", (double) execTimeMillis);
+    if (warning != null) {
+      data.put("error", warning);
+    }
     Object logIp =
         logSettings.containsKey("logIP") ? logSettings.get("logIP") : logSettings.get("logIp");
     if (truthySetting(logIp, true) && remoteAddress != null && !remoteAddress.isBlank()) {

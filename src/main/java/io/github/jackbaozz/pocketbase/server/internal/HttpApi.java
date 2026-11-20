@@ -123,7 +123,9 @@ public final class HttpApi implements HttpHandler {
   public void handle(HttpExchange exchange) throws IOException {
     String method = exchange.getRequestMethod();
     String path = normalizePath(exchange.getRequestURI().getPath());
+    RequestPrincipal requestPrincipal = null;
     int status = 0;
+    String activityWarning = null;
     long started = System.nanoTime();
     try {
       addCommonHeaders(exchange);
@@ -134,7 +136,7 @@ public final class HttpApi implements HttpHandler {
         return;
       }
       boolean adminRoute = path.equals("/") || path.equals("/_/") || path.startsWith("/_/");
-      RequestPrincipal requestPrincipal = principal(exchange).orElse(null);
+      requestPrincipal = principal(exchange).orElse(null);
       Map<String, Object> settings =
           !adminRoute || requestPrincipal != null ? store.getSettings(Map.of()) : Map.of();
       exchange.setAttribute(SETTINGS_ATTRIBUTE, settings);
@@ -146,6 +148,12 @@ public final class HttpApi implements HttpHandler {
         rateLimiter.check(
             exchange, settings, requestPrincipal, rateContext.labels(), rateContext.limiterId());
         enforceBodyLimit(exchange, requestBodyLimit(path, method));
+      }
+
+      // An explicitly supplied invalid token is not an anonymous request. Keep this
+      // fallback after the existing IP, rate and body-limit checks, as upstream does.
+      if (requestPrincipal == null && !authorizationToken(exchange).isEmpty()) {
+        throw new ApiException(401, "Missing or invalid authentication.");
       }
 
       if (path.equals("/") || path.equals("/_/") || path.startsWith("/_/")) {
@@ -184,6 +192,7 @@ public final class HttpApi implements HttpHandler {
           sendNoContent(exchange);
         } else if (response instanceof RedirectResponse redirect) {
           status = redirect.status();
+          activityWarning = redirect.warning();
           sendRedirect(exchange, redirect.status(), redirect.location());
         } else {
           status = 200;
@@ -199,6 +208,20 @@ public final class HttpApi implements HttpHandler {
       status = 400;
       SecuritySupport.logInternalFailure("invalid HTTP request " + method + " " + path, e);
       sendJson(exchange, 400, errorBody(400, "Invalid request.", Map.of()));
+    } catch (IOException e) {
+      int committedStatus = exchange.getResponseCode();
+      if (HttpResponseFailureSupport.isBenign(committedStatus, e)) {
+        // The client disconnected after a successful response was committed. Do not
+        // turn it into a 500 or try to append a second response to the same stream.
+        status = committedStatus;
+      } else {
+        status = 500;
+        String errorId = SecuritySupport.logInternalFailure("http " + method + " " + path, e);
+        if (committedStatus < 0) {
+          sendJson(exchange, 500,
+              errorBody(500, "Internal server error. Reference: " + errorId, Map.of("errorId", errorId)));
+        }
+      }
     } catch (Exception e) {
       status = 500;
       String errorId = SecuritySupport.logInternalFailure("http " + method + " " + path, e);
@@ -215,24 +238,27 @@ public final class HttpApi implements HttpHandler {
           method, path, logStatus, elapsedMs, streamSuffix);
       if (shouldLogActivity(path, method, status)) {
         try {
+          // Use the identity accepted on entry even when this request revoked its own token.
           if (activityLogs == null) {
             store.recordActivityLog(
                 method,
-                activityUrl(exchange),
+                activityUrl(exchange, path),
                 status,
                 elapsedMs,
-                principal(exchange).orElse(null),
+                requestPrincipal,
                 activityHeaders(exchange),
-                remoteAddress(exchange));
+                remoteAddress(exchange),
+                activityWarning);
           } else {
             activityLogs.submit(
                 method,
-                activityUrl(exchange),
+                activityUrl(exchange, path),
                 status,
                 elapsedMs,
-                principal(exchange).orElse(null),
+                requestPrincipal,
                 activityHeaders(exchange),
-                remoteAddress(exchange));
+                remoteAddress(exchange),
+                activityWarning);
           }
         } catch (RuntimeException ignored) {
           // Activity logging must never change the API response.
@@ -451,9 +477,7 @@ public final class HttpApi implements HttpHandler {
       requireSuperuser(principal);
       return store.runSql(readJson(exchange));
     }
-    if (segments.size() == 2
-        && "oauth2-redirect".equals(segments.get(1))
-        && ("GET".equals(method) || "POST".equals(method))) {
+    if (isOAuth2RedirectPath(segments) && ("GET".equals(method) || "POST".equals(method))) {
       return oauth2SubscriptionRedirect(exchange);
     }
     if (segments.size() >= 2 && "settings".equals(segments.get(1))) {
@@ -1202,15 +1226,8 @@ public final class HttpApi implements HttpHandler {
   }
 
   private Optional<RequestPrincipal> principal(HttpExchange exchange) {
-    String header = exchange.getRequestHeaders().getFirst("Authorization");
-    if (header == null || header.isBlank()) {
-      return Optional.empty();
-    }
-    String token =
-        header.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())
-            ? header.substring("Bearer ".length()).trim()
-            : header.trim();
-    if (token.isBlank()) {
+    String token = authorizationToken(exchange);
+    if (token.isEmpty()) {
       return Optional.empty();
     }
     return store
@@ -1218,6 +1235,16 @@ public final class HttpApi implements HttpHandler {
         .filter(
             claims -> !"file".equals(claims.get("type")) && !"file".equals(claims.get("tokenType")))
         .map(RequestPrincipal::fromClaims);
+  }
+
+  private String authorizationToken(HttpExchange exchange) {
+    String header = exchange.getRequestHeaders().getFirst("Authorization");
+    if (header == null || header.isBlank()) {
+      return "";
+    }
+    return header.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())
+        ? header.substring("Bearer ".length()).trim()
+        : header.trim();
   }
 
   private String optionalText(JsonNode body, String field) {
@@ -1231,13 +1258,13 @@ public final class HttpApi implements HttpHandler {
       values =
           "GET".equals(exchange.getRequestMethod()) ? query(exchange) : formOrJsonValues(exchange);
     } catch (RuntimeException | IOException e) {
-      return oauth2Redirect(exchange, false);
+      return oauth2Redirect(exchange, false, "Failed to read OAuth2 redirect data.");
     }
     String state = values.getOrDefault("state", "");
     String code = values.getOrDefault("code", "");
     String error = values.getOrDefault("error", "");
     if (state.isBlank()) {
-      return oauth2Redirect(exchange, false);
+      return oauth2Redirect(exchange, false, "Missing OAuth2 state parameter.");
     }
 
     Map<String, Object> payload = new LinkedHashMap<>();
@@ -1250,19 +1277,23 @@ public final class HttpApi implements HttpHandler {
         HttpIpPolicy.realIp(
             exchange, HttpIpPolicy.section(requestSettings(exchange), "trustedProxy"));
     if (!realtimeHub.sendOAuth2Redirect(state, remoteIp, payload)) {
-      return oauth2Redirect(exchange, false);
+      return oauth2Redirect(exchange, false, "Missing or invalid OAuth2 subscription client or IP.");
     }
-    if (error.isBlank() && !code.isBlank()) {
-      OAuth2Support.storeAppleRedirectName(store.mapper(), code, values.getOrDefault("user", ""));
+    if (!error.isBlank() || code.isBlank()) {
+      return oauth2Redirect(exchange, false, "OAuth2 redirect returned an error or no code.");
     }
-    return oauth2Redirect(exchange, error.isBlank() && !code.isBlank());
+    String appleUser = values.getOrDefault("user", "");
+    String warning = !appleUser.isBlank() && !OAuth2Support.storeAppleRedirectName(store.mapper(), code, appleUser)
+        ? "OAuth2 redirect did not provide a usable Apple profile name."
+        : null;
+    return oauth2Redirect(exchange, true, warning);
   }
 
-  private RedirectResponse oauth2Redirect(HttpExchange exchange, boolean success) {
+  private RedirectResponse oauth2Redirect(HttpExchange exchange, boolean success, String warning) {
     int status = "GET".equals(exchange.getRequestMethod()) ? 307 : 303;
     String location =
         success ? "../_/#/auth/oauth2-redirect-success" : "../_/#/auth/oauth2-redirect-failure";
-    return new RedirectResponse(status, location);
+    return new RedirectResponse(status, location, warning);
   }
 
   private Map<String, String> formOrJsonValues(HttpExchange exchange) throws IOException {
@@ -1550,12 +1581,27 @@ public final class HttpApi implements HttpHandler {
         && (!logsRoute || status >= 400);
   }
 
-  private String activityUrl(HttpExchange exchange) {
+  private String activityUrl(HttpExchange exchange, String path) {
     URI uri = exchange.getRequestURI();
     String rawPath =
         uri.getRawPath() == null || uri.getRawPath().isBlank() ? "/" : uri.getRawPath();
-    String rawQuery = redactQuery(uri.getRawQuery());
-    return rawQuery == null || rawQuery.isBlank() ? rawPath : rawPath + "?" + rawQuery;
+    String rawQuery = uri.getRawQuery();
+    if (rawQuery == null || rawQuery.isBlank()) {
+      return rawPath;
+    }
+    try {
+      if (isOAuth2RedirectPath(segments(path))) {
+        return rawPath;
+      }
+    } catch (IllegalArgumentException malformedPath) {
+      // Preserve the audit entry without keeping query values for an unclassifiable path.
+      return rawPath;
+    }
+    return rawPath + "?" + redactQuery(rawQuery);
+  }
+
+  private boolean isOAuth2RedirectPath(List<String> segments) {
+    return segments.size() == 2 && "api".equals(segments.get(0)) && "oauth2-redirect".equals(segments.get(1));
   }
 
   private String redactQuery(String rawQuery) {
@@ -1768,6 +1814,9 @@ public final class HttpApi implements HttpHandler {
     if (lower.endsWith(".webp")) {
       return "image/webp";
     }
+    if (lower.endsWith(".jxl")) {
+      return "image/jxl";
+    }
     if (lower.endsWith(".mp3")) {
       return "audio/mpeg";
     }
@@ -1827,6 +1876,7 @@ public final class HttpApi implements HttpHandler {
         || "image/jpeg".equals(type)
         || "image/gif".equals(type)
         || "image/webp".equals(type)
+        || "image/jxl".equals(type)
         || "application/pdf".equals(type)
         || type.startsWith("text/plain")
         || type.startsWith("audio/")
@@ -1838,6 +1888,7 @@ public final class HttpApi implements HttpHandler {
         || "image/jpeg".equals(type)
         || "image/gif".equals(type)
         || "image/webp".equals(type)
+        || "image/jxl".equals(type)
         || "application/pdf".equals(type);
   }
 
@@ -1863,6 +1914,10 @@ public final class HttpApi implements HttpHandler {
           && prefix[9] == 'E'
           && prefix[10] == 'B'
           && prefix[11] == 'P';
+    }
+    if ("image/jxl".equals(type)) {
+      return hasPrefix(prefix, 0xff, 0x0a)
+          || hasPrefix(prefix, 0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ', 0x0d, 0x0a, 0x87, 0x0a);
     }
     return !"application/pdf".equals(type) || hasPrefix(prefix, '%', 'P', 'D', 'F', '-');
   }
@@ -1906,7 +1961,7 @@ public final class HttpApi implements HttpHandler {
   private record ServedFile(Path path, String contentType) {
   }
 
-  private record RedirectResponse(int status, String location) {
+  private record RedirectResponse(int status, String location, String warning) {
   }
 
   private record BatchTarget(List<String> segments, Map<String, String> query) {

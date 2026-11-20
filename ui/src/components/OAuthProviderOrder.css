@@ -1,0 +1,23 @@
+.oauth-provider-order {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+  padding: 0;
+}
+
+.oauth-provider-order > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--surfaceAlt3Color);
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.oauth-provider-order > li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

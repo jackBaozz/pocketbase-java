@@ -263,6 +263,11 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
   }
 
   @Override
+  public long countLogs(Map<String, String> query) {
+    return logRepository.countLogs(query);
+  }
+
+  @Override
   public List<Map<String, Object>> logStats(Map<String, String> query) {
     return logRepository.logStats(query);
   }
@@ -671,8 +676,9 @@ public final class RelationalStorageEngine implements StorageEngine, RecordProce
       long duration,
       RequestPrincipal principal,
       Map<String, String> headers,
-      String remoteIp) {
-    logRepository.recordActivityLog(method, url, status, duration, principal, headers, remoteIp);
+      String remoteIp,
+      String warning) {
+    logRepository.recordActivityLog(method, url, status, duration, principal, headers, remoteIp, warning);
   }
 
   @Override

@@ -1783,7 +1783,7 @@ button.subtle.outline-button:focus-visible,
 
 .logs-chart-plot {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: var(--logs-axis-width, 44px) minmax(0, 1fr);
   gap: 6px;
   align-items: stretch;
   min-height: 120px;
@@ -1802,6 +1802,8 @@ button.subtle.outline-button:focus-visible,
   font-variant-numeric: tabular-nums;
   line-height: 1;
   user-select: none;
+  min-width: 44px;
+  white-space: nowrap;
 }
 
 .logs-chart-y-tick {
@@ -1879,7 +1881,7 @@ button.subtle.outline-button:focus-visible,
 
 .logs-chart-x {
   display: flex;
-  margin-left: 50px;
+  margin-left: calc(var(--logs-axis-width, 44px) + 6px);
   min-height: 30px;
   color: rgba(255, 255, 255, 0.86);
   font-size: 11px;
@@ -5427,7 +5429,7 @@ td.row-actions .icon-button:last-child {
   }
 
   .logs-chart-plot {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: var(--logs-axis-width, 44px) minmax(0, 1fr);
     min-height: 90px;
   }
 
@@ -5436,7 +5438,7 @@ td.row-actions .icon-button:last-child {
   }
 
   .logs-chart-x {
-    margin-left: 40px;
+    margin-left: calc(var(--logs-axis-width, 44px) + 6px);
   }
 
   .logs-chart-x-tick em {

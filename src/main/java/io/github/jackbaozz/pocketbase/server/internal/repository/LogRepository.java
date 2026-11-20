@@ -33,6 +33,8 @@ public class LogRepository extends BaseRepository {
   private static final DateTimeFormatter LOG_STATS_HOUR_FORMAT =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00.000'Z'").withZone(ZoneOffset.UTC);
   private final SettingsRepository settingsRepository;
+  private long deletedSinceVacuum;
+  private static final long VACUUM_DELETE_THRESHOLD = 50_000;
 
   public LogRepository(
       JooqDatabase database, ObjectMapper mapper, SettingsRepository settingsRepository) {
@@ -72,6 +74,19 @@ public class LogRepository extends BaseRepository {
     } catch (DataAccessException e) {
       return SearchQuerySupport.result(search, 0, List.of());
     }
+  }
+
+  public long countLogs(Map<String, String> query) {
+    String filter = query == null ? null : query.get("filter");
+    SearchFieldValidationSupport.validateLogFilter(filter);
+    if (filter != null && !filter.isBlank()) {
+      // Preserve the same filter/@rowid semantics as the log list without treating
+      // caller pagination or field selection as a limit on the count.
+      return ((Number) listLogs(Map.of("filter", filter, "perPage", "1")).get("totalItems"))
+          .longValue();
+    }
+    Long total = database.dsl().selectCount().from(qt("_logs")).fetchOne(0, Long.class);
+    return total == null ? 0L : total;
   }
 
   public List<Map<String, Object>> logStats(Map<String, String> query) {
@@ -172,9 +187,10 @@ public class LogRepository extends BaseRepository {
       long duration,
       RequestPrincipal principal,
       Map<String, String> headers,
-      String remoteIp) {
+      String remoteIp,
+      String warning) {
     Map<String, Object> settings = logSettings();
-    int level = status >= 400 ? 8 : 0;
+    int level = LogPersistenceSanitizer.activityLevel(status, warning);
     long maxDays = longSetting(settings.get("maxDays"), 5L);
     long minLevel = longSetting(settings.get("minLevel"), 0L);
     if (maxDays <= 0 || level < minLevel) {
@@ -190,6 +206,9 @@ public class LogRepository extends BaseRepository {
     data.put("url", url == null ? "" : url);
     data.put("status", status);
     data.put("execTime", (double) duration);
+    if (warning != null) {
+      data.put("error", warning);
+    }
     if (truthySetting(settings.get("logIP"), true) && remoteIp != null && !remoteIp.isBlank()) {
       data.put("remoteIP", remoteIp);
       data.put("userIP", remoteIp);
@@ -245,23 +264,44 @@ public class LogRepository extends BaseRepository {
       database
           .dsl()
           .deleteFrom(qt("_logs"))
-          .where(qfs("created").le(cutoff.toString()).or(qfi("level").lt((int) Math.min(Integer.MAX_VALUE, Math.max(Integer.MIN_VALUE, minLevel)))))
+          .where(qfs("created").le(cutoff.toString())
+              .or(qfi("level").lt((int) Math.min(Integer.MAX_VALUE, Math.max(Integer.MIN_VALUE, minLevel)))))
           .execute();
     } catch (DataAccessException ignored) {
     }
   }
 
-  public void deleteOldLogs() {
+  public synchronized void deleteOldLogs() {
     Map<String, Object> settings = logSettings();
     long maxDays = longSetting(settings.get("maxDays"), 5L);
-    if (maxDays <= 0) {
-      truncateLogs();
-      return;
-    }
-    Instant cutoff = cutoffInstant(maxDays);
     try {
-      database.dsl().deleteFrom(qt("_logs")).where(qfs("created").le(cutoff.toString())).execute();
-    } catch (DataAccessException ignored) {
+      // JDBC returns the actual affected row count, avoiding before/after count
+      // races with concurrent activity-log inserts.
+      int deleted = maxDays <= 0
+          ? database.dsl().deleteFrom(qt("_logs")).execute()
+          : database.dsl().deleteFrom(qt("_logs"))
+              .where(qfs("created").le(cutoffInstant(maxDays).toString())).execute();
+      if (database.engine() != JooqDatabase.Engine.SQLITE)
+        return;
+      deletedSinceVacuum += Math.max(deleted, 0);
+      // VACUUM cannot run in a transaction. Keep the counter for a later cron run.
+      if (database.isInTransaction())
+        return;
+      if (deletedSinceVacuum >= VACUUM_DELETE_THRESHOLD) {
+        try {
+          database.dsl().execute("VACUUM");
+          deletedSinceVacuum = 0;
+        } catch (DataAccessException failure) {
+          // Retain the count for retry, but still checkpoint the WAL below.
+          io.github.jackbaozz.pocketbase.server.internal.SecuritySupport.logInternalFailure(
+              "log cleanup vacuum", failure);
+        }
+      }
+      database.dsl().fetch("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch (DataAccessException failure) {
+      // Retention/compaction is maintenance and must not terminate the executor.
+      io.github.jackbaozz.pocketbase.server.internal.SecuritySupport.logInternalFailure(
+          "log cleanup maintenance", failure);
     }
   }
 

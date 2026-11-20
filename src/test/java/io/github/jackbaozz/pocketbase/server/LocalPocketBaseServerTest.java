@@ -4905,14 +4905,23 @@ class LocalPocketBaseServerTest {
     assertEquals(400, missingOldPassword.statusCode());
     assertTrue(mapper.readTree(missingOldPassword.body()).get("data").has("oldPassword"));
 
+    String selfUpdatePath = "/api/collections/managed_users/records/" + user.get("id").asText() + "?fields=id";
+    request("PATCH", "/api/settings", superuser, Map.of("logs", Map.of("logAuthId", true)));
     request(
         "PATCH",
-        "/api/collections/managed_users/records/" + user.get("id").asText(),
+        selfUpdatePath,
         userToken,
         Map.of(
             "password", "SelfChange_456",
             "passwordConfirm", "SelfChange_456",
             "oldPassword", "Managed_456"));
+    JsonNode audit = waitForLogs("data.method = 'PATCH' && data.url = '" + selfUpdatePath + "'", superuser, 1)
+        .path("items").get(0).path("data");
+    assertEquals(200, audit.path("status").asInt());
+    assertEquals("managed_users", audit.path("auth").asText());
+    assertEquals(user.path("id").asText(), audit.path("authId").asText());
+    assertEquals(401, rawRequest("GET", "/api/health", userToken, null).statusCode());
+
     JsonNode changedAuth =
         request(
             "POST",
@@ -8444,6 +8453,7 @@ class LocalPocketBaseServerTest {
     }
 
     String secondIp = "203.0.113.20";
+    String subscriptionIp = "203.0.113.21";
     HttpResponse<InputStream> secondResponse =
         http.send(
             HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
@@ -8455,13 +8465,13 @@ class LocalPocketBaseServerTest {
     try (SseReader events = new SseReader(secondResponse.body())) {
       String clientId = mapper.readTree(events.next("PB_CONNECT").data()).get("clientId").asText();
       assertEquals(
-          400,
+          204,
           rawRequest(
               "POST",
               "/api/realtime",
               null,
               Map.of("clientId", clientId, "subscriptions", List.of("@oauth2")),
-              Map.of("X-Test-IP", "203.0.113.21"))
+              Map.of("X-Test-IP", subscriptionIp))
               .statusCode());
       assertEquals(
           204,
@@ -8470,7 +8480,7 @@ class LocalPocketBaseServerTest {
               "/api/realtime",
               null,
               Map.of("clientId", clientId, "subscriptions", List.of("@oauth2")),
-              Map.of("X-Test-IP", secondIp))
+              Map.of("X-Test-IP", "203.0.113.22"))
               .statusCode());
 
       String form =
@@ -8487,7 +8497,7 @@ class LocalPocketBaseServerTest {
               null,
               "application/x-www-form-urlencoded",
               form.getBytes(StandardCharsets.UTF_8),
-              Map.of("X-Test-IP", secondIp));
+              Map.of("X-Test-IP", subscriptionIp));
       assertEquals(303, post.statusCode());
       assertTrue(
           post.headers().firstValue("Location").orElse("").contains("oauth2-redirect-success"));
@@ -8550,8 +8560,8 @@ class LocalPocketBaseServerTest {
               "POST",
               "/api/realtime",
               null,
-              Map.of("clientId", clientId, "subscriptions", List.of("@oauth2")),
-              Map.of("X-Test-IP", fourthIp))
+              Map.of("clientId", clientId, "subscriptions", List.of("custom-topic", "@oauth2")),
+              Map.of("X-Test-IP", "203.0.113.41"))
               .statusCode());
       HttpResponse<String> mismatch =
           rawRequest(
@@ -8574,6 +8584,32 @@ class LocalPocketBaseServerTest {
       assertTrue(
           removed.headers().firstValue("Location").orElse("").contains("oauth2-redirect-failure"));
     }
+  }
+
+  @Test
+  void oauth2RedirectFailuresArePersistedAsWarningsWithoutCallbackParameters() throws Exception {
+    start();
+    bootstrapSuperuser();
+    String token = loginToken();
+    request("PATCH", "/api/settings", token, Map.of("logs", Map.of("minLevel", 4)));
+
+    List<String> callbackPaths = List.of("/api/oauth2-redirect", "/api/oauth2-redirect/", "/api//oauth2-redirect");
+    for (String path : callbackPaths) {
+      HttpResponse<String> response = rawRequest(
+          "GET", path + "?state=missing-test-client&code=local-callback-value", null, null);
+      assertEquals(307, response.statusCode());
+      assertEquals("../_/#/auth/oauth2-redirect-failure", response.headers().firstValue("Location").orElseThrow());
+    }
+    JsonNode warnings = waitForLogs("level = 4", token, callbackPaths.size()).path("items");
+    List<String> loggedPaths = new java.util.ArrayList<>();
+    for (JsonNode log : warnings) {
+      loggedPaths.add(log.path("data").path("url").asText());
+      assertEquals(307, log.path("data").path("status").asInt());
+      assertEquals("Missing or invalid OAuth2 subscription client or IP.", log.path("data").path("error").asText());
+      assertFalse(log.toString().contains("local-callback-value"));
+      assertFalse(log.toString().contains("missing-test-client"));
+    }
+    assertEquals(callbackPaths.stream().sorted().toList(), loggedPaths.stream().sorted().toList());
   }
 
   @Test
@@ -8830,8 +8866,9 @@ class LocalPocketBaseServerTest {
             "/api/collections/auth_lifecycle_users/records/" + userId,
             verificationToken,
             null);
-    assertEquals(404, requestTokenAsBearer.statusCode());
-    assertErrorEnvelope(requestTokenAsBearer, 404, "Record not found.");
+    // Action tokens are not auth tokens; the v0.42.0 fallback rejects them before routing.
+    assertEquals(401, requestTokenAsBearer.statusCode());
+    assertErrorEnvelope(requestTokenAsBearer, 401, "Missing or invalid authentication.");
 
     HttpResponse<String> verified =
         rawRequest(
@@ -9692,8 +9729,10 @@ class LocalPocketBaseServerTest {
     JsonNode aliceFileToken = request("POST", "/api/files/token", aliceToken, null);
     HttpResponse<String> fileTokenAsBearer =
         rawRequest("GET", filePath, aliceFileToken.get("token").asText(), null);
-    assertEquals(404, fileTokenAsBearer.statusCode());
-    assertErrorEnvelope(fileTokenAsBearer, 404, "The requested resource wasn't found.");
+    // Since v0.42.0 a file token in Authorization is rejected by the global auth guard.
+    // The same token remains valid in the protected file endpoint's query parameter below.
+    assertEquals(401, fileTokenAsBearer.statusCode());
+    assertErrorEnvelope(fileTokenAsBearer, 401, "Missing or invalid authentication.");
 
     HttpResponse<String> aliceFile =
         rawRequest("GET", filePath + "?token=" + aliceFileToken.get("token").asText(), null, null);
@@ -9781,11 +9820,15 @@ class LocalPocketBaseServerTest {
     start();
     bootstrapSuperuser();
     String token = loginToken();
+    request(
+        "PATCH", "/api/settings", token,
+        Map.of("trustedProxy", Map.of("headers", List.of("X-Test-IP"), "useLeftmostIP", false)));
 
     HttpResponse<InputStream> response =
         http.send(
             HttpRequest.newBuilder(URI.create(server.baseUrl() + "/api/realtime"))
                 .header("Accept", "text/event-stream")
+                .header("X-Test-IP", "203.0.113.50")
                 .GET()
                 .build(),
             HttpResponse.BodyHandlers.ofInputStream());
@@ -9800,7 +9843,8 @@ class LocalPocketBaseServerTest {
               "POST",
               "/api/realtime",
               null,
-              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")));
+              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")),
+              Map.of("X-Test-IP", "203.0.113.51"));
       assertEquals(204, initial.statusCode());
 
       HttpResponse<String> upgraded =
@@ -9808,16 +9852,24 @@ class LocalPocketBaseServerTest {
               "POST",
               "/api/realtime",
               token,
-              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")));
+              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")),
+              Map.of("X-Test-IP", "203.0.113.52"));
       assertEquals(204, upgraded.statusCode());
+
+      assertEquals(
+          204,
+          rawRequest("POST", "/api/realtime", token,
+              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")),
+              Map.of("X-Test-IP", "203.0.113.53")).statusCode());
 
       HttpResponse<String> changedAuth =
           rawRequest(
               "POST",
               "/api/realtime",
               null,
-              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")));
-      assertEquals(403, changedAuth.statusCode());
+              Map.of("clientId", clientId, "subscriptions", List.of("updates/*")),
+              Map.of("X-Test-IP", "203.0.113.54"));
+      assertErrorEnvelope(changedAuth, 403, "The current and the previous request authorization don't match.");
     }
   }
 

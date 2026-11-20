@@ -1,8 +1,10 @@
 # PocketBase Java Docs
 
-Baseline tracked: PocketBase v0.41.1
+Baseline tracked: PocketBase v0.42.3
 
-The current Java-adapted compatibility baseline is PocketBase v0.41.1 (Java project v0.5.1).
+The current Java-adapted compatibility baseline is PocketBase v0.42.3 (Java project v0.6.2).
+The v0.42.3 RPD covers the three patches after v0.42.0, including OAuth2 callback pages and warnings, realtime subscription IP handling, the SQLite cleanup threshold, and JS SDK 0.29.0 verification.
+The v0.42.0 RPD compares fixed v0.41.1/v0.42.0 module archives and tracks strict invalid-token handling, JPEG XL original previews, OAuth2 provider ordering, log count/compaction, chart layout, Java-specific exclusions, and actual local validation.
 The v0.41.1 RPD tracks the 6 upstream commits between v0.41.0 and v0.41.1, Admin UI footer `Docs` link fix, and v0.5.1 release validation.
 The v0.41.0 RPD tracks the upstream host migration, lower default thumbnail pixel limit, SMTP MIME and image-preview fixes, and Java-specific exclusions; validation and delivery progress are recorded there.
 The v0.40.6 RPD maps 12 upstream commits/29 changed files to thumbnail source-pixel limits, local storage bucket protection, minor UI fixes, and the v0.4.6 version update; Go-specific updater and dependency changes are documented separately.
@@ -18,7 +20,9 @@ their version references describe the upstream release that was compared at that
 
 | 文档 | 说明 |
 |---|---|
-| [RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md](RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md) | **当前 RPD**：官方 v0.41.0 → v0.41.1 逐提交差异映射、Admin UI 页脚 `Docs` 链接修复、v0.5.1 与本地验收记录。 |
+| [RPD-PocketBase-v0.42.3-Compatibility-Development-Plan.md](RPD-PocketBase-v0.42.3-Compatibility-Development-Plan.md) | **当前 RPD**：官方 v0.42.0 → v0.42.3 固定版本差异、OAuth2 与实时订阅、日志阈值、WebM、审查修复和 v0.6.2 验收。 |
+| [RPD-PocketBase-v0.42.0-Compatibility-Development-Plan.md](RPD-PocketBase-v0.42.0-Compatibility-Development-Plan.md) | **历史基线 RPD**：官方 v0.41.1 → v0.42.0 固定版本差异、无效 token 401、JXL 原图预览、OAuth2 排序、日志计数/空间回收、任务跟踪和 v0.6.0 验收。 |
+| [RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md](RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md) | **已完成基线 RPD**：官方 v0.41.0 → v0.41.1 逐提交差异映射、Admin UI 页脚 `Docs` 链接修复、v0.5.1 与本地验收记录。 |
 | [RPD-PocketBase-v0.41.0-Compatibility-Development-Plan.md](RPD-PocketBase-v0.41.0-Compatibility-Development-Plan.md) | **已完成基线 RPD**：官方 v0.40.6 → v0.41.0、新主机来源、缩略图默认上限、SMTP/预览修复、v0.5.0 与本轮验收和交付跟踪。 |
 | [RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md](RPD-PocketBase-v0.40.6-Compatibility-Development-Plan.md) | **已完成基线 RPD**：官方 v0.40.5 → v0.40.6 差异、缩略图源像素限制、本地存储路径加固、暗色 UI 与 IP 提示、v0.4.6 和本地验收记录。 |
 | [RPD-PocketBase-v0.40.5-Compatibility-Development-Plan.md](RPD-PocketBase-v0.40.5-Compatibility-Development-Plan.md) | **已完成基线 RPD**：官方 v0.40.4 → v0.40.5 差异、Java/React 映射、CORS 配置与通配符安全匹配、异步编辑器补全、布局修复、v0.4.5 及实际验证记录。 |

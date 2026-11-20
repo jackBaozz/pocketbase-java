@@ -30,6 +30,8 @@
     "auto": "自動"
   },
   "actions": {
+    "move_up": "上移",
+    "move_down": "下移",
     "add_record": "新增紀錄",
     "new_collection": "建立集合",
     "save": "儲存",

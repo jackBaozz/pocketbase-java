@@ -878,7 +878,29 @@ public class AuthRepository extends BaseRepository {
               return tokenType == null
                   || "auth".equals(tokenType)
                   || "impersonate".equals(tokenType);
-            });
+            })
+        .filter(this::authTokenClaimsValid);
+  }
+
+  private boolean authTokenClaimsValid(Map<String, Object> claims) {
+    String type = String.valueOf(claims.getOrDefault("type", ""));
+    if (!"auth".equals(type) && !"authRecord".equals(type) && !"superuser".equals(type)) {
+      return false;
+    }
+    CollectionSchema collection =
+        storeContext.getCollection(String.valueOf(claims.getOrDefault("collectionId", "")));
+    if (collection == null) {
+      collection = storeContext.getCollection(String.valueOf(claims.getOrDefault("collectionName", "")));
+    }
+    if (collection == null || !"auth".equals(collection.type))
+      return false;
+    Map<String, Object> record =
+        recordRepository.getRawRecord(collection, String.valueOf(claims.getOrDefault("sub", "")));
+    if (record == null)
+      return false;
+    Object tokenKey = claims.get("tokenKey");
+    return tokenKey == null || SecuritySupport.constantTimeEquals(
+        String.valueOf(tokenKey), String.valueOf(record.get("tokenKey")));
   }
 
   public void pruneExpiredMfas() {

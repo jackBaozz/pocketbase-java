@@ -30,6 +30,8 @@
     "auto": "Automático"
   },
   "actions": {
+    "move_up": "Subir",
+    "move_down": "Bajar",
     "add_record": "Añadir Registro",
     "new_collection": "Nueva Colección",
     "save": "Guardar",

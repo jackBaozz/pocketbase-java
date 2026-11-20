@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.2
+
+- 完成 PocketBase v0.42.3 适配的审查修复。保留改密请求的审计身份，统一移除 OAuth2 回调日志中的查询参数。
+- Java SDK 在服务端确认重订阅后返回。慢 SSE 写入期间仍可更新订阅。管理后台退出失效会话时保留其他标签页的新 token。
+
+## 0.6.1
+
+- 对齐 PocketBase v0.42.1 至 v0.42.3 的适用增量。管理后台会清除失效的当前会话，OAuth2 回调结果页独立于后台会话初始化。
+- 支持实时订阅跨 IP 更新，并保留认证身份约束。OAuth2 回调可匹配连接 IP 或首次单独订阅 `@oauth2` 的 IP。SSE 连接上限为 30 分钟，Java SDK 断线后会重连并恢复订阅。
+- SQLite 日志维护的 VACUUM 门槛提高至累计删除 50,000 条。OAuth2 回调失败记录为 WARN，成功响应后的 `write error: client disconnected` 归类为非故障。
+- 验证已有 WebM 视频预览入口，官方 JS SDK 兼容测试更新至 0.29.0。差异、任务及验收见 [v0.42.3 兼容报告](docs/RPD-PocketBase-v0.42.3-Compatibility-Development-Plan.md)。
+
+## 0.6.0
+
+- 对齐 PocketBase v0.42.0 的 Java/React 适用增量；固定版本差异、排除项、任务与实际验收见 `docs/RPD-PocketBase-v0.42.0-Compatibility-Development-Plan.md`。
+- 全局拒绝未知、过期或已撤销的 Authorization token，返回官方 401 结构；补齐关系库当前账号/tokenKey 校验，保留匿名、CORS 和文件 query token 行为，验证旧后台 token 可清理后重新登录。
+- Admin UI 支持 JPEG XL 原图预览、OAuth2 提供商拖动/按钮排序和大数量级日志图表布局；Java 校验 JXL 裸码流/容器签名，不新增 JXL 缩略图解码器。
+- 新增内部 `StorageEngine.countLogs()`；SQLite 日志维护累计删除 20,000 条后 VACUUM 并执行 WAL checkpoint。保留现有手动触发维护机制，未新增自动调度。
+- 已提交成功响应后的已知断连按 INFO 记录并保留响应状态，避免二次写入错误响应；其他 IO 错误继续报告。
+- 同步 Java、前端、SDK User-Agent 和内嵌管理资源至 v0.6.0；Go cron/编码/依赖更新与官方自更新器按适用性排除。
+
 ## 0.5.1
 
 - 对齐 PocketBase v0.41.1 的 Java/React 适用增量，逐提交差异分析、排除项与本地验收见 `docs/RPD-PocketBase-v0.41.1-Compatibility-Development-Plan.md`。

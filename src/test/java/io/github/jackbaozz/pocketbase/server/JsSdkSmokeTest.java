@@ -60,11 +60,11 @@ public class JsSdkSmokeTest {
     assertEquals(0, exitCode, "npm ci failed for the JS SDK smoke fixture:\n" + npmOutput);
 
     Path sdkPackage = jsDir.resolve("node_modules/pocketbase/package.json");
-    assertTrue(sdkPackage.toFile().isFile(), "JS SDK 0.28.1 must be installed for the smoke test");
+    assertTrue(sdkPackage.toFile().isFile(), "JS SDK 0.29.0 must be installed for the smoke test");
     String sdkMetadata = Files.readString(sdkPackage, StandardCharsets.UTF_8);
     assertTrue(
-        sdkMetadata.contains("\"version\": \"0.28.1\""),
-        "JS SDK smoke must execute against pocketbase 0.28.1");
+        sdkMetadata.contains("\"version\": \"0.29.0\""),
+        "JS SDK smoke must execute against pocketbase 0.29.0");
   }
 
   @AfterEach

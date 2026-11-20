@@ -26,7 +26,8 @@ public final class RealtimeHub {
   private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
   private static final int MAX_CLIENTS = 1000;
   private static final int MAX_CLIENTS_PER_IP = 100;
-  private static final long MAX_CONNECTION_NANOS = Duration.ofHours(2).toNanos();
+  private static final long MAX_CONNECTION_NANOS = Duration.ofMinutes(30).toNanos();
+  private static final String OAUTH2_TOPIC = "@oauth2";
 
   private final ObjectMapper mapper;
   private final Map<String, Client> clients = new ConcurrentHashMap<>();
@@ -62,13 +63,12 @@ public final class RealtimeHub {
       clients.put(clientId, client);
     }
 
-    exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
-    exchange.getResponseHeaders().set("Cache-Control", "no-cache");
-    exchange.getResponseHeaders().set("Connection", "keep-alive");
-    exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
-    exchange.sendResponseHeaders(200, 0);
-
     try {
+      exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+      exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+      exchange.getResponseHeaders().set("Connection", "keep-alive");
+      exchange.getResponseHeaders().set("X-Accel-Buffering", "no");
+      exchange.sendResponseHeaders(200, 0);
       try {
         client.send("PB_CONNECT", Map.of("clientId", clientId), clientId);
       } catch (IOException ignored) {
@@ -109,19 +109,18 @@ public final class RealtimeHub {
       String remoteIp) {
     Client client = clients.get(clientId);
     if (client == null) {
-      throw new ApiException(404, "Realtime client not found.");
+      throw new ApiException(404, "Missing or invalid client id.");
     }
-    if (!client.matchesRemoteIp(remoteIp)) {
-      throw new ApiException(400, "Invalid realtime client.");
-    }
+    List<String> requested = topics == null ? List.of() : topics;
     Set<Subscription> subscriptions = new LinkedHashSet<>();
-    for (String topic : topics == null ? List.<String>of() : topics) {
+    for (String topic : requested) {
       if (topic == null || topic.isBlank()) {
         continue;
       }
       subscriptions.add(Subscription.parse(topic, mapper).merge(options));
     }
-    client.setSubscriptions(subscriptions, principal);
+    boolean onlyOAuth2 = requested.size() == 1 && OAUTH2_TOPIC.equals(requested.get(0));
+    client.setSubscriptions(subscriptions, principal, onlyOAuth2, remoteIp);
   }
 
   public boolean sendOAuth2Redirect(String clientId, String remoteIp, Map<String, Object> payload) {
@@ -152,11 +151,12 @@ public final class RealtimeHub {
       return;
     }
     for (Client client : new ArrayList<>(clients.values())) {
-      for (Subscription subscription : client.subscriptions()) {
+      ClientSubscriptions state = client.state;
+      for (Subscription subscription : state.topics()) {
         if (!subscription.matches(collectionName, collectionId, recordId)) {
           continue;
         }
-        Map<String, Object> record = recordFactory.apply(subscription, client.principal());
+        Map<String, Object> record = recordFactory.apply(subscription, state.principal());
         if (record == null) {
           continue;
         }
@@ -337,6 +337,9 @@ public final class RealtimeHub {
     }
   }
 
+  private record ClientSubscriptions(Set<Subscription> topics, RequestPrincipal principal) {
+  }
+
   private final class Client {
     private final String id;
     private final OutputStream output;
@@ -344,9 +347,9 @@ public final class RealtimeHub {
     private final long startedAtNanos = System.nanoTime();
     private final CountDownLatch closed = new CountDownLatch(1);
     private final AtomicBoolean closedOnce = new AtomicBoolean();
-    private volatile Set<Subscription> subscriptions = Set.of();
-    private volatile RequestPrincipal principal;
-    private volatile boolean subscribed;
+    private final Object subscriptionLock = new Object();
+    private volatile ClientSubscriptions state = new ClientSubscriptions(Set.of(), null);
+    private String oauth2SubscriptionIp = "";
 
     private Client(String id, OutputStream output, String remoteIp) {
       this.id = id;
@@ -358,46 +361,44 @@ public final class RealtimeHub {
       return id;
     }
 
-    RequestPrincipal principal() {
-      return principal;
-    }
-
-    Set<Subscription> subscriptions() {
-      return subscriptions;
-    }
-
-    boolean matchesRemoteIp(String candidate) {
-      return remoteIp.isBlank() || Objects.equals(remoteIp, candidate == null ? "" : candidate);
-    }
-
-    void setSubscriptions(Set<Subscription> subscriptions, RequestPrincipal principal) {
-      if (subscribed && this.principal != null && !samePrincipal(this.principal, principal)) {
-        throw new ApiException(
-            403,
-            "Realtime subscription authorization must match the initial subscription request.");
+    void setSubscriptions(
+        Set<Subscription> subscriptions,
+        RequestPrincipal principal,
+        boolean onlyOAuth2,
+        String subscriptionIp) {
+      synchronized (subscriptionLock) {
+        if (state.principal() != null && !samePrincipal(state.principal(), principal)) {
+          throw new ApiException(
+              403,
+              "The current and the previous request authorization don't match.");
+        }
+        if (onlyOAuth2 && state.topics().isEmpty()) {
+          oauth2SubscriptionIp = subscriptionIp == null ? "" : subscriptionIp;
+        } else if (subscriptions.stream().noneMatch(topic -> OAUTH2_TOPIC.equals(topic.topic()))) {
+          oauth2SubscriptionIp = "";
+        }
+        state = new ClientSubscriptions(Set.copyOf(subscriptions), principal);
       }
-      this.subscriptions = Set.copyOf(subscriptions);
-      this.principal = principal;
-      this.subscribed = true;
     }
 
-    synchronized boolean sendOAuth2Redirect(String candidateIp, Map<String, Object> payload)
+    boolean sendOAuth2Redirect(String candidateIp, Map<String, Object> payload)
         throws IOException {
-      Subscription oauth2 =
-          subscriptions.stream()
-              .filter(subscription -> "@oauth2".equals(subscription.topic()))
-              .findFirst()
-              .orElse(null);
-      if (oauth2 == null) {
-        return false;
+      synchronized (subscriptionLock) {
+        Set<Subscription> remaining = new LinkedHashSet<>(state.topics());
+        if (!remaining.removeIf(subscription -> OAUTH2_TOPIC.equals(subscription.topic()))) {
+          return false;
+        }
+        state = new ClientSubscriptions(Set.copyOf(remaining), state.principal());
+        String subscriptionIp = oauth2SubscriptionIp;
+        oauth2SubscriptionIp = "";
+        if (!remoteIp.isBlank()
+            && !remoteIp.equals(candidateIp)
+            && (subscriptionIp.isBlank() || !subscriptionIp.equals(candidateIp))) {
+          return false;
+        }
       }
-      Set<Subscription> remaining = new LinkedHashSet<>(subscriptions);
-      remaining.remove(oauth2);
-      subscriptions = Set.copyOf(remaining);
-      if (!matchesRemoteIp(candidateIp)) {
-        return false;
-      }
-      send("@oauth2", payload, null);
+      // The callback is consumed before writing so a slow stream cannot stall subscription updates.
+      send(OAUTH2_TOPIC, payload, null);
       return true;
     }
 
@@ -413,10 +414,12 @@ public final class RealtimeHub {
 
     boolean awaitHeartbeat() {
       try {
-        if (System.nanoTime() - startedAtNanos >= MAX_CONNECTION_NANOS) {
+        long remaining = MAX_CONNECTION_NANOS - (System.nanoTime() - startedAtNanos);
+        if (remaining <= 0) {
           return false;
         }
-        return !closed.await(HEARTBEAT_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+        return !closed.await(Math.min(remaining, HEARTBEAT_INTERVAL.toNanos()), TimeUnit.NANOSECONDS)
+            && System.nanoTime() - startedAtNanos < MAX_CONNECTION_NANOS;
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return false;

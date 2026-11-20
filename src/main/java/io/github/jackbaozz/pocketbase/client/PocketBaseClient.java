@@ -84,6 +84,10 @@ public final class PocketBaseClient {
     return baseUri;
   }
 
+  HttpClient httpClient() {
+    return httpClient;
+  }
+
   public ObjectMapper objectMapper() {
     return objectMapper;
   }
@@ -132,7 +136,7 @@ public final class PocketBaseClient {
         HttpRequest.newBuilder(uri)
             .timeout(Duration.ofSeconds(30))
             .header("Accept", "application/json")
-            .header("User-Agent", "pocketbase-java/0.5.1");
+            .header("User-Agent", "pocketbase-java/0.6.2");
 
     authStore.token().ifPresent(token -> builder.header("Authorization", "Bearer " + token));
 

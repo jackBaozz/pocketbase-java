@@ -30,6 +30,8 @@
     "auto": "自動"
   },
   "actions": {
+    "move_up": "上へ移動",
+    "move_down": "下へ移動",
     "add_record": "レコード追加",
     "new_collection": "新規コレクション",
     "save": "保存",

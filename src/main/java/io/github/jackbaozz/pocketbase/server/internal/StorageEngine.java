@@ -35,6 +35,13 @@ public interface StorageEngine {
 
   Map<String, Object> listLogs(Map<String, String> query);
 
+  default long countLogs() {
+    return countLogs(Map.of());
+  }
+
+  /** Counts matching logs independently of list pagination and projection. */
+  long countLogs(Map<String, String> query);
+
   List<Map<String, Object>> logStats(Map<String, String> query);
 
   Map<String, Object> getLog(String id, Map<String, String> query);
@@ -230,6 +237,17 @@ public interface StorageEngine {
 
   Optional<Map<String, Object>> verifyToken(String token);
 
+  default void recordActivityLog(
+      String method,
+      String url,
+      int status,
+      long duration,
+      RequestPrincipal principal,
+      Map<String, String> headers,
+      String remoteIp) {
+    recordActivityLog(method, url, status, duration, principal, headers, remoteIp, null);
+  }
+
   void recordActivityLog(
       String method,
       String url,
@@ -237,7 +255,8 @@ public interface StorageEngine {
       long duration,
       RequestPrincipal principal,
       Map<String, String> headers,
-      String remoteIp);
+      String remoteIp,
+      String warning);
 
   void realtimeHub(RealtimeHub hub);
 

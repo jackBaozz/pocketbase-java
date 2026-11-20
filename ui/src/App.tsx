@@ -50,6 +50,7 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AnimationEvent as ReactAnimationEvent,
+  CSSProperties,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
   ReactNode,
@@ -66,6 +67,8 @@ import { useColumnPreferences } from "./hooks/useColumnPreferences";
 import { useCollections } from "./hooks/useCollections";
 import type { FieldSchema as SharedFieldSchema } from "./types/api";
 import { fieldMultiplicity, hasSelfReferentialCascadeDelete } from "./domain/fields";
+import { imageThumbnailSpec, safeImageFilename } from "./domain/filePreview";
+import { logChartAxisWidth } from "./domain/logChartLayout";
 import { formatDate as sharedFormatDate, formatValue as sharedFormatValue } from "./utils/date";
 
 import { useTranslation } from "react-i18next";
@@ -80,6 +83,7 @@ import type { ConfirmRequest } from "./components/ConfirmDialog";
 import { RecordFieldControl } from "./components/RecordFieldControl";
 import { RefreshButton } from "./components/RefreshButton";
 import { FileFieldControl } from "./components/FileFieldControl";
+import { OAuthProviderOrder } from "./components/OAuthProviderOrder";
 import { PasswordInput } from "./components/PasswordInput";
 import { Switch } from "./components/Switch";
 import { AuthRecordActions } from "./components/AuthRecordActions";
@@ -714,8 +718,14 @@ const RECORD_DELETE_BATCH_SIZE = 100;
 const DEFAULT_FIELDS = [{ name: "title", type: "text", required: true }];
 const SYSTEM_RECORD_KEYS = new Set(["id", "collectionId", "collectionName", "created", "updated", "expand"]);
 
+function isAuthActionHash(hash: string) {
+  return hash.startsWith("#/pbinstall/") ||
+    hash.startsWith("#/request-password-reset") ||
+    hash.startsWith("#/auth/confirm-") ||
+    hash.startsWith("#/auth/oauth2-redirect-");
+}
+
 function App() {
-  const { t } = useTranslation();
   const [hash, setHash] = useState(window.location.hash);
   useEffect(() => {
     const handler = () => setHash(window.location.hash);
@@ -723,7 +733,15 @@ function App() {
     return () => window.removeEventListener("hashchange", handler);
   }, []);
 
+  // Public auth actions have their own lifecycle, even when the browser has an old admin token.
+  if (isAuthActionHash(hash)) return <AuthActionPages />;
+  return <AdminApp hash={hash} setHash={setHash} />;
+}
+
+function AdminApp({ hash, setHash }: { hash: string; setHash: (hash: string) => void }) {
+  const { t } = useTranslation();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
+  const authTokenRef = useRef(token);
   const [authRecord, setAuthRecord] = useState<RecordItem | null>(null);
   const [health, setHealth] = useState<HealthResponse["data"] | null>(null);
   const [setupRequired, setSetupRequired] = useState(true);
@@ -907,7 +925,7 @@ function App() {
     if (window.location.hash === nextHash) return;
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
     setHash(nextHash);
-  }, []);
+  }, [setHash]);
 
   const replaceRecordRoute = useCallback(
     (nextQuery = query, page = recordRoutePage, recordId = recordRouteId) => {
@@ -1467,7 +1485,7 @@ function App() {
       const auth = await apiRequest<AuthResponse>("/api/collections/_superusers/auth-refresh", authToken, {
         method: "POST"
       });
-      setAuthRecord(auth.record ?? null);
+      if (authTokenRef.current === authToken) setAuthRecord(auth.record ?? null);
       return auth;
     } catch {
       // Keep the existing session until a real request is rejected as unauthorized.
@@ -1497,7 +1515,9 @@ function App() {
   }, [authRecord, refreshAuthRecord, token]);
 
   useEffect(() => {
-    const handleUnauthorized = () => {
+    const handleUnauthorized = (event: Event) => {
+      const rejectedToken = (event as CustomEvent<string>).detail;
+      if (!rejectedToken || authTokenRef.current !== rejectedToken) return;
       notify(t("errors.session_expired", "Your session has expired. Please log in again."), "error");
       // Close any open editor so stale state doesn't linger behind the login screen.
       setCollectionEditor(null);
@@ -1982,6 +2002,8 @@ function App() {
   }
 
   function setAuthToken(nextToken: string) {
+    const previousToken = authTokenRef.current;
+    authTokenRef.current = nextToken;
     recordPageCacheRef.current = { scope: "", pages: new Map() };
     logPageCacheRef.current = { scope: "", pages: new Map(), stats: null };
     recordsLoadGenerationRef.current += 1;
@@ -1993,7 +2015,7 @@ function App() {
     setToken(nextToken);
     if (nextToken) {
       localStorage.setItem(TOKEN_KEY, nextToken);
-    } else {
+    } else if (localStorage.getItem(TOKEN_KEY) === previousToken) {
       localStorage.removeItem(TOKEN_KEY);
     }
   }
@@ -2019,7 +2041,7 @@ function App() {
     setSqlError("");
     setSelectedName("");
     setView("records");
-    if (window.location.hash.startsWith("#/")) {
+    if (window.location.hash.startsWith("#/") && !isAuthActionHash(window.location.hash)) {
       window.location.hash = "";
     }
   }
@@ -2844,15 +2866,6 @@ function App() {
     document.title = documentTitle;
   }, [documentTitle]);
 
-  if (
-    hash.startsWith("#/pbinstall/") ||
-    hash.startsWith("#/request-password-reset") ||
-    hash.startsWith("#/auth/confirm-") ||
-    hash.startsWith("#/auth/oauth2-redirect-")
-  ) {
-    return <AuthActionPages />;
-  }
-
   const shellClassName = [
     "app-shell",
     hideControls ? "hide-controls" : "",
@@ -3550,7 +3563,7 @@ function PageFooterRight() {
         title="PocketBase Java GitHub"
       >
         <GithubMarkIcon />
-        <span>PocketBase v0.5.1</span>
+        <span>PocketBase v0.6.2</span>
       </a>
     </div>
   );
@@ -4682,7 +4695,7 @@ function CellValue({ collection, collections, column, record, fileAccessToken, o
           const name = String(filename);
           const isImage = safeImageFilename(name);
           const baseUrl = `/api/files/${encodeURIComponent(collectionId)}/${encodeURIComponent(record.id)}/${encodeURIComponent(name)}`;
-          const thumbnail = fileThumbnailSpec(field);
+          const thumbnail = imageThumbnailSpec(name, fileThumbnailSpec(field));
           const fileUrl = thumbnail ? `${baseUrl}?thumb=${encodeURIComponent(thumbnail)}` : baseUrl;
           return (
             <button
@@ -7297,7 +7310,9 @@ function LogsView(props: LogsViewProps) {
         >
           <ChevronRight size={16} />
         </button>
-        <div className="logs-chart-main">
+        <div className="logs-chart-main" style={{
+          "--logs-axis-width": `${logChartAxisWidth(yTicks.map(formatChartYLabel))}px`
+        } as CSSProperties}>
           <div className="logs-chart-plot">
             {visibleChartStats.length > 0 && (
               <div className="logs-chart-y" aria-hidden="true">
@@ -8642,6 +8657,9 @@ function CollectionModal({
               </div>
               {oauthProviderNames.length > 0 && (
                 <div className="oauth-provider-config-list">
+                  <OAuthProviderOrder names={oauthProviderNames}
+                    labels={Object.fromEntries(oauthProviders.map((provider) => [provider.name, provider.displayName]))}
+                    onChange={setOauthProviderNames} />
                   {oauthProviderNames.map((providerName) => {
                     const config = oauthProviderConfigs[providerName] ?? {
                       name: providerName,
@@ -9864,11 +9882,8 @@ async function apiRequest<T>(path: string, token: string, options: ApiOptions = 
     const payload = isPlainObject(parsed) ? (parsed as Record<string, unknown>) : {};
     const mfaId = typeof payload.mfaId === "string" ? payload.mfaId : undefined;
     // An MFA challenge is a login step, not an expired session — leave the auth state alone.
-    if (response.status === 401 && !mfaId && token) {
-      localStorage.removeItem("pbj_token");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("pbj_unauthorized"));
-      }
+    if (response.status === 401 && !mfaId && token && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pbj_unauthorized", { detail: token }));
     }
     const apiError = payload as ApiError;
     throw new ApiRequestError(
@@ -10099,9 +10114,6 @@ function mergeLogItems(existing: LogItem[], additions: LogItem[]) {
   return next;
 }
 
-function safeImageFilename(filename: string) {
-  return /\.(?:gif|jpe?g|png|webp)$/i.test(filename);
-}
 
 function fileThumbnailSpec(field?: FieldSchema) {
   const configured = field?.thumbs ?? field?.options?.thumbs;

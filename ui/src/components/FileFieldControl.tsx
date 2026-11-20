@@ -18,6 +18,7 @@ import "./FileFieldControl.css";
 
 import type { FileField } from "../types/api";
 import { fieldMultiplicity } from "../domain/fields";
+import { imageThumbnailSpec, safeImageFilename } from "../domain/filePreview";
 
 type PreviewFile = {
   name: string;
@@ -46,7 +47,7 @@ function fileType(name: string) {
   // Do not trust File.type here: a browser can report image/svg+xml for an
   // untrusted SVG while the server deliberately serves it as a download.
   const lower = name.toLowerCase();
-  if (/\.(gif|jpe?g|png|webp)$/.test(lower)) return "image";
+  if (safeImageFilename(name)) return "image";
   if (/\.(m4a|mp3|ogg|wav)$/.test(lower)) return "audio";
   if (/\.(m4v|mp4|webm)$/.test(lower)) return "video";
   if (/\.pdf$/.test(lower)) return "pdf";
@@ -208,7 +209,7 @@ export function FileFieldControl({
         <div className="file-field-list">
           {visibleExisting.map((name) => {
             const type = fileType(name);
-            const url = fileUrl(name, type === "image" ? thumb : undefined);
+            const url = fileUrl(name, type === "image" ? imageThumbnailSpec(name, thumb) : undefined);
             return (
               <article
                 className="file-field-item"
